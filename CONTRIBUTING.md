@@ -10,19 +10,24 @@ reviews.
    behavior you want and why. **Assign it to yourself before the first edit**
    (`gh issue edit <n> --add-assignee @me`); one assignee at a time. Unassign
    it if you stop, so another member can pick it up. The assignee is the lock
-   that prevents duplicate work. One issue per PR; keep it small enough for one
-   session.
+   that prevents duplicate work. The `claim-guard` CI fails a PR when the linked
+   issue is unassigned, assigned to another account, or already has an open PR.
+   One issue per PR; keep it small enough for one session.
 2. **Fork and branch.** Fork `FSS-IoT/iot-mud-server`, then branch from `main`:
-   `fix/<what>` or `feat/<what>`.
+   `fix/<issue>-<what>` or `feat/<issue>-<what>`.
 3. **Write the failing check first.** A test that fails for the right reason is
    the start of the ticket. Then make it pass.
 4. **Run the suite.** `uv sync --all-extras` once, then `uv run pytest`.
    Stop the server first: the legacy v1 tests bind fixed ports
    (8765/8766/8769), and a running server makes them fail with
    `address already in use`.
-5. **Open a PR.** Say what changed, link the issue, and include the test result.
-6. **Fresh review.** Someone who did not write the code reviews it. Reviewers
-   reject and send back; they do not fix the branch.
+5. **Open a PR.** Say what changed, link the issue (`Closes #N`), keep the
+   changed paths inside the issue's `Touches:` list (or add `scope:expanded`),
+   and include the test result.
+6. **Fresh review.** Someone who did not write the code reviews it. GitHub
+   requires one approving review from an account other than the author, and
+   `main` does not let admins bypass it. Reviewers reject and send back; they do
+   not fix the branch.
 7. **Merge** after the review and green tests. Delete the branch.
 
 Work lands through a pull request. Do not push to `main` directly. Forking is
