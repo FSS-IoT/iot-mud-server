@@ -1,7 +1,12 @@
 # Club MUD — Specification
 
 **Status:** draft for build.
-**Tickets:** [M1 milestone](https://github.com/micahn/agentic-mud/milestone/1) — 28 tickets, each with a Red test step and a Green implementation step, wired with native blockers. M2–M5 are epics (#29–#32).
+> **Current status (2026-11-21):** this is the design for v2.1/v2.2, not the
+> v2.0 server. The v2.0 common server implements the working engine and the
+> protocol in `PROTOCOL.md`; it does not yet have auth, SQLite, YAML worlds, or
+> NPCs. See `ROADMAP.md`. Re-cut these tickets before implementing them.
+
+**Tickets:** [M1 milestone](https://github.com/FSS-IoT/iot-mud-server/milestone/1) — 28 tickets, each with a Red test step and a Green implementation step, wired with native blockers. M2–M5 are epics (#29–#32).
 **Scope of this document:** M1 is fully specified and normative. M2–M5 define
 contracts and acceptance criteria only; they are specified in detail when
 reached.

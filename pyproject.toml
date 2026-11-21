@@ -1,0 +1,30 @@
+[project]
+name = "iot-mud-server"
+version = "0.2.0"
+description = "The common club IoT MUD server: authoritative engine, protocol v2, WebSocket terminal."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "websockets>=12.0",
+    "pydantic>=2.7.0",
+    "pydantic-settings>=2.2.0",
+    "PyYAML>=6.0.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.5",
+    "ruff>=0.3.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+# `src/` is a namespace package, so the repo root must be importable for
+# `src.mud.*` regardless of how pytest is launched.
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 88
