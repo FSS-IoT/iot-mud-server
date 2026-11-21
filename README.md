@@ -20,6 +20,9 @@ Bind the LAN/tailnet interface or choose another port:
 ./run_server.sh --host 0.0.0.0 --port 9000
 ```
 
+Hosting for the club (tailnet, node sharing, ACL): see
+[`docs/HOSTING.md`](docs/HOSTING.md).
+
 Windows:
 
 ```powershell
@@ -58,6 +61,7 @@ and the engine tests.
 | `data/worlds/starting_village.json` | The demo world |
 | `docs/PROTOCOL.md` | The client contract |
 | `docs/SESSION.md` | The acceptance session every client passes |
+| `docs/HOSTING.md` | Host on a tailnet and share the node with members |
 | `BOOTSTRAP.md` | Start your own client |
 | `CONTRIBUTING.md` | Fork, test, review, merge |
 | `NOTICE.md` | Credit and license status |
