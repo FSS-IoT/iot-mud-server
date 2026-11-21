@@ -225,6 +225,36 @@ async def test_say_emits_actor_and_room_copies(vault):
 
 
 @pytest.mark.asyncio
+async def test_light_ignites_a_carried_source_and_lights_the_room(vault):
+    engine, player, room, _chest, _coin, _key = vault
+    cave = Room("Cave", "A pitch-black cave.", dark=True)
+    cave.item_id = "cave"
+    cave.add_content(Entity("Gold Coin", "A coin.", item_id="cave_coin"))
+    room.exits["down"] = cave
+    engine._rooms["Cave"] = cave
+    torch = Entity("Torch", "A torch.", item_id="torch", light_source=True)
+    player.add_content(torch)
+
+    await execute(engine, "Ada", "go down")
+    dark = await execute(engine, "Ada", "look")
+    assert dark.events[0].data["room"]["dark"] is True
+
+    result = await execute(engine, "Ada", "light torch")
+    actor = _events(result, "object.lit", "actor")
+    broadcast = _events(result, "object.lit", "room")
+    assert actor and broadcast
+    assert actor[0].data["object"]["lit"] is True
+    assert actor[0].data["self"] is True
+    assert broadcast[0].data["self"] is False
+    assert torch.lit is True
+
+    lit = await execute(engine, "Ada", "look")
+    assert lit.events[0].data["room"]["dark"] is False
+    assert any(obj["name"] == "Gold Coin"
+               for obj in lit.events[0].data["room"]["objects"])
+
+
+@pytest.mark.asyncio
 async def test_unknown_command_is_an_error(vault):
     engine, _player, _room, _chest, _coin, _key = vault
 

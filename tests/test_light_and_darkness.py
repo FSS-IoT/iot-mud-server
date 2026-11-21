@@ -79,12 +79,13 @@ async def test_dark_room_blocks_read():
 
 
 @pytest.mark.asyncio
-async def test_carrying_torch_lights_the_room():
-    """Carrying a light source lets the player see in a dark room."""
+async def test_carrying_lit_torch_lights_the_room():
+    """Carrying a *lit* light source lets the player see in a dark room."""
     from src.mud.content import Player
     engine, _room = _dark_room_with_torch()
     player = Player("Ada")
     torch = Entity("Torch", "A flickering wooden torch.", light_source=True)
+    torch.lit = True  # a carried light only sheds light once it is lit
     player.add_content(torch)  # carried items live in the player's contents
     engine.player = player  # legacy single-player slot holds the player
 

@@ -64,6 +64,16 @@ def test_render_error():
     assert "locked" in out.lower()
 
 
+def test_render_object_lit():
+    out = render_message({
+        "v": 2, "type": "object.lit", "data": {
+            "text": "You light the Torch.", "self": True,
+        },
+    }, "Ada")
+
+    assert "light" in out.lower()
+
+
 def test_render_player_said():
     out = render_message({
         "v": 2, "type": "player.said", "data": {

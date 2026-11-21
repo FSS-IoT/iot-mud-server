@@ -9,8 +9,8 @@ Complete 2026-11-21; the v2.0 milestone is closed (issues #35, #36, #37, #39).
 
 - The reference server in this repo: the authoritative engine and the
   `starting_village` world, over the v2 WebSocket protocol.
-- Join, look, move, take/drop, say, containers, locks, light/darkness, and
-  non-fatal command errors.
+- Join, look, move, take/drop, say, containers, locks, light/darkness
+  (`light <source>`), and non-fatal command errors.
 - A two-client conformance session (`tests/test_protocol_v2.py`), the client
   acceptance script (`docs/SESSION.md`), a mock harness (`tools/`), and a
   worked reference client (`examples/`).
@@ -19,9 +19,8 @@ Complete 2026-11-21; the v2.0 milestone is closed (issues #35, #36, #37, #39).
 The v1 server remains in the tree as the historical implementation and for its
 tests; the v2 server is the one the club runs.
 
-**Known gap:** Doc's TASK-039 `light` verb (`9a25236`) landed after the v2.0
-port. It is in the joined history but not in the common tree; porting it is
-[#44](https://github.com/FSS-IoT/iot-mud-server/issues/44).
+Doc's TASK-039 `light` verb (`9a25236`) is ported from the joined history
+([#44](https://github.com/FSS-IoT/iot-mud-server/issues/44)).
 
 ## v2.1 — depth (next; grill first)
 

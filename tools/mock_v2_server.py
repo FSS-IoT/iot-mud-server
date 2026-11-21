@@ -66,7 +66,7 @@ ITEMS = {
     },
     "torch": {
         "id": "torch", "kind": "torch", "name": "Torch",
-        "portable": True, "light_source": True,
+        "portable": True, "light_source": True, "lit": False,
         "description": "A flickering wooden torch.",
     },
     "gold_key": {
@@ -76,7 +76,7 @@ ITEMS = {
     "brass_lantern": {
         "id": "brass_lantern", "kind": "brass_lantern",
         "name": "Brass Lantern", "portable": True, "light_source": True,
-        "description": "A brass lantern, its wick still dry.",
+        "lit": False, "description": "A brass lantern, its wick still dry.",
     },
     "chest": {
         "id": "chest_forest", "kind": "chest_forest", "name": "Chest",
@@ -110,6 +110,7 @@ class World:
         self.chest_locked = True
         self.chest_looted = False
         self.chest_items: list[str] = []
+        self.lit_items: set[str] = set()
 
 
 class Session:
@@ -154,12 +155,16 @@ class Session:
         item = dict(ITEMS[key])
         if key == "chest":
             item["locked"] = self.world.chest_locked
+        if item.get("light_source"):
+            item["lit"] = key in self.world.lit_items
         return item
 
     def room_payload(self) -> dict:
         base = ROOMS[self.room]
         dark = base.get("dark", False) and not any(
-            item["id"] == "torch" for item in self.inventory)
+            ITEMS.get(item["id"], {}).get("light_source")
+            and item.get("lit")
+            for item in self.inventory)
         players = [
             {"name": other.name}
             for other in self.world.players.values()
@@ -391,6 +396,9 @@ class MockServer:
         if verb == "use":
             await self._use(session, arg, msg_id)
             return True
+        if verb == "light":
+            await self._light(session, arg, msg_id)
+            return True
         if verb == "read":
             await self._read(session, arg, msg_id)
             return True
@@ -417,8 +425,8 @@ class MockServer:
             await session.send("notice", {
                 "text": "Commands: look, go <direction>, take <item>, "
                         "drop <item>, put <item> in <chest>, open <chest>, "
-                        "use <key> on <chest>, read <item>, inventory, "
-                        "say <text>, exits, quit.",
+                        "use <key> on <chest>, light <torch/lantern>, "
+                        "read <item>, inventory, say <text>, exits, quit.",
                 "level": "info",
             }, msg_id)
             return True
@@ -474,9 +482,10 @@ class MockServer:
             return
         item = session._item(key)
         self.world.rooms[session.room].remove(key)
-        session.inventory.append({
-            "id": item["id"], "kind": item["kind"], "name": item["name"],
-        })
+        held = {"id": item["id"], "kind": item["kind"], "name": item["name"]}
+        if item.get("light_source"):
+            held["lit"] = item.get("lit", False)
+        session.inventory.append(held)
         await session.send("object.taken", {
             "object": item, "by": session.name, "self": True,
             "text": f"You pick up the {item['name']}.",
@@ -638,6 +647,41 @@ class MockServer:
         await session.broadcast("player.said", {
             "from": session.name, "text": f'{session.name} says, "{spoken}".',
             "self": False,
+        })
+
+    async def _light(self, session: Session, name: str, msg_id) -> None:
+        item = session._find_inventory(name)
+        if item is None:
+            await session.send("error", {
+                "code": "not_found",
+                "message": f"You don't have a {name.strip()} to light.",
+                "text": f"You don't have a {name.strip()} to light.",
+            }, msg_id)
+            return
+        if not ITEMS.get(item["id"], {}).get("light_source"):
+            await session.send("notice", {
+                "text": f"You can't light the {item['name']}.",
+                "level": "info",
+            }, msg_id)
+            return
+        if item.get("lit", False):
+            await session.send("notice", {
+                "text": f"The {item['name']} is already lit.",
+                "level": "info",
+            }, msg_id)
+            return
+        item["lit"] = True
+        self.world.lit_items.add(item["id"])
+        obj = {"id": item["id"], "kind": item["kind"],
+               "name": item["name"], "lit": True}
+        await session.send("object.lit", {
+            "object": obj, "by": session.name, "self": True,
+            "text": f"You light the {item['name']}. Its flame casts a warm "
+                    "glow.",
+        }, msg_id)
+        await session.broadcast("object.lit", {
+            "object": obj, "by": session.name, "self": False,
+            "text": f"{session.name} lights the {item['name']}.",
         })
 
     async def _read(self, session: Session, name: str, msg_id) -> None:
