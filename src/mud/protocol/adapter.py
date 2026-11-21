@@ -339,8 +339,6 @@ async def execute(engine: Engine, player_name: str,
                     "object": obj, "by": player.name, "self": True,
                     "text": reply,
                 }),
-                Outbound("player.inventory", _inventory_data(player),
-                         direct=False),
                 _room("object.taken", {
                     "object": obj, "by": player.name, "self": False,
                     "text": f"{player.name} picks up the {item.name}.",

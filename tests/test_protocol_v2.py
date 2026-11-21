@@ -184,14 +184,12 @@ async def test_take_drop_and_inventory(server):
 
         await ada.input("take gold coin", 2)
         taken = await ada.next("object.taken")
-        inventory = await ada.next("player.inventory")
         other = await ben.next("object.taken")
 
         assert taken["id"] == 2
         assert taken["data"]["self"] is True
         assert taken["data"]["object"]["id"] == "gold_coin"
-        assert inventory["data"]["items"][0]["id"] == "gold_coin"
-        assert inventory.get("id") is None
+        # No inventory re-list fires on take (see test_take_does_not_relist_inventory).
         assert other["data"]["self"] is False
         assert "Ada picks up" in other["data"]["text"]
 
@@ -203,6 +201,68 @@ async def test_take_drop_and_inventory(server):
         assert dropped["data"]["self"] is True
         assert empty["data"]["items"] == []
         assert other_drop["data"]["self"] is False
+
+        assert dropped["data"]["self"] is True
+        assert empty["data"]["items"] == []
+        assert other_drop["data"]["self"] is False
+
+
+@pytest.mark.asyncio
+async def test_take_does_not_relist_inventory(server):
+    """[54] A `take` emits the action + room broadcast but no `player.inventory` re-list.
+
+    The actor should get "You picked up the Gold Coin." and the room broadcast
+    ("<name> picks up the Gold Coin."), but not a follow-up "You are carrying:"
+    line. The inventory listing belongs only on an explicit `inventory` verb.
+    """
+    instance, _engine = server
+    async with V2Client(f"ws://localhost:{instance.port}") as ada, \
+            V2Client(f"ws://localhost:{instance.port}") as ben:
+        await ada.join("Ada")
+        await ben.join("Ben")
+        await ada.next("room.enter")
+        await ada.input("go north", 1)
+        await ada.next("room.state")
+        await ben.input("go north", 1)
+        await ben.next("room.state")
+        await ada.next("room.enter")
+
+        await ada.input("take gold coin", 2)
+
+        # Actor's own confirmation arrives (self=True).
+        taken = await ada.next("object.taken")
+        assert taken["id"] == 2
+        assert taken["data"]["self"] is True
+        assert taken["data"]["text"] == "You picked up the Gold Coin."
+
+        # Room broadcast to others still fires (goes to Ben, not the actor).
+        other = await ben.next("object.taken")
+        assert other["data"]["self"] is False
+        assert "Ada picks up" in other["data"]["text"]
+
+        # Drain whatever the actor received and assert no inventory re-list
+        # slipped in between the events above.
+        drained = []
+        while not ada.q.empty():
+            drained.append(ada.q.get_nowait())
+        assert not any(m["type"] == "player.inventory" for m in drained)
+        assert not any("You are carrying" in m.get("data", {}).get("text", "")
+                       for m in drained)
+
+
+@pytest.mark.asyncio
+async def test_inventory_verb_still_lists_contents(server):
+    """[54] An explicit `inventory` still emits `player.inventory` with contents."""
+    instance, _engine = server
+    async with V2Client(f"ws://localhost:{instance.port}") as ada:
+        await ada.join("Ada")
+        await ada.input("go north", 1)
+        await ada.next("room.state")
+        await ada.input("take gold coin", 2)
+        await ada.next("object.taken")  # the take's self event only
+        await ada.input("inventory", 3)
+        inv = await ada.next("player.inventory")
+        assert inv["data"]["items"][0]["id"] == "gold_coin"
 
 
 @pytest.mark.asyncio

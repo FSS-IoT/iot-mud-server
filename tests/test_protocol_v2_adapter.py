@@ -55,7 +55,8 @@ async def test_look_emits_structured_room_state(vault):
 
 
 @pytest.mark.asyncio
-async def test_take_emits_object_event_and_inventory(vault):
+async def test_take_emits_object_event_without_inventory_relist(vault):
+    """[54] `take` emits the action + room broadcast but no `player.inventory`."""
     engine, player, room, chest, coin, _key = vault
     chest.remove_content(coin)
     room.add_content(coin)
@@ -66,7 +67,7 @@ async def test_take_emits_object_event_and_inventory(vault):
     broadcast = _events(result, "object.taken", "room")
     inventory = _events(result, "player.inventory", "actor")
 
-    assert len(actor) == 1 and len(broadcast) == 1 and len(inventory) == 1
+    assert len(actor) == 1 and len(broadcast) == 1 and len(inventory) == 0
     assert actor[0].data["object"]["id"] == "coin"
     assert actor[0].data["self"] is True
     assert broadcast[0].data["self"] is False
