@@ -11,7 +11,8 @@ tests and the optional section at the end.
 
 ## Before you start
 
-1. Run the server locally (`../BOOTSTRAP.md` shows how).
+1. Run the server locally (`../BOOTSTRAP.md` shows how). Start it fresh for the
+   acceptance; the session changes the world.
 2. Read `PROTOCOL.md` version 2.
 3. Have two copies of your client ready, or two terminals, so you can see
    another player.
@@ -52,17 +53,20 @@ Use two players, **Ada** and **Ben**.
     `error` with `code: "malformed_message"`, and a following `look` still
     works on the same socket. Unknown commands return
     `error` with `code: "unknown_command"` and do not close the socket.
-12. **Quit.** Ada sends the `quit` message (an `input quit` also works). Ben
-    receives `room.leave` with `reason: "disconnect"`; Ada's socket closes with
-    code `1000`. A bare socket close also produces `room.leave`; the close code
-    is then the client's.
+12. **Quit.** Ada sends the `quit` message. Ben receives `room.leave` with
+    `reason: "disconnect"`; Ada's socket closes with code `1000`. An
+    `input quit` also closes `1000`, but (like the `quit` message) it is a
+    session-level exception and does not send a direct reply; if your client
+    waits for a reply, use the `quit` message. A bare socket close also produces
+    `room.leave`; the close code is then the client's.
 
 ## Containers and locks (v2.0)
 
 These are part of v2.0 and covered by the adapter tests; a client should render
 the events even if it does not have a special UI for them:
 
-1. From the gate: `go north` (Marketplace), `go west` (Alchemist Shop).
+1. From the gate: `go north` (Marketplace), `go west` (Alchemist Shop, room id
+   `shop`). Commands use display names, not room ids.
 2. `take torch`, `take gold key`; `go east`, `go north` (the dark forest).
    Carrying the torch lights the forest.
 3. `open chest` → `error` with `code: "locked"`.
