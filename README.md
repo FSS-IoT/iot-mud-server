@@ -53,6 +53,7 @@ and the engine tests.
 | `tests/` | Server/engine tests; many are historical red/green artifacts. |
 | `src/mud/protocol/` | v2 envelope, outbound types, engine adapter |
 | `tools/mock_v2_server.py` | Protocol-only mock server for client authors |
+| `examples/reference_client.py` | Minimal worked v2 client (not a template) |
 | `src/mud/world/` | World loader |
 | `data/worlds/starting_village.json` | The demo world |
 | `docs/PROTOCOL.md` | The client contract |
