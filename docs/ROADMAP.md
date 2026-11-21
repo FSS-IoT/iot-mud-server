@@ -3,20 +3,27 @@
 The common server is the club's shared product. The clients are individual
 projects that speak its protocol.
 
-## v2.0 — common server parity (current)
+## v2.0 — common server parity (complete)
+
+Complete 2026-11-21; the v2.0 milestone is closed (issues #35, #36, #37, #39).
 
 - The reference server in this repo: the authoritative engine and the
   `starting_village` world, over the v2 WebSocket protocol.
 - Join, look, move, take/drop, say, containers, locks, light/darkness, and
   non-fatal command errors.
-- A two-client conformance session (`tests/test_protocol_v2.py`) and the
-  client acceptance script (`docs/SESSION.md`).
+- A two-client conformance session (`tests/test_protocol_v2.py`), the client
+  acceptance script (`docs/SESSION.md`), a mock harness (`tools/`), and a
+  worked reference client (`examples/`).
 - CI runs the suite on every push and PR.
 
 The v1 server remains in the tree as the historical implementation and for its
 tests; the v2 server is the one the club runs.
 
-## v2.1 — depth
+**Known gap:** Doc's TASK-039 `light` verb (`9a25236`) landed after the v2.0
+port. It is in the joined history but not in the common tree; porting it is
+[#44](https://github.com/FSS-IoT/iot-mud-server/issues/44).
+
+## v2.1 — depth (next; grill first)
 
 - Name + password auth, persistent characters, SQLite write-through, YAML
   worlds.
@@ -26,8 +33,8 @@ tests; the v2 server is the one the club runs.
 - NPCs, rate limits, idle timeout, and shutdown events.
 - The 28 M1 tickets and the M2–M5 epics from the original
   [agentic-mud design](design/agentic-mud-v2.1.md) are inputs for this
-  milestone, not the current v2.0 milestone. Re-cut them before working;
-  several assume SQLite/YAML/auth that v2.0 deliberately deferred.
+  milestone, not part of the completed v2.0 milestone. Re-cut them before
+  working; several assume SQLite/YAML/auth that v2.0 deliberately deferred.
 
 ## v2.2 — IoT and LLM
 
@@ -48,10 +55,8 @@ tests; the v2 server is the one the club runs.
 
 - **License.** MIT (2026-11-21), credited to Doc (`docx73`) and the FSS-IoT
   club contributors. The engine, v1 server, world, and v2 adapter derive from
-  Doc's `FSS-IoT/iot-mud`; a companion proposal in that repo asks him to adopt
-  MIT there too. Until he does, his repo remains unlicensed.
+  Doc's `FSS-IoT/iot-mud`; Doc's repository is MIT too.
 - **Hosting.** The club server is a LAN/tailnet instance; the repository is
   public. Server addresses and credentials do not belong in the repo.
-- **The scaffold PR.** `ticket-1-scaffold` (#33) predates the common server and
-  overlaps this work. Its config ideas are useful for v2.1; it should either be
-  rebased onto v2.0 or closed as superseded.
+- **The scaffold PR.** `ticket-1-scaffold` (#33) was closed as superseded; its
+  config ideas are useful for v2.1 if someone re-cuts them.

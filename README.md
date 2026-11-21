@@ -91,4 +91,5 @@ The engine, v1 server, world, and v2 adapter derive from
 (`docx73`). See `NOTICE.md`.
 
 The common server is **MIT**; see [`LICENSE`](LICENSE). The copyright notice
-names Doc and the FSS-IoT club contributors.
+names Doc and the FSS-IoT club contributors. Doc's repository is MIT too, and
+the common server's history joins his original commits.
