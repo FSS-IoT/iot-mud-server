@@ -14,11 +14,19 @@ uv sync --all-extras
 # ws://localhost:8765
 ```
 
+Bind the LAN/tailnet interface or choose another port:
+
+```bash
+./run_server.sh --host 0.0.0.0 --port 9000
+```
+
 Windows:
 
 ```powershell
 uv sync --all-extras
 uv run python -m src.mud.net.v2_server
+# or:
+uv run python -m src.mud.net.v2_server --host 0.0.0.0 --port 9000
 ```
 
 Run one server at a time: the v1 server and the v2 server both default to

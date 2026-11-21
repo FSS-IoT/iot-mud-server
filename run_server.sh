@@ -9,4 +9,4 @@ if [ ! -d .venv ]; then
 fi
 
 source .venv/bin/activate
-exec python -m src.mud.net.v2_server
+exec python -m src.mud.net.v2_server "$@"
