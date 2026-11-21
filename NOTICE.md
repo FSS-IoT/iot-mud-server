@@ -8,8 +8,9 @@ documentation were merged in the club repository.
 
 ## License
 
-No license has been chosen yet. The repository is public so club members can
-read it and contribute, but it is **not** licensed for reuse or redistribution
-outside the club. Doc and the club should agree a license (for example MIT)
-before that changes. Until then, treat the code as all rights reserved by its
-authors.
+MIT. See `LICENSE`. The copyright notice names Doc (`docx73`) and the FSS-IoT
+club contributors.
+
+The engine, v1 server, world data, and v2 adapter were derived from
+`FSS-IoT/iot-mud` by Doc. A companion proposal in that repository asks Doc to
+adopt the same license there; until he does, his repository remains unlicensed.

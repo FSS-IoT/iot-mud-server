@@ -74,9 +74,11 @@ See `CONTRIBUTING.md`. The short version: fork, branch from `main`, write the
 failing test first, run `uv run pytest`, open a PR, and get a fresh review.
 Work lands through a PR; do not push to `main` directly.
 
-## Credit
+## Credit and license
 
 The engine, v1 server, world, and v2 adapter derive from
 [`FSS-IoT/iot-mud`](https://github.com/FSS-IoT/iot-mud), originally by Doc
-(`docx73`). See `NOTICE.md`. No license has been chosen yet; the repo is public
-for club work but not licensed for reuse outside the club.
+(`docx73`). See `NOTICE.md`.
+
+The common server is **MIT**; see [`LICENSE`](LICENSE). The copyright notice
+names Doc and the FSS-IoT club contributors.
