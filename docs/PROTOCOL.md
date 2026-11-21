@@ -224,6 +224,74 @@ vs "Ada takes the coin.").
   move. It is the resynchronization mechanism: a client must be able to rebuild
   its view from it.
 
+### Optional room geometry (additive, 2.x)
+
+A room may carry a map for clients that draw one. The field is additive: a
+client that ignores it, and a room without it, behave exactly as in v2.0.
+`data.text` is unchanged. A room with no map omits the field; it is never
+`null`.
+
+```json
+"room": {
+  "id": "gate",
+  "name": "Village Gate",
+  "description": "...",
+  "dark": false,
+  "exits": [{"direction": "north", "to": "market", "locked": false}],
+  "objects": [],
+  "players": [],
+  "npcs": [],
+  "geometry": {
+    "cells": [
+      "###+###",
+      "#.....#",
+      "#.....#",
+      "#.....#",
+      "#.....#",
+      "#.....#",
+      "#######"
+    ],
+    "spawn": {"north": [3, 1]},
+    "props": [
+      {"kind": "gatepost", "cell": [1, 5]},
+      {"kind": "banner", "cell": [5, 1]}
+    ]
+  }
+}
+```
+
+- `cells` are rows from the top, all the same length, at least 3x3. A cell is
+  `[x, y]`: `x` is the column from the left, `y` the row from the top, both
+  zero-based. `#` is wall, `.` floor, `+` door, `^` stairs up, `v` stairs down.
+- A `+` sits on a boundary edge, and the edge names its direction: top north,
+  bottom south, left west, right east. There is exactly one door per cardinal
+  exit, no door without an exit, and no door in a corner. The cell just inside
+  each door is floor.
+- Every boundary cell is a wall or a door; stairs and props are interior.
+- `^` and `v` mark the stairs for an `up`/`down` exit. A room with that exit
+  has exactly one; a room without it has none. Stairs are walkable floor cells.
+- `spawn` is optional. It maps an exit side to the floor cell where a client
+  should place a player arriving through that exit. If a side is absent, the
+  client uses the floor cell just inside that side's door. Spawn cells are in
+  bounds and on floor, and name an exit the room has.
+- `props` holds static decor: `{kind, cell}`, where `kind` is a non-empty
+  string. A prop is in bounds, on floor, and not on a spawn cell. Props are
+  decoration only; dynamic objects, players, and NPCs are not positioned here
+  (`objects`, `players`, and `npcs` remain the source for those). A server that
+  supports geometry always sends `props`, empty when the room has no decor;
+  `spawn` is present only when the world author declared it.
+- The loader validates every map at startup and refuses to serve a world with
+  an invalid map. The error names the room and the offending cell.
+- In a dark room (`dark: true` in the emitted `room` object, so the observer
+  cannot see it), `geometry` is omitted along with the exits and contents. When
+  a light makes the room visible, the normal state is sent with `dark: false`
+  and may include the geometry.
+
+Geometry changes no event type and no existing field; `v` stays `2`. It is an
+additive 2.x field beyond the v2.0 baseline, not a new protocol version. A
+client that does not understand it simply ignores the field, as it does for any
+unknown field.
+
 ### Players and social
 
 | Type | Data | Recipients |

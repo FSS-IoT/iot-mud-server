@@ -138,6 +138,18 @@ async def test_hello_and_join(server):
         assert room["exits"] == [
             {"direction": "north", "to": "market", "locked": False}
         ]
+        geometry = room["geometry"]
+        assert len(geometry["cells"]) == 7
+        assert len({len(row) for row in geometry["cells"]}) == 1
+        doors = [
+            (x, y)
+            for y, row in enumerate(geometry["cells"])
+            for x, cell in enumerate(row)
+            if cell == "+"
+        ]
+        assert len(doors) == 1
+        assert doors[0][1] == 0  # top edge = north
+        assert geometry["spawn"]["north"] == [3, 1]
 
 
 @pytest.mark.asyncio
@@ -449,6 +461,7 @@ async def test_dark_room_state_hides_contents(server):
         assert room["dark"] is True
         assert room["objects"] == []
         assert room["players"] == []
+        assert "geometry" not in room
         assert "dark" in forest["data"]["text"].lower()
 
 

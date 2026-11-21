@@ -17,6 +17,14 @@ tests and the optional section at the end.
 3. Have two copies of your client ready, or two terminals, so you can see
    another player.
 
+## Room geometry is optional
+
+The start rooms may include `room.state.data.room.geometry`, a small grid map
+for clients that draw a view (`PROTOCOL.md`, "Optional room geometry"). It is
+additive: ignore the field and the acceptance session is unchanged, because
+`data.text` remains the contract. A room without a map omits the field, and a
+dark room omits it until a light makes the room visible.
+
 ## The session
 
 Use two players, **Ada** and **Ben**.

@@ -138,19 +138,24 @@ def build_room_state(engine: Engine, player: Player) -> dict[str, Any]:
         text += "\n\nOthers in the room: " + ", ".join(
             person["name"] for person in players) + "."
 
-    return {
-        "room": {
-            "id": _room_id(room),
-            "name": room.name,
-            "description": room.description,
-            "dark": False,
-            "exits": exits,
-            "objects": objects,
-            "players": players,
-            "npcs": [],
-        },
-        "text": text,
+    payload = {
+        "id": _room_id(room),
+        "name": room.name,
+        "description": room.description,
+        "dark": False,
+        "exits": exits,
+        "objects": objects,
+        "players": players,
+        "npcs": [],
     }
+    # Additive: only rooms with authored geometry carry the field, and the
+    # dark branch above omits it so a map is never leaked to an observer who
+    # cannot see the room.
+    geometry = getattr(room, "geometry", None)
+    if geometry is not None:
+        payload["geometry"] = geometry
+
+    return {"room": payload, "text": text}
 
 
 def _inventory_data(player: Player, text: str | None = None) -> dict[str, Any]:
