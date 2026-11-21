@@ -56,6 +56,19 @@ choose another port:
 
 Run one server at a time.
 
+### Mock server (optional)
+
+For a fast client check, `tools/mock_v2_server.py` speaks the same v2 handshake
+and scripts the session, including the forest chest:
+
+```bash
+uv run python tools/mock_v2_server.py
+# client: ws://localhost:8770
+```
+
+It is a harness, not the real server. Use it while building; the real server is
+the authority for the acceptance.
+
 ## 3. Read the contract
 
 - `docs/PROTOCOL.md` — the normative v2 contract.
