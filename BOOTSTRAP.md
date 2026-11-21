@@ -10,21 +10,29 @@ ship. The protocol is the spec; `docs/SESSION.md` is the acceptance test.
 
 ## 1. Make your repo
 
-Create your own repository. Private is fine. You can start from the
-[docs-only template](https://github.com/FSS-IoT/iot-mud-client-template) with
-"Use this template", or start empty:
+Create your own repository wherever you keep code: GitHub, a local git repo,
+or another host. Private is fine.
+
+On GitHub, the [docs-only template](https://github.com/FSS-IoT/iot-mud-client-template)
+has a "Use this template" button, or use `gh` as an example:
 
 ```bash
 gh repo create <your-name>-mud-client --private --clone
 cd <your-name>-mud-client
 ```
 
+On a local repo or another host, create an empty repository and copy
+`SESSION.md`, `PROTOCOL-VERSION`, and `LICENSE` from the template (or start with
+your own README; the client is yours).
+
 Pick any stack: Python, JavaScript/TypeScript, Go, Rust, a shell script, a
 browser page. There is no required language and no required framework.
 
 ## 2. Run the server locally
 
-You need a server to test against. Clone it next to your client:
+You need a server to test against. Clone it anywhere you keep checkouts; it does
+not have to be next to your client. The examples use a sibling directory, but
+any path works — if your acceptance script takes a server path, point it here.
 
 ```bash
 git clone https://github.com/FSS-IoT/iot-mud-server
@@ -39,7 +47,14 @@ Windows:
 uv run python -m src.mud.net.v2_server
 ```
 
-The server listens on `ws://localhost:8765`. Run one server at a time.
+The server listens on `ws://localhost:8765`. To bind a LAN/tailnet interface or
+choose another port:
+
+```bash
+./run_server.sh --host 0.0.0.0 --port 9000
+```
+
+Run one server at a time.
 
 ## 3. Read the contract
 
@@ -68,8 +83,16 @@ factory's red/green station) is the habit the club is teaching.
 
 ## 5. Pass the acceptance session
 
+Start a **fresh server** for the acceptance. The world is in memory and the
+session takes the gold coin, unlocks the forest chest, and moves items; a second
+run against the same server can fail in ways that look like client bugs. Stop
+the old server and start a new one.
+
 Run two copies of your client (or one copy of yours and a friend's) and follow
-`docs/SESSION.md` with Ada and Ben. You are done when every step passes.
+`docs/SESSION.md` with Ada and Ben. An automated client can drive two
+connections against that fresh server. Record the run in your client repo (for
+example `docs/ACCEPTANCE.md`) with the server commit and date. You are done when
+every step passes.
 
 Then connect to the club server. Its address is shared with the club, not
 committed to the repo. Test with a second player before calling it shipped.

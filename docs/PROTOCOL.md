@@ -101,8 +101,10 @@ A second `join` on the same socket: `error{code:"already_joined"}`.
    recipient.
 
 4. **Quit.** `quit` closes cleanly with code `1000`; the room receives
-   `room.leave` with `reason: "disconnect"`. A socket close without `quit` has
-   the same effect.
+   `room.leave` with `reason: "disconnect"`. It is a session-level exception to
+   the direct-reply rule: it does not send a reply. An `input` whose text is
+   `quit` or `exit` does the same. A socket close without `quit` also produces
+   `room.leave`.
 
 5. **Reconnect.** Joining again sends a fresh `room.state`. In v2.0 the world is
    in memory: a server restart resets it and changes `world.epoch`. Clients
@@ -123,12 +125,13 @@ code (`bad_credentials`, `name_taken`, `unknown_player`, `invalid_name`,
 |---|---|---|
 | `join` | `name` | v2.0 guest session. Only before joining. `id` is optional; if present it is echoed on `session.ok`. |
 | `input` | `text` | The whole command line. Only after joining. **`id` is required**; it is echoed on the direct reply, and an input without one is rejected with `error{code:"bad_args"}`. |
-| `quit` | — | Graceful close; the socket closes with `1000`. |
+| `quit` | — | Graceful close; the socket closes with `1000`. No direct reply. |
 | `auth` | `mode`, `name`, `password` | v2.1 only. |
 
 Nothing else exists in v2. Clients do not send structured actions; parsing is
 the server's job, so every client sees the same world behaviour. An `input`
-whose text is `quit` or `exit` is also treated as a graceful close.
+whose text is `quit` or `exit` is also a graceful close; like the `quit`
+message, it is a session-level exception and does not send a direct reply.
 
 ## Server events
 
@@ -200,6 +203,10 @@ vs "Ada takes the coin.").
 | `player.emoted` | `from`, `text`, `self` | Room (v2.1) |
 | `player.told` | `from`, `to`, `text`, `self` | Target and sender (v2.1) |
 | `who.list` | `players[]{name,room_id}` | Actor only (v2.1) |
+
+`player.said.text` is the rendered line (`Ada says, "hello".`), not the raw
+utterance. A structured raw-message field is a v2.1 candidate; v2.0 clients
+should treat `text` as presentation.
 
 ### Objects
 
@@ -273,7 +280,7 @@ protocol version, `4004` idle timeout, `4005` rate-limit abuse. v2.0 uses
 | `help` / `h` | `notice` (private) |
 | `say <text>` | actor: `player.said` (`self:true`); room: `player.said` (`self:false`) |
 | `hello` | `notice` (private) |
-| `exit` / `quit` | close `1000`; `room.leave` to the room |
+| `exit` / `quit` | close `1000`; no direct reply; `room.leave` to the room |
 | malformed / unknown | `error`; socket stays open |
 
 ## Appendix: changes from version 1
