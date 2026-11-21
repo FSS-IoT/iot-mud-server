@@ -77,6 +77,30 @@ async def test_take_emits_object_event_without_inventory_relist(vault):
 
 
 @pytest.mark.asyncio
+async def test_drop_emits_object_event_without_inventory_relist(vault):
+    """[56] `drop` emits the action + room broadcast but no `player.inventory`."""
+    engine, player, room, chest, coin, _key = vault
+    chest.remove_content(coin)
+    room.add_content(coin)
+    await execute(engine, "Ada", "take coin")
+    assert coin in player.contents
+
+    result = await execute(engine, "Ada", "drop coin")
+
+    actor = _events(result, "object.dropped", "actor")
+    broadcast = _events(result, "object.dropped", "room")
+    inventory = _events(result, "player.inventory", "actor")
+
+    assert len(actor) == 1 and len(broadcast) == 1 and len(inventory) == 0
+    assert actor[0].data["object"]["id"] == "coin"
+    assert actor[0].data["self"] is True
+    assert broadcast[0].data["self"] is False
+    assert "Ada drops" in broadcast[0].data["text"]
+    assert coin in room.contents
+    assert coin not in player.contents
+
+
+@pytest.mark.asyncio
 async def test_use_unlocks_container_then_open_spills_loot(vault):
     engine, _player, room, chest, coin, _key = vault
 

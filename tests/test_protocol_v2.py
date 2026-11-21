@@ -194,16 +194,15 @@ async def test_take_drop_and_inventory(server):
         assert "Ada picks up" in other["data"]["text"]
 
         await ada.input("drop gold coin", 3)
+        # [56] drop emits only the action + room broadcast, no inventory re-list.
         dropped = await ada.next("object.dropped")
-        empty = await ada.next("player.inventory")
         other_drop = await ben.next("object.dropped")
 
         assert dropped["data"]["self"] is True
-        assert empty["data"]["items"] == []
         assert other_drop["data"]["self"] is False
+        assert "Ada drops" in other_drop["data"]["text"]
 
         assert dropped["data"]["self"] is True
-        assert empty["data"]["items"] == []
         assert other_drop["data"]["self"] is False
 
 
