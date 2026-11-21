@@ -12,5 +12,5 @@ MIT. See `LICENSE`. The copyright notice names Doc (`docx73`) and the FSS-IoT
 club contributors.
 
 The engine, v1 server, world data, and v2 adapter were derived from
-`FSS-IoT/iot-mud` by Doc. A companion proposal in that repository asks Doc to
-adopt the same license there; until he does, his repository remains unlicensed.
+`FSS-IoT/iot-mud` by Doc. Doc's repository is MIT too (merged 2026-11-21), and
+the common server's history joins his original commits.
