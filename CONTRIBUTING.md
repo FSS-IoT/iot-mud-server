@@ -25,9 +25,9 @@ reviews.
    changed paths inside the issue's `Touches:` list (or add `scope:expanded`),
    and include the test result.
 6. **Fresh review.** Someone who did not write the code reviews it. GitHub
-   requires one approving review from an account other than the author, and
-   `main` does not let admins bypass it. Reviewers reject and send back; they do
-   not fix the branch.
+   requires one approving review from an account other than the author. Admins
+   can bypass with `gh pr merge --admin`, but the review is still expected.
+   Reviewers reject and send back; they do not fix the branch.
 7. **Merge** after the review and green tests. Delete the branch.
 
 Work lands through a pull request. Do not push to `main` directly. Forking is
