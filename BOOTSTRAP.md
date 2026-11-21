@@ -94,6 +94,16 @@ each step:
 Each step is a ticket in your repo. A failing check first (the software
 factory's red/green station) is the habit the club is teaching.
 
+A minimal worked client is `examples/reference_client.py`; it is one way to
+speak the protocol, not a template. Run two copies for the two-player steps:
+
+```bash
+uv run python examples/reference_client.py --name Ada
+uv run python examples/reference_client.py --name Ben
+```
+
+Against the mock, add `--uri ws://localhost:8770`.
+
 ## 5. Pass the acceptance session
 
 Start a **fresh server** for the acceptance. The world is in memory and the
