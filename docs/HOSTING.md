@@ -86,6 +86,8 @@ Admin console -> **Machines** -> the host -> **Share**.
 - Only the individual recipient sees the shared machine, not their whole
   tailnet. Shared machines are quarantined: they can receive connections but
   cannot start them.
+- If the recipient's tailnet has **Tailnet Lock** enabled, the shared node
+  must be signed in that tailnet before it becomes reachable.
 
 The recipient reaches the shared machine by its **fully qualified name**:
 
