@@ -6,7 +6,7 @@ class Entity:
     def __init__(self, name: str, description: str, weight: float = 0.0,
                  readable: bool = False, light_source: bool = False,
                  item_id: str | None = None, locked: bool = False,
-                 required_key: str | None = None):
+                 required_key: str | None = None, lit: bool = False):
         self.name = name
         self.description = description
         self.weight = weight
@@ -36,6 +36,11 @@ class Entity:
         # Carried by a player it lights wherever they stand; it makes a dark
         # room visible.
         self.light_source = light_source
+        # `lit` is the ignition state of a `light_source` (Torch, lantern). An
+        # unlit light source sheds no light; `light <item>` sets it. Carried by
+        # a player it lights wherever they stand *only while lit*, so the player
+        # must strike it before a dark room becomes visible.
+        self.lit = lit
         self.contents: List[Entity] = []
 
     def add_content(self, item: Entity) -> bool:

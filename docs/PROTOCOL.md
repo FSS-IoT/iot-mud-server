@@ -188,8 +188,10 @@ vs "Ada takes the coin.").
   adds its own name from `session.ok`.
 - `npcs` is empty in v2.0; the field is reserved.
 - In a dark room (`dark: true`), `exits`, `objects`, `players`, and `npcs` are
-  empty, and `data.text` says it is too dark to see. Carrying a light source
-  (or a lit fixed light) produces the normal state with `dark: false`.
+  empty, and `data.text` says it is too dark to see. A carried light source must
+  be lit (`light <source>`) before it produces the normal state with
+  `dark: false`; a lit fixed light does so without a command.
+- A `light_source` object carries `lit: true|false`. An unlit source is dark.
 - `room.state` is sent on join, on `look`, and to the actor after a successful
   move. It is the resynchronization mechanism: a client must be able to rebuild
   its view from it.
@@ -198,7 +200,7 @@ vs "Ada takes the coin.").
 
 | Type | Data | Recipients |
 |---|---|---|
-| `player.inventory` | `items[]{id,name}`, `capacity?`, `used?` | Actor only |
+| `player.inventory` | `items[]{id,name,lit?}`, `capacity?`, `used?` | Actor only |
 | `player.said` | `from`, `text`, `self` | Room, including actor |
 | `player.emoted` | `from`, `text`, `self` | Room (v2.1) |
 | `player.told` | `from`, `to`, `text`, `self` | Target and sender (v2.1) |
@@ -218,6 +220,7 @@ should treat `text` as presentation.
 | `object.put` | `object{...}`, `container{id,name}`, `by`, `self` | Room |
 | `object.got` | `object{...}`, `container{id,name}`, `by`, `self` | Room (v2.1) |
 | `object.read` | `object{id,name}`, `content` | Actor only |
+| `object.lit` | `object{id,kind,name,lit}`, `by`, `self` | Room |
 | `object.unlocked` | `object{id,kind,name}`, `by`, `self` | Room |
 
 Reserved for later, never emitted in v2.0: `object.locked`, `object.closed`,
@@ -275,6 +278,7 @@ protocol version, `4004` idle timeout, `4005` rate-limit abuse. v2.0 uses
 | `put <x> in <y>` | `object.put` + `player.inventory` |
 | `open <x>` | `object.opened` (container contents in text; an empty unlocked container also emits it) |
 | `use <key> on <container>` | `object.unlocked` (or `error{locked}` / `error{already_open}`) |
+| `light <source>` | `object.lit` (or `notice` if already lit / not a light) |
 | `read <x>` | `object.read` (private) |
 | `inventory` / `i` | `player.inventory` (private) |
 | `help` / `h` | `notice` (private) |

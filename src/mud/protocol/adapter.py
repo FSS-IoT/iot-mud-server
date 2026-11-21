@@ -110,6 +110,8 @@ def build_room_state(engine: Engine, player: Player) -> dict[str, Any]:
         data["portable"] = True
         if getattr(entity, "readable", False):
             data["readable"] = True
+        if getattr(entity, "light_source", False):
+            data["lit"] = bool(getattr(entity, "lit", False))
         if getattr(entity, "locked", False):
             data["locked"] = True
         if getattr(entity, "contents", None) or getattr(entity, "locked", False):
@@ -152,7 +154,12 @@ def build_room_state(engine: Engine, player: Player) -> dict[str, Any]:
 
 
 def _inventory_data(player: Player, text: str | None = None) -> dict[str, Any]:
-    items = [_object_data(item, player.contents) for item in player.contents]
+    items = []
+    for item in player.contents:
+        data = _object_data(item, player.contents)
+        if getattr(item, "light_source", False):
+            data["lit"] = bool(getattr(item, "lit", False))
+        items.append(data)
     items.sort(key=lambda item: item["name"].lower())
     if text is None:
         if items:
@@ -160,10 +167,13 @@ def _inventory_data(player: Player, text: str | None = None) -> dict[str, Any]:
                 item["name"] for item in items) + "."
         else:
             text = "You are not carrying anything."
-    return {
-        "items": [{"id": item["id"], "name": item["name"]} for item in items],
-        "text": text,
-    }
+    payload = []
+    for item in items:
+        entry = {"id": item["id"], "name": item["name"]}
+        if "lit" in item:
+            entry["lit"] = item["lit"]
+        payload.append(entry)
+    return {"items": payload, "text": text}
 
 
 def _find(engine: Engine, collection: list[Entity], name: str | None) -> Entity | None:
@@ -280,6 +290,10 @@ async def execute(engine: Engine, player_name: str,
     before_locked = {
         id(entity): bool(getattr(entity, "locked", False))
         for entity in before_room_contents
+    }
+    before_lit = {
+        id(entity): bool(getattr(entity, "lit", False))
+        for entity in before_inventory
     }
 
     reply = await engine.process_command(command_text, player_name)
@@ -422,6 +436,25 @@ async def execute(engine: Engine, player_name: str,
                 }),
             ])
         # The reply decides: "already open", "does not fit", or missing key.
+        return _failure(reply)
+
+    if verb == "light":
+        target = _find(engine, before_inventory, arg)
+        was_lit = before_lit.get(id(target), False) if target is not None else False
+        now_lit = bool(getattr(target, "lit", False)) if target is not None else False
+        if target is not None and now_lit and not was_lit:
+            obj = _object_data(target, player.contents)
+            obj["lit"] = True
+            return CommandResult([
+                _actor("object.lit", {
+                    "object": obj, "by": player.name, "self": True,
+                    "text": reply,
+                }),
+                _room("object.lit", {
+                    "object": obj, "by": player.name, "self": False,
+                    "text": f"{player.name} lights the {target.name}.",
+                }),
+            ])
         return _failure(reply)
 
     if verb == "read":

@@ -207,9 +207,9 @@ class Engine:
         """Whether `room` is lit from the perspective of `player` (or legacy slot).
 
         A room is lit unless it is explicitly marked `dark`. A dark room is lit
-        if it carries a light source, or if the observer carries one (a Torch,
-        a lantern). The default is a LIT room: no explicit darkness means the
-        lights are effectively on.
+        if it carries a light source, or if the observer carries a *lit* light
+        source (a struck Torch, a lit lantern). The default is a LIT room: no
+        explicit darkness means the lights are effectively on.
         """
         if room is None or (isinstance(room, Room) and not room.dark):
             return True
@@ -217,7 +217,8 @@ class Engine:
             return True
         observer = player if player is not None else self.player
         return observer is not None and any(
-            getattr(c, "light_source", False) for c in observer.contents
+            getattr(c, "light_source", False) and getattr(c, "lit", False)
+            for c in observer.contents
         )
 
     def visible_room_state(self, player) -> Dict[str, Any]:
@@ -536,6 +537,39 @@ class Engine:
         listed = ", ".join(sorted(c.name for c in loot))
         return f"You see inside the {container.name}: {listed}."
 
+    async def _handle_light(self, arg: str, player_name: str | None) -> str:
+        """Ignite a carried light source: `light <torch/lantern>`.
+
+        The item is resolved from the player's inventory by the same forgiving
+        match as take/examine and must be a `light_source`. Lighting it sets its
+        `lit` state so it sheds light wherever the player stands; an already-lit
+        one is reported rather than re-struck. Returns the reply string.
+        """
+        target_player = self._resolve_player(player_name)
+        if target_player is not None:
+            held_item, disambig = self._disambiguate(
+                target_player.contents, arg)
+            if disambig:
+                return disambig
+        else:
+            if not self.player:
+                return "You do not exist!"
+            held_item, disambig = self._disambiguate(
+                self.player.contents, arg)
+            if disambig:
+                return disambig
+
+        if held_item is None:
+            return f"You don't have a {arg.strip()} to light."
+        if not getattr(held_item, "light_source", False):
+            return f"You can't light the {held_item.name}."
+        if getattr(held_item, "lit", False):
+            return f"The {held_item.name} is already lit."
+
+        held_item.lit = True
+        await self.emit("light_ignited", {"item_name": held_item.name.lower()})
+        return f"You light the {held_item.name}. Its flame casts a warm glow."
+
     def _resolve_player(self, player_name):
         """Return the registered player to act as, falling back to the legacy slot."""
         if player_name:
@@ -837,6 +871,11 @@ class Engine:
                 matched = True
 
         # INVENTORY / HELP (UTILITY)
+        # LIGHT — ignite a carried light source: `light <torch/lantern>`.
+        elif resolved_verb == "light" and resolved_arg:
+            response = await self._handle_light(resolved_arg, player_name)
+            matched = True
+
         elif resolved_verb == "inventory":
             held = self._held_items(self._resolve_player(player_name))
             if held:
@@ -848,7 +887,7 @@ class Engine:
         elif resolved_verb == "help":
             response = (
                 "Commands: look (l), go <direction>, exits, take <item>, drop <item>, put <item> in <container>, "
-                "examine <thing> (exam), read <thing> (signs, books), look in <chest>, inventory (i), say <text>, hello. Try `look` first."
+                "examine <thing> (exam), read <thing> (signs, books), look in <chest>, light <torch/lantern>, inventory (i), say <text>, hello. Try `look` first."
             )
             matched = True
 

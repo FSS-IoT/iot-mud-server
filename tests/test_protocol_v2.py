@@ -466,27 +466,31 @@ async def test_container_sequence_over_websocket(server):
         await ada.next("object.taken")
         await ada.input("take gold key", 5)
         await ada.next("object.taken")
-        await ada.input("go east", 6)
+        await ada.input("light torch", 6)
+        lit = await ada.next("object.lit")
+        assert lit["data"]["object"]["lit"] is True
+        await ada.input("go east", 7)
         await ada.next("room.state")
-        await ada.input("go north", 7)
-        await ada.next("room.state")
+        await ada.input("go north", 8)
+        forest = await ada.next("room.state")
+        assert forest["data"]["room"]["dark"] is False
 
-        await ada.input("open chest", 8)
+        await ada.input("open chest", 9)
         locked = await ada.next("error")
         assert locked["data"]["code"] == "locked"
 
-        await ada.input("use gold key on chest", 9)
+        await ada.input("use gold key on chest", 10)
         unlocked = await ada.next("object.unlocked")
         assert unlocked["data"]["self"] is True
 
-        await ada.input("open chest", 10)
+        await ada.input("open chest", 11)
         opened = await ada.next("object.opened")
         assert "brass lantern" in opened["data"]["text"].lower()
 
-        await ada.input("take brass lantern", 11)
+        await ada.input("take brass lantern", 12)
         await ada.next("object.taken")
 
-        await ada.input("put brass lantern in chest", 12)
+        await ada.input("put brass lantern in chest", 13)
         put = await ada.next("object.put")
         assert put["data"]["container"]["id"] == "chest_forest"
         assert put["data"]["self"] is True

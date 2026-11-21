@@ -67,8 +67,9 @@ the events even if it does not have a special UI for them:
 
 1. From the gate: `go north` (Marketplace), `go west` (Alchemist Shop, room id
    `shop`). Commands use display names, not room ids.
-2. `take torch`, `take gold key`; `go east`, `go north` (the dark forest).
-   Carrying the torch lights the forest.
+2. `take torch`, `take gold key`; `light torch` → `object.lit`; `go east`,
+   `go north` (the dark forest). The lit torch lights the forest; an unlit one
+   would leave it dark.
 3. `open chest` → `error` with `code: "locked"`.
 4. `use gold key on chest` → `object.unlocked`.
 5. `open chest` → `object.opened`; the Brass Lantern spills into the room.

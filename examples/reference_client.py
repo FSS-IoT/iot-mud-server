@@ -69,7 +69,8 @@ def render_message(message: dict, name: str) -> str:
 
     if kind in ("object.taken", "object.dropped", "object.opened",
                 "object.closed", "object.put", "object.got", "object.read",
-                "object.locked", "object.unlocked", "player.inventory",
+                "object.lit", "object.locked", "object.unlocked",
+                "player.inventory",
                 "exit.locked", "exit.unlocked"):
         return f"{GREEN}{data.get('text', '')}{CLEAR}\n"
 

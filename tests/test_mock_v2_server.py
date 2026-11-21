@@ -100,31 +100,35 @@ async def test_mock_runs_the_session_and_container_flow():
             await _send(ws, "input", {"text": "take gold key"}, 4)
             assert (await _next(ws, "object.taken"))["data"]["object"]["name"] == "Gold Key"
 
-            await _send(ws, "input", {"text": "go east"}, 5)
+            await _send(ws, "input", {"text": "light torch"}, 5)
+            lit = await _next(ws, "object.lit")
+            assert lit["data"]["object"]["lit"] is True
+
+            await _send(ws, "input", {"text": "go east"}, 6)
             await _next(ws, "room.state")
-            await _send(ws, "input", {"text": "go north"}, 6)
+            await _send(ws, "input", {"text": "go north"}, 7)
             forest = await _next(ws, "room.state")
             assert forest["data"]["room"]["id"] == "forest"
             assert forest["data"]["room"]["dark"] is False
 
-            await _send(ws, "input", {"text": "open chest"}, 7)
+            await _send(ws, "input", {"text": "open chest"}, 8)
             assert (await _next(ws, "error"))["data"]["code"] == "locked"
 
-            await _send(ws, "input", {"text": "use gold key on chest"}, 8)
+            await _send(ws, "input", {"text": "use gold key on chest"}, 9)
             assert (await _next(ws, "object.unlocked"))["data"]["self"] is True
 
-            await _send(ws, "input", {"text": "open chest"}, 9)
+            await _send(ws, "input", {"text": "open chest"}, 10)
             opened = await _next(ws, "object.opened")
             assert "brass lantern" in opened["data"]["text"].lower()
 
-            await _send(ws, "input", {"text": "take brass lantern"}, 10)
+            await _send(ws, "input", {"text": "take brass lantern"}, 11)
             await _next(ws, "object.taken")
 
-            await _send(ws, "input", {"text": "put brass lantern in chest"}, 11)
+            await _send(ws, "input", {"text": "put brass lantern in chest"}, 12)
             put = await _next(ws, "object.put")
             assert put["data"]["container"]["id"] == "chest_forest"
 
-            await _send(ws, "input", {"text": "say hello"}, 12)
+            await _send(ws, "input", {"text": "say hello"}, 13)
             said = await _next(ws, "player.said")
             assert said["data"]["self"] is True
             assert said["data"]["from"] == "Ada"
