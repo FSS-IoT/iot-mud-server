@@ -1,7 +1,13 @@
 # Club MUD — Specification
 
 **Status:** draft for build.
-**Tickets:** [M1 milestone](https://github.com/micahn/agentic-mud/milestone/1) — 28 tickets, each with a Red test step and a Green implementation step, wired with native blockers. M2–M5 are epics (#29–#32).
+> **HISTORICAL DESIGN — v2.1/v2.2.** The current v2.0 contract is
+> [`../PROTOCOL.md`](../PROTOCOL.md). The common server implements the working
+> engine and that contract; it does not yet have auth, SQLite, YAML worlds, or
+> NPCs. See [`../ROADMAP.md`](../ROADMAP.md). Re-cut these tickets before
+> implementing them; this document is design input, not the current server.
+
+**Tickets:** [M1 milestone](https://github.com/FSS-IoT/iot-mud-server/milestone/1) — 28 tickets, each with a Red test step and a Green implementation step, wired with native blockers. M2–M5 are epics (#29–#32).
 **Scope of this document:** M1 is fully specified and normative. M2–M5 define
 contracts and acceptance criteria only; they are specified in detail when
 reached.
@@ -126,7 +132,7 @@ else uses it yet.
 .
 ├── pyproject.toml
 ├── README.md
-├── SPEC.md                     # this document
+├── agentic-mud-v2.1.md         # this document (historical design)
 ├── docs/
 │   ├── PROTOCOL.md             # normative client contract
 │   ├── CONTENT.md              # world authoring guide
@@ -714,7 +720,7 @@ the admin surface stays out of the wire contract until there is a reason.
 - Plain `ws://` is acceptable **because the tailnet already encrypts transport**.
   If the server is ever exposed beyond the tailnet, that decision requires TLS
   termination and a new review; it is not a config flag.
-- Passwords: [REDACTED:password] (`n=2^14, r=8, p=1`, 16-byte salt, 32-byte hash), constant-
+- Passwords: `scrypt` (`n=2^14, r=8, p=1`, 16-byte salt, 32-byte hash), constant-
   time compare, never logged. No password is accepted under 10 characters.
 - Per-connection rate limit: 10 commands/second, burst 20. Exceeding it returns
   `rate_limited`; sustained abuse closes with `4005`.

@@ -1,0 +1,104 @@
+{
+  "start_location": "gate",
+  "rooms": [
+    {
+      "id": "gate",
+      "name": "Village Gate",
+      "description": "A heavy stone gate stands tall. To the north is the Marketplace.",
+      "exits": {
+        "north": "market"
+      },
+      "item_ids": ["sign"]
+    },
+    {
+      "id": "market",
+      "name": "Marketplace",
+      "description": "Lively vendors cry out their wares. Exits lead South, West, North, and East.",
+      "exits": {
+        "south": "gate",
+        "west": "shop",
+        "north": "forest",
+        "east": "tavern"
+      },
+      "item_ids": ["gold_coin"]
+    },
+    {
+      "id": "tavern",
+      "name": "Old Tavern",
+      "description": "Warmth radiates from within. The smell of roasted meat lingers. Exits West.",
+      "exits": {
+        "west": "market"
+      },
+      "item_ids": ["bread"]
+    },
+    {
+      "id": "shop",
+      "name": "Alchemist Shop",
+      "description": "Vials glimmer on shelves. It smells of sulfur.",
+      "exits": {
+        "east": "market"
+      },
+      "item_ids": ["torch", "key_gold_1"]
+    },
+    {
+      "id": "forest",
+      "name": "Mysterious Forest",
+      "description": "Trees loom high above, blocking much of the sun.",
+      "dark": true,
+      "exits": {
+        "south": "market"
+      },
+      "item_ids": ["chest_forest"]
+    }
+  ],
+  "items": [
+    {
+      "id": "gold_coin",
+      "name": "Gold Coin",
+      "description": "A shiny, minted copper coin.",
+      "weight": 0.01
+    },
+    {
+      "id": "sign",
+      "name": "Village Sign",
+      "description": "A wooden signpost. The arrows point North to the Marketplace; the Old Tavern is east of the market.",
+      "weight": 0.2,
+      "readable": true
+    },
+    {
+      "id": "torch",
+      "name": "Torch",
+      "description": "A flickering wooden torch.",
+      "weight": 0.5,
+      "light_source": true
+    },
+    {
+      "id": "bread",
+      "name": "Loaf of Bread",
+      "description": "A stale but edible loaf.",
+      "weight": 0.3
+    },
+    {
+      "id": "key_gold_1",
+      "name": "Gold Key",
+      "description": "A small gold key, warm to the touch.",
+      "weight": 0.1
+    },
+    {
+      "id": "chest_forest",
+      "name": "Chest",
+      "description": "A sturdy oak chest, bound in rusted iron.",
+      "weight": 5.0,
+      "locked": true,
+      "required_key": "key_gold_1",
+      "contains": ["brass_lantern"]
+    },
+    {
+      "id": "brass_lantern",
+      "name": "Brass Lantern",
+      "description": "A brass lantern, its wick still dry.",
+      "weight": 0.4,
+      "light_source": true
+    }
+  ]
+}
