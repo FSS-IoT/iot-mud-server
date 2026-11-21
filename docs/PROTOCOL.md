@@ -138,9 +138,8 @@ returns it only in the registration response. A lost key is replaced with
 `admin rekey`, which revokes the old key.
 
 Failure is `auth.error` (direct, echoes `id`) with a code (`invalid_key`,
-`name_taken`, `invalid_name`, `auth_required`). `invalid_key` covers an unknown
-or revoked key, deliberately. Auth attempts are rate-limited; names are not
-locked.
+`name_taken`, `invalid_name`). `invalid_key` covers an unknown or revoked key,
+deliberately. Auth attempts are rate-limited; names are not locked.
 
 The v2.0 guest path remains available only when `auth_required` is `false`. A
 `join` on a server that requires auth gets `not_authenticated`, and the socket
@@ -283,8 +282,7 @@ with v2.1, where the command set grows.
 `not_portable`, `container_closed`, `no_exit`, `locked`, `already_open`,
 `already_closed`, `malformed_message`, `unknown_message`, `not_joined`,
 `already_joined`, `name_taken`, `not_authenticated`, `invalid_key`,
-`invalid_name`, `auth_required`, `rate_limited`, `internal`,
-`unsupported_version`.
+`invalid_name`, `rate_limited`, `internal`, `unsupported_version`.
 
 An `error` is non-fatal unless the code says otherwise; clients print
 `message` and continue.
