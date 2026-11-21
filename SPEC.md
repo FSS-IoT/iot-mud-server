@@ -2,6 +2,8 @@
 
 Signed: Micah, 2026-11-21
 
+Auth revision: Micah, 2026-11-21 — character keys replace passwords (key-only).
+
 Reviewed: _(pending Doc's agent; PR approval is the record)_
 
 No v2.1 code is written before the signature line exists. Every PR from a
@@ -17,8 +19,9 @@ wins.
 ## Scope
 
 The club's common MUD server becomes a persistent, multi-user world. A member
-registers a character with a name and password, explores 30–40 rooms with NPCs,
-and plays for 20 minutes with other members without a server restart. The
+registers a character with a name and receives a one-time character key,
+explores 30–40 rooms with NPCs, and plays for 20 minutes with other members
+without a server restart. The
 server owns the world and the rules; members write their own clients against
 the v2 protocol. The wire contract is the product, and it stays additive within
 v2.
@@ -28,7 +31,7 @@ v2.
 | Milestone | What it makes real | Detailed enough for tickets? |
 |---|---|---|
 | v2.1.0 Foundation | SQLite persistence, YAML world, config, seed/epoch, protocol metadata | yes |
-| v2.1.1 Identity | Register/login, persistent characters, sleep/wake, recovery | yes |
+| v2.1.1 Identity | Key registration/login, persistent characters, sleep/wake, admin rekey | yes |
 | v2.1.2 Depth | `who`/`emote`/`tell`, `close`/`get from`, exit locks, carry limit | yes |
 | v2.1.3 World | 30–40 rooms, 5+ NPCs, dialogue and wandering, effects seam | yes |
 | v2.1.4 Acceptance | Rate limits, idle timeout, load, docs, ops, club playtest | yes |
@@ -59,15 +62,20 @@ Each criterion maps to exactly one subticket.
 
 ### v2.1.1 Identity
 
-- [ ] A new client registers a name and password, receives `auth.ok` and
-      `room.state`; the password is scrypt-hashed and never logged.
-- [ ] A wrong password and a duplicate name return typed errors, and repeated
-      failures lock the name for a configurable window.
+- [ ] A new client registers a name and receives `auth.ok` followed by
+      `room.state`; the response carries a one-time, high-entropy character
+      key, and the server stores only a key id and a one-way hash, never the
+      key.
+- [ ] Login with a valid key returns `auth.ok` without repeating the key; the
+      key is shown only in the registration response and is never logged.
+- [ ] An invalid key and a duplicate name return typed errors; auth attempts
+      are rate-limited, and names are not locked.
 - [ ] A character's room and inventory survive a server restart; login resumes
       the same room.
 - [ ] Disconnecting puts the character to sleep in the world; `who` shows it
       asleep; login wakes it in place with its inventory.
-- [ ] `admin set-password` resets a password offline without the old one.
+- [ ] `admin rekey` issues a new key offline, revokes the old one, and keeps the
+      character's room and inventory.
 - [ ] A v2 client that sends `join` without authenticating gets
       `not_authenticated` and the socket stays open.
 
@@ -127,8 +135,8 @@ v2.1 does **not** deliver:
 - LLM narration or agent NPCs (v2.2+).
 - The MQTT/IoT bridge, hardware support, or procedural generation (v2.2+).
 - A web UI, public-internet exposure, TLS termination, or horizontal scaling.
-- In-game administration, offline mail, guilds, or accounts beyond
-  name/password.
+- In-game administration, offline mail, guilds, or accounts beyond a character
+  key (no profiles, email, or self-service recovery).
 - A second server. Clients are individual repos; the server is this one.
 
 ## Constraints
@@ -139,6 +147,8 @@ v2.1 does **not** deliver:
   write failure returns `internal` and leaves state unchanged.
 - Deterministic core: seeded RNG and an injected clock; no wall-clock reads or
   unseeded randomness in game logic.
+- Auth keys use OS security randomness (`secrets`), explicitly outside the
+  deterministic-game rule.
 - The protocol is the product: v2 changes are additive; clients ignore unknown
   events and fields. A breaking change needs a v3 and a new grill.
 - Docs are host-agnostic. No server addresses, credentials, or `.env` contents
@@ -153,7 +163,9 @@ v2.1 does **not** deliver:
 | Date | Decision | Why |
 |---|---|---|
 | 2026-11-21 | Full M1 exit, not a foundation-only slice | The club playtest is the proof; splitting it would delay the only real acceptance. |
-| 2026-11-21 | Name + password; open registration on the tailnet; offline `set-password` | Prevents impersonation and lost work without an account bureaucracy. |
+| 2026-11-21 | Name + server-issued high-entropy character key; open registration on the tailnet; offline `rekey` | A bearer key fits CLI clients and auto-login; no password reuse or reset; admin rekey preserves work. |
+| 2026-11-21 | One key per character initially; the key table allows more | A lost device can be revoked later without locking out the others; the playtest needs one. |
+| 2026-11-21 | Rate-limit auth attempts; do not lock names | The key is high entropy; locking a name only enables denial of service. |
 | 2026-11-21 | v2 additive with an auth phase | Existing v2 clients should not be rewritten for one new phase. |
 | 2026-11-21 | World + characters + event log in SQLite, write-through | Exploration accumulates, and a restart is safe. |
 | 2026-11-21 | YAML only, 30–40 rooms; agents author areas in parallel | Non-coders can contribute; the validator catches the errors parallel authors make. |
@@ -176,9 +188,13 @@ Each has a resolution and an owner; none blocks the spec signature.
 - **`tell` to an asleep player** — proposed: a typed error, no offline queue.
   Confirm at sign-off.
 - **Idle timeout** — proposed default 15 minutes, configurable.
-- **Password minimum** — proposed 8 characters.
+- **Self-service key rotation** — admin `rekey` for v2.1.1; an authenticated
+  `rekey` command can follow after the playtest.
 
 ## Changes
 
 - 2026-11-21: first v2.1 spec, written from the grill. v2.0 is complete; the
   28 M1 tickets are design input and will be replaced.
+- 2026-11-21: auth revised to key-only. A server-issued character key replaces
+  passwords; `admin rekey` replaces `set-password`; `auth.ok` is the auth
+  success event; the password minimum and the name lock are removed.

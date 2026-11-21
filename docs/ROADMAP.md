@@ -28,7 +28,7 @@ The contract is [`SPEC.md`](../SPEC.md): full M1 exit in five sub-milestones
 (v2.1.0 foundation, v2.1.1 identity, v2.1.2 depth, v2.1.3 world, v2.1.4
 acceptance), ending in the 3+ member club playtest.
 
-- Name + password auth, persistent characters, SQLite write-through, YAML
+- Name + character-key auth, persistent characters, SQLite write-through, YAML
   worlds.
 - Social commands: `who`, `emote`, `tell`.
 - `close`, `get <item> from <container>`, exit locks, and an explicit container
