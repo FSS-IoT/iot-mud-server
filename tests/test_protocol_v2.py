@@ -453,6 +453,46 @@ async def test_dark_room_state_hides_contents(server):
 
 
 @pytest.mark.asyncio
+async def test_container_sequence_over_websocket(server):
+    """The v2.0 lock/open/take/put path works end-to-end over the socket."""
+    instance, _ = server
+    async with V2Client(f"ws://localhost:{instance.port}") as ada:
+        await ada.join("Ada")
+        await ada.input("go north", 2)
+        await ada.next("room.state")
+        await ada.input("go west", 3)
+        await ada.next("room.state")
+        await ada.input("take torch", 4)
+        await ada.next("object.taken")
+        await ada.input("take gold key", 5)
+        await ada.next("object.taken")
+        await ada.input("go east", 6)
+        await ada.next("room.state")
+        await ada.input("go north", 7)
+        await ada.next("room.state")
+
+        await ada.input("open chest", 8)
+        locked = await ada.next("error")
+        assert locked["data"]["code"] == "locked"
+
+        await ada.input("use gold key on chest", 9)
+        unlocked = await ada.next("object.unlocked")
+        assert unlocked["data"]["self"] is True
+
+        await ada.input("open chest", 10)
+        opened = await ada.next("object.opened")
+        assert "brass lantern" in opened["data"]["text"].lower()
+
+        await ada.input("take brass lantern", 11)
+        await ada.next("object.taken")
+
+        await ada.input("put brass lantern in chest", 12)
+        put = await ada.next("object.put")
+        assert put["data"]["container"]["id"] == "chest_forest"
+        assert put["data"]["self"] is True
+
+
+@pytest.mark.asyncio
 async def test_exits_uses_the_players_current_room(server):
     instance, _engine = server
     async with V2Client(f"ws://localhost:{instance.port}") as ada:
