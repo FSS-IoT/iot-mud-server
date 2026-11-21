@@ -15,6 +15,10 @@ class Entity:
         # specific key, or telling two otherwise-identical objects apart in one
         # collection. None means "no handle", so plain demo items stay plain.
         self.item_id = item_id
+        # A stable per-instance handle assigned on first sighting (or by the
+        # loader). Unlike `item_id`, it does not change when the object moves
+        # between a room and an inventory, so a client can follow one coin.
+        self.instance_id: str | None = None
         # `locked` marks a container a player cannot open until the right key is
         # used on it. `required_key` names the `item_id` of the one key that
         # opens it — so copies of the same-named key are still distinct at the

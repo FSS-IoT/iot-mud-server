@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -68,7 +69,7 @@ def envelope(
     message = {
         "v": PROTOCOL_VERSION,
         "type": type_,
-        "event_id": event_id or f"{type_}-{seq}",
+        "event_id": event_id or f"{type_}-{uuid.uuid4().hex}",
         "seq": seq,
         "ts": utc_now(),
         "data": data,

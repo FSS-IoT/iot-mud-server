@@ -64,11 +64,12 @@ Rules:
 
 ```json
 {"v":2,"type":"hello","event_id":"h1","seq":1,"ts":"...","data":{
-  "server":"iot-mud",
+  "server":"iot-mud-server",
   "protocol":[2],
   "world":{"name":"Starting Village","epoch":"2026-11-21T18:00:00Z"},
   "auth_required":false,
-  "motd":"Welcome to the IoT MUD!"
+  "motd":"Welcome to the IoT MUD!",
+  "text":"Welcome to the IoT MUD!"
 }}
 ```
 
@@ -120,13 +121,14 @@ code (`bad_credentials`, `name_taken`, `unknown_player`, `invalid_name`,
 
 | Type | Data | Notes |
 |---|---|---|
-| `join` | `name` | v2.0 guest session. Only before joining. |
-| `input` | `text` | The whole command line. Only after joining. |
-| `quit` | — | Graceful close. |
+| `join` | `name` | v2.0 guest session. Only before joining. `id` is optional; if present it is echoed on `session.ok`. |
+| `input` | `text` | The whole command line. Only after joining. **`id` is required**; it is echoed on the direct reply, and an input without one is rejected with `error{code:"bad_args"}`. |
+| `quit` | — | Graceful close; the socket closes with `1000`. |
 | `auth` | `mode`, `name`, `password` | v2.1 only. |
 
 Nothing else exists in v2. Clients do not send structured actions; parsing is
-the server's job, so every client sees the same world behaviour.
+the server's job, so every client sees the same world behaviour. An `input`
+whose text is `quit` or `exit` is also treated as a graceful close.
 
 ## Server events
 
@@ -138,9 +140,9 @@ vs "Ada takes the coin.").
 
 | Type | Data |
 |---|---|
-| `hello` | `server`, `protocol`, `world{name,epoch}`, `auth_required`, `motd` |
+| `hello` | `server`, `protocol`, `world{name,epoch}`, `auth_required`, `motd`, `text` |
 | `session.ok` | `player{name}`, `world{name,epoch}`, `mode`, `text` |
-| `error` | `code`, `message`, `command?`, `candidates?[]` |
+| `error` | `code`, `message`, `text`, `command?`, `candidates?[]` |
 | `notice` | `text`, `level` (`info`\|`warning`), `object?` |
 | `shutdown` | `reason`, `in_seconds` (v2.1) |
 
@@ -174,6 +176,11 @@ vs "Ada takes the coin.").
 - `objects[].id` is the instance handle; `kind` is the prototype from the world
   file. When the world has one of each, they are equal. Duplicate instances get
   distinct `id`s (`gold_coin-1`, `gold_coin-2`) so `take coin 2` is possible.
+  An instance id is stable for the life of the object, including when it moves
+  between a room and an inventory.
+- `objects` and `players` are sorted by name; `exits` by direction.
+- `portable` is always `true` for v2.0 content; the field is reserved for
+  future non-portable objects.
 - `players` lists other people in the room, excluding the recipient. The client
   adds its own name from `session.ok`.
 - `npcs` is empty in v2.0; the field is reserved.
@@ -201,7 +208,6 @@ vs "Ada takes the coin.").
 | `object.taken` | `object{id,kind,name}`, `by`, `self` | Room |
 | `object.dropped` | `object{id,kind,name}`, `by`, `self` | Room |
 | `object.opened` | `object{id,kind,name}`, `by`, `self` | Room |
-| `object.closed` | `object{id,kind,name}`, `by`, `self` | Room |
 | `object.put` | `object{...}`, `container{id,name}`, `by`, `self` | Room |
 | `object.got` | `object{...}`, `container{id,name}`, `by`, `self` | Room (v2.1) |
 | `object.read` | `object{id,name}`, `content` | Actor only |
@@ -227,8 +233,10 @@ with v2.1, where the command set grows.
 - `notice` and `error` are private and echo the request `id`.
 - A command that changes nothing shared (look, examine, read, inventory, help,
   exits) produces a private event only.
-- A malformed message produces `error` and keeps the socket open. It never
-  closes the connection.
+- A malformed message produces `error` and keeps the socket open. A missing
+  `v`, a non-object `data`, and missing fields are malformed. The one exception
+  is a **present but unsupported `v`**: it returns
+  `error{code:"unsupported_version"}` and closes `4003`.
 
 ## Error codes
 
@@ -250,7 +258,6 @@ protocol version, `4004` idle timeout, `4005` rate-limit abuse. v2.0 uses
 
 | Command | Result |
 |---|---|
-| `join <name>` | `session.ok` + `room.state` |
 | `look` | `room.state` (private) |
 | `look at <x>` / `examine <x>` | `notice` (private; optional `object`) |
 | `look in <container>` | `notice` (private; container contents) |
@@ -259,7 +266,7 @@ protocol version, `4004` idle timeout, `4005` rate-limit abuse. v2.0 uses
 | `take <x>` / `get <x>` | `object.taken` (actor `self:true` + room `self:false`) + `player.inventory` |
 | `drop <x>` | `object.dropped` + `player.inventory` |
 | `put <x> in <y>` | `object.put` + `player.inventory` |
-| `open <x>` | `object.opened` (container contents in text) |
+| `open <x>` | `object.opened` (container contents in text; an empty unlocked container also emits it) |
 | `use <key> on <container>` | `object.unlocked` (or `error{locked}` / `error{already_open}`) |
 | `read <x>` | `object.read` (private) |
 | `inventory` / `i` | `player.inventory` (private) |

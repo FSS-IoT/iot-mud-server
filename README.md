@@ -30,8 +30,10 @@ port 8765.
 uv run pytest
 ```
 
-The suite includes the two-client v2 conformance session
-(`tests/test_protocol_v2.py`) and the engine tests.
+Stop the server first. The legacy v1 tests bind fixed ports (8765/8766/8769),
+so a running server makes them fail with `address already in use`. The suite
+includes the two-client v2 conformance session (`tests/test_protocol_v2.py`)
+and the engine tests.
 
 ## What is here
 
@@ -40,6 +42,7 @@ The suite includes the two-client v2 conformance session
 | `src/mud/engine/` | Authoritative state, commands, event bus |
 | `src/mud/net/v2_server.py` | v2 WebSocket server (the common server) |
 | `src/mud/net/server.py` | v1 server, kept for history and its tests |
+| `tests/` | Server/engine tests; many are historical red/green artifacts. |
 | `src/mud/protocol/` | v2 envelope, outbound types, engine adapter |
 | `src/mud/world/` | World loader |
 | `data/worlds/starting_village.json` | The demo world |
@@ -48,6 +51,10 @@ The suite includes the two-client v2 conformance session
 | `BOOTSTRAP.md` | Start your own client |
 | `CONTRIBUTING.md` | Fork, test, review, merge |
 | `NOTICE.md` | Credit and license status |
+
+The v1 server stays in the tree for history and its tests. The interactive v1
+demo (`run_demo.sh` / `scripts/client.py`) is not part of this repo; it lives in
+Doc's client repo. The common server is v2.
 
 ## Writing a client
 

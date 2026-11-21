@@ -28,7 +28,7 @@ async def test_prose_description_on_room_change():
 
 @pytest.mark.xfail(
     strict=True,
-    reason="M2 scope: prose narration is not part of M1 (SPEC.md 5). "
+    reason="M2 scope: prose narration is not part of M1 (see docs/ROADMAP.md). "
     "Engine has no LLM layer yet; revisit with TASK-020/024.",
 )
 @pytest.mark.asyncio

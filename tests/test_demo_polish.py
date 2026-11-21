@@ -102,6 +102,7 @@ async def test_bare_take_gets_hint_not_fallback():
     engine = _setup()
     response = await engine.process_command("take", "Ada")
     assert "[FALLBACK]" not in response
+    assert "take what" in response.lower()
     # It must NOT silently succeed (there is nothing to take) nor move state.
     assert coin_exists_in_room(engine)
 
@@ -112,6 +113,7 @@ async def test_bare_drop_gets_hint_not_fallback():
     engine = _setup()
     response = await engine.process_command("drop", "Ada")
     assert "[FALLBACK]" not in response
+    assert "drop what" in response.lower()
 
 
 def coin_exists_in_room(engine: Engine) -> bool:

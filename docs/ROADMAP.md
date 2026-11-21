@@ -24,10 +24,10 @@ tests; the v2 server is the one the club runs.
 - `close`, `get <item> from <container>`, exit locks, and an explicit container
   `open` flag.
 - NPCs, rate limits, idle timeout, and shutdown events.
-- The 28 M1 tickets and the M2–M5 epics from the original agentic-mud design
-  are inputs for this milestone, not the current v2.0 milestone. Re-cut them
-  before working; several assume SQLite/YAML/auth that v2.0 deliberately
-  deferred.
+- The 28 M1 tickets and the M2–M5 epics from the original
+  [agentic-mud design](design/agentic-mud-v2.1.md) are inputs for this
+  milestone, not the current v2.0 milestone. Re-cut them before working;
+  several assume SQLite/YAML/auth that v2.0 deliberately deferred.
 
 ## v2.2 — IoT and LLM
 

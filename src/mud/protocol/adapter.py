@@ -53,18 +53,22 @@ def _object_data(entity: Entity, collection: list[Entity]) -> dict[str, Any]:
     tell two coins apart.
     """
     base = getattr(entity, "item_id", None) or _slug(entity.name)
-    siblings = [
-        candidate for candidate in collection
-        if (getattr(candidate, "item_id", None) or _slug(candidate.name)) == base
-    ]
-    if len(siblings) > 1:
-        try:
-            index = siblings.index(entity) + 1
-        except ValueError:
-            index = 1
-        ident = f"{base}-{index}"
-    else:
-        ident = base
+    ident = getattr(entity, "instance_id", None)
+    if not ident:
+        siblings = [
+            candidate for candidate in collection
+            if (getattr(candidate, "item_id", None)
+                or _slug(candidate.name)) == base
+        ]
+        if len(siblings) > 1:
+            try:
+                index = siblings.index(entity) + 1
+            except ValueError:
+                index = 1
+            ident = f"{base}-{index}"
+        else:
+            ident = base
+        entity.instance_id = ident
     return {"id": ident, "kind": base, "name": entity.name}
 
 
@@ -111,12 +115,14 @@ def build_room_state(engine: Engine, player: Player) -> dict[str, Any]:
         if getattr(entity, "contents", None) or getattr(entity, "locked", False):
             data["container"] = True
         objects.append(data)
+    objects.sort(key=lambda obj: obj["name"].lower())
 
     players = [
         {"name": other.name}
         for other in engine.players_in_room(room)
         if other.name != player.name
     ]
+    players.sort(key=lambda person: person["name"].lower())
     exits = [
         {"direction": direction, "to": _room_id(target), "locked": False}
         for direction, target in sorted(room.exits.items())
@@ -147,6 +153,7 @@ def build_room_state(engine: Engine, player: Player) -> dict[str, Any]:
 
 def _inventory_data(player: Player, text: str | None = None) -> dict[str, Any]:
     items = [_object_data(item, player.contents) for item in player.contents]
+    items.sort(key=lambda item: item["name"].lower())
     if text is None:
         if items:
             text = "You are carrying: " + ", ".join(
@@ -379,7 +386,9 @@ async def execute(engine: Engine, player_name: str,
         container = _find(engine, before_room_contents, arg)
         if container is not None and getattr(container, "locked", False):
             return _error("locked", reply)
-        if container is not None and reply.lower().startswith("you open"):
+        if container is not None and (
+                reply.lower().startswith("you open")
+                or reply.lower().rstrip().endswith("is empty.")):
             obj = _object_data(container, before_room_contents)
             return CommandResult([
                 _actor("object.opened", {
@@ -412,11 +421,12 @@ async def execute(engine: Engine, player_name: str,
                     "text": f"{player.name} unlocks the {container.name}.",
                 }),
             ])
-        if not was_locked:
-            return _error("already_open", reply)
+        # The reply decides: "already open", "does not fit", or missing key.
         return _failure(reply)
 
     if verb == "read":
+        if reply.lower().startswith("it is too dark"):
+            return _notice(reply)
         held = _find(engine, player.contents, arg)
         target = held or _find(engine, before_room_contents, arg)
         if (target is not None and getattr(target, "readable", False)
@@ -449,10 +459,18 @@ async def execute(engine: Engine, player_name: str,
             }),
         ])
 
-    if verb in ("examine", "show_exits", "help", "hello"):
+    if verb == "examine":
+        if not arg:
+            return _error("bad_args", "Examine what? Try `examine <thing>`.")
+        return _notice(reply)
+
+    if verb in ("show_exits", "help", "hello"):
         return _notice(reply)
 
     if verb == "look_in":
+        if not arg:
+            return _error("bad_args",
+                          "Look in what? Try `look in <container>`.")
         if " is locked" in reply.lower():
             return _error("locked", reply)
         return _notice(reply)

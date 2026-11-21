@@ -59,7 +59,6 @@ class V2Server:
         session.seq += 1
         message = envelope(
             type_, data, seq=session.seq,
-            event_id=f"{type_}-{session.seq}",
             msg_id=msg_id if direct else None,
         )
         await ws.send(json.dumps(message))
@@ -68,7 +67,7 @@ class V2Server:
                           msg_id: Any = None) -> None:
         await self._send(
             ws, session, "error",
-            {"code": code, "message": message},
+            {"code": code, "message": message, "text": message},
             direct=msg_id is not None, msg_id=msg_id,
         )
 
@@ -100,7 +99,14 @@ class V2Server:
                                    msg_id)
             return
 
-        data = msg.get("data") or {}
+        data = msg.get("data")
+        if data is None:
+            data = {}
+        if not isinstance(data, dict):
+            await self._send_error(ws, session, "malformed_message",
+                                   "The data field must be an object.",
+                                   msg_id)
+            return
         name = data.get("name")
         if not isinstance(name, str) or not name.strip():
             await self._send_error(ws, session, "bad_args",
@@ -139,23 +145,36 @@ class V2Server:
                 "text": f"{name} has arrived.",
             }, exclude_name=name)
 
-    async def _handle_input(self, ws, session: Session, msg: dict) -> None:
+    async def _handle_input(self, ws, session: Session, msg: dict) -> int | None:
         msg_id = msg.get("id")
         if not session.joined or session.player_name is None:
             await self._send_error(ws, session, "not_joined",
                                    "Join before sending commands.", msg_id)
-            return
+            return None
         if msg_id is None:
             await self._send_error(ws, session, "bad_args",
                                    "Input needs a request id.")
-            return
+            return None
 
-        data = msg.get("data") or {}
+        data = msg.get("data")
+        if data is None:
+            data = {}
+        if not isinstance(data, dict):
+            await self._send_error(ws, session, "malformed_message",
+                                   "The data field must be an object.",
+                                   msg_id)
+            return None
         text = data.get("text")
         if not isinstance(text, str):
             await self._send_error(ws, session, "bad_args",
                                    "Input needs a text string.", msg_id)
-            return
+            return None
+
+        # `quit`/`exit` are commands in the v1 vocabulary and in the protocol's
+        # command map. Honor them at the session layer; the cleanup path then
+        # broadcasts room.leave and closes 1000.
+        if text.strip().lower() in ("quit", "exit"):
+            return 1000
 
         result = await execute(self.engine, session.player_name, text)
         player = self.engine.get_player(session.player_name)
@@ -175,6 +194,7 @@ class V2Server:
                     room_name, outbound.type, outbound.data,
                     exclude_name=session.player_name,
                 )
+        return None
 
     async def _route(self, ws, session: Session, msg: Any) -> int | None:
         """Route one decoded message. Returns a close code to stop, else None."""
@@ -183,6 +203,10 @@ class V2Server:
                                    "A message must be a JSON object.")
             return None
 
+        if "v" not in msg or msg.get("v") is None:
+            await self._send_error(ws, session, "malformed_message",
+                                   "Missing protocol version.")
+            return None
         if msg.get("v") != PROTOCOL_VERSION:
             await self._send_error(
                 ws, session, "unsupported_version",
@@ -196,8 +220,7 @@ class V2Server:
             await self._handle_join(ws, session, msg)
             return None
         if kind == "input":
-            await self._handle_input(ws, session, msg)
-            return None
+            return await self._handle_input(ws, session, msg)
         if kind == "quit":
             return 1000
 
@@ -228,11 +251,12 @@ class V2Server:
         self._sessions[websocket] = session
         try:
             await self._send(websocket, session, "hello", {
-                "server": "iot-mud-v2",
+                "server": "iot-mud-server",
                 "protocol": [PROTOCOL_VERSION],
                 "world": {"name": self.world_name, "epoch": self.epoch},
                 "auth_required": False,
                 "motd": "Welcome to the IoT MUD!",
+                "text": "Welcome to the IoT MUD!",
             })
 
             async for raw in websocket:
@@ -268,7 +292,7 @@ class V2Server:
 
     async def run(self) -> None:
         self._server = await websockets.serve(
-            self.handler, self.host, self.port)
+            self.handler, self.host, self.port, max_size=65536)
         self.port = self._server.sockets[0].getsockname()[1]
         await self._stop_event.wait()
         self._server.close()

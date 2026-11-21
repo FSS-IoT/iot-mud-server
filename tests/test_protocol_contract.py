@@ -1,12 +1,9 @@
-"""Contract test for the documented wire protocol (docs/PROTOCOL.md).
+"""Historical v1 protocol contract for the v1 server.
 
-A scripted client drives the server end-to-end without any human in the loop.
-This is what lets club members write independent clients against the contract,
-and it is what issue #21's definition of done requires: the scripted client
-completes handshake + input round-trip and the replies pair correctly.
-
-Red-green: this test encodes the protocol as documented, so it must pass before
-#21 closes.
+The current client contract is `docs/PROTOCOL.md` (v2); the v2 conformance
+suite is `tests/test_protocol_v2.py`. This test keeps the old v1 server honest:
+it asserts the v1 handshake, `command_reply`, and the original pairing rule.
+It is not the shared contract members build against.
 """
 
 import asyncio

@@ -1,6 +1,8 @@
 import pytest
+
 from src.mud.engine.core import Engine
 from src.mud.world.loader import load_demo_village
+
 
 @pytest.mark.asyncio
 async def test_demo_village_populates_world_green():
@@ -25,3 +27,22 @@ async def test_demo_village_populates_world_green():
         total_items += len(engine.player.contents)
     
     assert total_items >= 3, f"Expected at least 3 items in the world, but found {total_items}"
+
+
+@pytest.mark.asyncio
+async def test_every_room_is_reachable_from_start():
+    """No orphan rooms: every exit graph node is reachable from the start."""
+    engine = Engine()
+    await load_demo_village(engine)
+
+    start = engine._player_location
+    seen = {start}
+    queue = [start]
+    while queue:
+        room = queue.pop()
+        for target in room.exits.values():
+            if target not in seen:
+                seen.add(target)
+                queue.append(target)
+
+    assert seen == set(engine.rooms.values())

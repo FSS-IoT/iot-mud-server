@@ -4,8 +4,10 @@ This is the script every member client should complete before it is considered
 working. It is language-agnostic: your client can be a terminal app, a browser
 page, a phone app, or anything else that speaks WebSocket JSON.
 
-The server's `tests/test_protocol_v2.py` runs the same sequence against the
-reference server, so this page is the shared definition of "it works."
+The server's `tests/test_protocol_v2.py` covers the core of this sequence
+(presence, movement, objects, chat, errors, and the close code); this page is
+the full client acceptance. Containers and locks are covered by the adapter
+tests and the optional section at the end.
 
 ## Before you start
 
@@ -21,9 +23,11 @@ Use two players, **Ada** and **Ben**.
 1. **Connect.** Both clients receive `hello` with `v: 2`, `data.protocol`
    containing `2`, and `data.world.epoch`.
 2. **Join.** Ada sends `join` with `{"name":"Ada"}`; Ben sends `join` with
-   `{"name":"Ben"}`. Each receives `session.ok` and then `room.state`.
-   Ada's room state lists Ben under `room.players`; Ben's lists Ada.
-3. **Look.** Ada sends `input` `look`. She receives `room.state` again.
+   `{"name":"Ben"}`. Each receives `session.ok` and then `room.state`. Ben's
+   join state lists Ada under `room.players`; Ada's lists no one yet because
+   Ben joins second. When Ben joins, Ada receives `room.enter`.
+3. **Look.** Ada sends `input` `look`. Her new `room.state` now lists Ben under
+   `room.players`.
 4. **Move.** Ada sends `go north`. Ada receives `room.state` for the
    Marketplace. Ben, still at the gate, receives `room.leave` with
    `actor.name: "Ada"` and `reason: "move"`.
@@ -48,9 +52,24 @@ Use two players, **Ada** and **Ben**.
     `error` with `code: "malformed_message"`, and a following `look` still
     works on the same socket. Unknown commands return
     `error` with `code: "unknown_command"` and do not close the socket.
-12. **Quit.** Ada sends `quit` or closes the socket. Ben receives
-    `room.leave` with `reason: "disconnect"`. Ada's socket closes with code
-    `1000`.
+12. **Quit.** Ada sends the `quit` message (an `input quit` also works). Ben
+    receives `room.leave` with `reason: "disconnect"`; Ada's socket closes with
+    code `1000`. A bare socket close also produces `room.leave`; the close code
+    is then the client's.
+
+## Containers and locks (v2.0)
+
+These are part of v2.0 and covered by the adapter tests; a client should render
+the events even if it does not have a special UI for them:
+
+1. From the gate: `go north` (Marketplace), `go west` (Alchemist Shop).
+2. `take torch`, `take gold key`; `go east`, `go north` (the dark forest).
+   Carrying the torch lights the forest.
+3. `open chest` → `error` with `code: "locked"`.
+4. `use gold key on chest` → `object.unlocked`.
+5. `open chest` → `object.opened`; the Brass Lantern spills into the room.
+6. `take brass lantern` → `object.taken`.
+7. `put brass lantern in chest` → `object.put` (the chest is unlocked).
 
 ## What "done" means
 

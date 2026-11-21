@@ -13,6 +13,9 @@ reviews.
 3. **Write the failing check first.** A test that fails for the right reason is
    the start of the ticket. Then make it pass.
 4. **Run the suite.** `uv sync --all-extras` once, then `uv run pytest`.
+   Stop the server first: the legacy v1 tests bind fixed ports
+   (8765/8766/8769), and a running server makes them fail with
+   `address already in use`.
 5. **Open a PR.** Say what changed, link the issue, and include the test result.
 6. **Fresh review.** Someone who did not write the code reviews it. Reviewers
    reject and send back; they do not fix the branch.
@@ -36,7 +39,7 @@ deliberate: it is the same workflow an open-source project uses.
 - `data.text` is presentation only. Structured fields are the contract.
 - A client must be able to ignore unknown event types and fields.
 - Errors are non-fatal unless the close code says otherwise. Malformed input
-  must not disconnect a client (#25).
+  must not disconnect a client (`FSS-IoT/iot-mud#25`).
 - The command parser resolves display names, not object ids. `object.id` is the
   stable handle a client uses for rendering and disambiguation.
 

@@ -119,8 +119,10 @@ async def test_hello_and_join(server):
     async with V2Client(f"ws://localhost:{instance.port}") as ada:
         assert ada.hello["v"] == 2
         assert ada.hello["type"] == "hello"
+        assert ada.hello["data"]["server"] == "iot-mud-server"
         assert ada.hello["data"]["protocol"] == [2]
         assert ada.hello["data"]["auth_required"] is False
+        assert ada.hello["data"]["text"] == "Welcome to the IoT MUD!"
         assert ada.hello["data"]["world"]["epoch"]
 
         ok, state = await ada.join("Ada")
@@ -204,6 +206,43 @@ async def test_take_drop_and_inventory(server):
 
 
 @pytest.mark.asyncio
+async def test_room_state_lists_other_players(server):
+    """After both join, a look shows the other player in room.players."""
+    instance, _ = server
+    ada, ben = await _two_clients(instance)
+    try:
+        await ada.input("look", 2)
+        state = await ada.next("room.state")
+        assert state["data"]["room"]["players"] == [{"name": "Ben"}]
+    finally:
+        await ada.close()
+        await ben.close()
+
+
+@pytest.mark.asyncio
+async def test_player_is_not_takeable(server):
+    """Ben cannot pick up Ada or move her out of the room."""
+    instance, _ = server
+    async with V2Client(f"ws://localhost:{instance.port}") as ada, \
+            V2Client(f"ws://localhost:{instance.port}") as ben:
+        await ada.join("Ada")
+        await ben.join("Ben")
+        await ada.next("room.enter")
+
+        await ben.input("take Ada", 2)
+        error = await ben.next("error")
+        assert error["data"]["code"] == "not_found"
+
+        await ben.input("look", 3)
+        state = await ben.next("room.state")
+        assert {"name": "Ada"} in state["data"]["room"]["players"]
+
+        await ben.input("inventory", 4)
+        inventory = await ben.next("player.inventory")
+        assert inventory["data"]["items"] == []
+
+
+@pytest.mark.asyncio
 async def test_say_reaches_roommates(server):
     instance, _engine = server
     async with V2Client(f"ws://localhost:{instance.port}") as ada, \
@@ -248,6 +287,85 @@ async def test_unknown_command_keeps_the_socket(server):
         error = await ada.next("error")
         assert error["id"] == 2
         assert error["data"]["code"] == "unknown_command"
+
+        await ada.input("look", 3)
+        state = await ada.next("room.state")
+        assert state["id"] == 3
+
+
+@pytest.mark.parametrize("command", ["quit", "exit"])
+@pytest.mark.asyncio
+async def test_input_quit_closes_1000(server, command):
+    """An `input quit`/`exit` closes cleanly and tells the room."""
+    instance, _ = server
+    async with V2Client(f"ws://localhost:{instance.port}") as ada, \
+            V2Client(f"ws://localhost:{instance.port}") as ben:
+        await ada.join("Ada")
+        await ben.join("Ben")
+        await ada.next("room.enter")
+
+        await ada.input(command, 2)
+        left = await ben.next("room.leave")
+        assert left["data"]["actor"]["name"] == "Ada"
+        assert left["data"]["reason"] == "disconnect"
+
+        await asyncio.wait_for(ada.ws.wait_closed(), 2.0)
+        assert ada.ws.close_code == 1000
+
+
+@pytest.mark.asyncio
+async def test_missing_version_is_malformed_and_keeps_socket(server):
+    instance, _ = server
+    async with V2Client(f"ws://localhost:{instance.port}") as ada:
+        await ada.join("Ada")
+
+        await ada.send({"type": "input", "id": 2,
+                        "data": {"text": "look"}})
+        error = await ada.next("error")
+        assert error["data"]["code"] == "malformed_message"
+
+        await ada.input("look", 3)
+        state = await ada.next("room.state")
+        assert state["id"] == 3
+
+
+@pytest.mark.asyncio
+async def test_unsupported_version_closes_4003(server):
+    instance, _ = server
+    async with V2Client(f"ws://localhost:{instance.port}") as ada:
+        await ada.send({"v": 1, "type": "join", "id": "join",
+                        "data": {"name": "Ada"}})
+        error = await ada.next("error")
+        assert error["data"]["code"] == "unsupported_version"
+
+        await asyncio.wait_for(ada.ws.wait_closed(), 2.0)
+        assert ada.ws.close_code == 4003
+
+
+@pytest.mark.asyncio
+async def test_join_with_non_object_data_is_rejected(server):
+    instance, _ = server
+    async with V2Client(f"ws://localhost:{instance.port}") as ada:
+        await ada.send({"v": 2, "type": "join", "id": "join",
+                        "data": "Ada"})
+        error = await ada.next("error")
+        assert error["data"]["code"] == "malformed_message"
+
+        ok, state = await ada.join("Ada")
+        assert ok["data"]["player"]["name"] == "Ada"
+        assert state["data"]["room"]["id"] == "gate"
+
+
+@pytest.mark.asyncio
+async def test_input_with_non_object_data_is_rejected(server):
+    instance, _ = server
+    async with V2Client(f"ws://localhost:{instance.port}") as ada:
+        await ada.join("Ada")
+
+        await ada.send({"v": 2, "type": "input", "id": 2,
+                        "data": "look"})
+        error = await ada.next("error")
+        assert error["data"]["code"] == "malformed_message"
 
         await ada.input("look", 3)
         state = await ada.next("room.state")

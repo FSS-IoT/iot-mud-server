@@ -164,8 +164,16 @@ class Engine:
             tokens = tokens[:-1]
         name_tokens = tokens
         key = re.sub(r"^(the|a|an)\s+", "", " ".join(name_tokens).strip().lower())
-        matches = sorted((c for c in collection if c.name.lower() == key or key in c.name.lower()),
-                         key=lambda c: c.name.lower())
+        # A missing name (e.g. `take 1`) must not match every item, and a
+        # player is never an item even though players live in room.contents.
+        if not key:
+            return None, None
+        item_candidates = [c for c in collection if not isinstance(c, Player)]
+        matches = sorted(
+            (c for c in item_candidates
+             if c.name.lower() == key or key in c.name.lower()),
+            key=lambda c: c.name.lower(),
+        )
         if not matches:
             return None, None
         # A trailing index is authoritative even for a single match, so an
@@ -354,9 +362,15 @@ class Engine:
         # Split "put <item> in <container>" on the delimiter, not on the
         # substring: `partition("in")` splits inside item names like "coin"
         # and "lantern". The last " in " is the one that separates the two.
-        item_arg, _, container_arg = arg.rpartition(" in ")
+        # "into" is accepted as the same delimiter.
+        normalized = arg.replace(" into ", " in ")
+        if " in " not in normalized:
+            return "Put what where? Try `put <item> in <container>`."
+        item_arg, _, container_arg = normalized.rpartition(" in ")
         item_arg = item_arg.strip()
         container_arg = container_arg.strip()
+        if not item_arg or not container_arg:
+            return "Put what where? Try `put <item> in <container>`."
 
         target_player = self._resolve_player(player_name)
         if target_player is not None:
@@ -643,7 +657,9 @@ class Engine:
                     occupants = [p for p in self._players.values()
                                  if p.location is room and p.name != player_name]
                     if occupants:
-                        listed = ", ".join(p.name for p in sorted(occupants))
+                        listed = ", ".join(
+                            p.name for p in sorted(occupants,
+                                                   key=lambda p: p.name.lower()))
                         response += f"\n\nOthers in the room: {listed}."
                     matched = True
             else:
@@ -728,12 +744,11 @@ class Engine:
                 matched = True
 
         elif resolved_verb == "put":
-            if not resolved_arg or "in" not in resolved_arg:
+            if not resolved_arg:
                 response = "Put what where? Try `put <item> in <container>`."
-                matched = True
             else:
                 response = await self._handle_put(resolved_arg, player_name)
-                matched = True
+            matched = True
 
         # USE — open a lock with a key: `use <key> on <lock>`. Names locate the
         # objects; identity decides whether the lock opens.

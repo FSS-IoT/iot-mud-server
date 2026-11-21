@@ -28,7 +28,7 @@ async def test_unique_item_still_resolves_bare_name():
     gold = Entity("Gold Key", "A heavy gold key.")
     room.add_content(gold)
 
-    response = await engine.process_command("take key")
+    await engine.process_command("take key")
 
     assert gold in player.contents
 
@@ -91,9 +91,23 @@ async def test_disambiguate_bad_index():
 
 
 @pytest.mark.asyncio
+async def test_bare_index_does_not_match_every_item():
+    """`take 1` has no name; it must not grab the first room item."""
+    engine, player, room = await _setup()
+    coin = Entity("Gold Coin", "A gold coin.")
+    room.add_content(coin)
+
+    response = await engine.process_command("take 1")
+
+    assert "no 1" in response.lower()
+    assert coin in room.contents
+    assert not player.contents
+
+
+@pytest.mark.asyncio
 async def test_examine_ambiguous():
     """`examine key` on several keys surfaces the ambiguity too."""
-    engine, player, room = await _setup()
+    engine, _player, room = await _setup()
     room.add_content(Entity("Gold Key", "A heavy gold key."))
     room.add_content(Entity("Silver Key", "A slender silver key."))
 

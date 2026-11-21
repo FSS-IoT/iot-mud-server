@@ -36,6 +36,7 @@ async def load_demo_village(engine: Engine) -> None:
             locked=bool(i_data.get("locked", False)),
             required_key=i_data.get("required_key"),
         )
+        item.instance_id = i_data["id"]
         item_map[i_data["id"]] = item
 
     # 1b. Resolve container contents (loot declared inside each item). Done in

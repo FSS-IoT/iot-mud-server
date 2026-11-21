@@ -13,11 +13,12 @@
     {
       "id": "market",
       "name": "Marketplace",
-      "description": "Lively vendors cry out their wares. Exits lead South, West, and North.",
+      "description": "Lively vendors cry out their wares. Exits lead South, West, North, and East.",
       "exits": {
         "south": "gate",
         "west": "shop",
-        "north": "forest"
+        "north": "forest",
+        "east": "tavern"
       },
       "item_ids": ["gold_coin"]
     },
@@ -60,7 +61,7 @@
     {
       "id": "sign",
       "name": "Village Sign",
-      "description": "A wooden signpost. The arrows point North to the Marketplace and West to the Old Tavern.",
+      "description": "A wooden signpost. The arrows point North to the Marketplace; the Old Tavern is east of the market.",
       "weight": 0.2,
       "readable": true
     },

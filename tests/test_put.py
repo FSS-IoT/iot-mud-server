@@ -56,6 +56,49 @@ async def test_put_item_whose_name_contains_in():
 
 
 @pytest.mark.asyncio
+async def test_put_without_in_returns_hint():
+    """A bare `put <item>` asks for the container instead of guessing."""
+    engine, player, _room = await _setup()
+    coin = Entity("Gold Coin", "A gold coin.")
+    player.add_content(coin)
+
+    response = await engine.process_command("put gold coin")
+
+    assert "put what where" in response.lower()
+    assert coin in player.contents
+
+
+@pytest.mark.asyncio
+async def test_put_into_alias():
+    """`put <item> into <container>` is the same command."""
+    engine, player, room = await _setup()
+    coin = Entity("Gold Coin", "A gold coin.")
+    chest = Entity("Chest", "A sturdy oak chest.")
+    room.add_content(chest)
+    player.add_content(coin)
+
+    response = await engine.process_command("put gold coin into chest")
+
+    assert response == "You put the Gold Coin in the Chest."
+    assert coin in chest.contents
+
+
+@pytest.mark.asyncio
+async def test_put_with_empty_side_returns_hint():
+    """`put in chest` has no item; it asks instead of grabbing one."""
+    engine, player, room = await _setup()
+    chest = Entity("Chest", "A sturdy oak chest.")
+    room.add_content(chest)
+    coin = Entity("Gold Coin", "A gold coin.")
+    player.add_content(coin)
+
+    response = await engine.process_command("put in chest")
+
+    assert "put what where" in response.lower()
+    assert coin in player.contents
+
+
+@pytest.mark.asyncio
 async def test_put_missing_item():
     """`put` refuses when the item is not carried."""
     engine, _player, room = await _setup()
