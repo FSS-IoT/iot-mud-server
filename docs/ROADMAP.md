@@ -46,10 +46,10 @@ tests; the v2 server is the one the club runs.
 
 ## Open decisions
 
-- **License.** The engine, v1 server, world, and v2 adapter derive from Doc's
-  `FSS-IoT/iot-mud`. A license (for example MIT) should be agreed with Doc
-  before the club redistributes or depends on it outside the club. Until then,
-  this repo is public for club work but not licensed for reuse.
+- **License.** MIT (2026-11-21), credited to Doc (`docx73`) and the FSS-IoT
+  club contributors. The engine, v1 server, world, and v2 adapter derive from
+  Doc's `FSS-IoT/iot-mud`; a companion proposal in that repo asks him to adopt
+  MIT there too. Until he does, his repo remains unlicensed.
 - **Hosting.** The club server is a LAN/tailnet instance; the repository is
   public. Server addresses and credentials do not belong in the repo.
 - **The scaffold PR.** `ticket-1-scaffold` (#33) predates the common server and

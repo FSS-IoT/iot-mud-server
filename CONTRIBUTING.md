@@ -80,5 +80,7 @@ not produce.
 
 The engine, v1 server, world data, and v2 adapter derive from
 `FSS-IoT/iot-mud`, originally written by Doc. Keep the credit in `NOTICE.md`.
-The license is not yet chosen; do not redistribute outside the club until Doc
-and the club settle it. See `NOTICE.md`.
+
+The common server is MIT; see `LICENSE`. A companion proposal in Doc's repo
+asks him to adopt MIT there too. Until he does, his repo remains unlicensed;
+this repo's MIT license and Doc's credit stand on their own.
