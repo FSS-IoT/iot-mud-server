@@ -6,8 +6,12 @@ reviews.
 
 ## The loop
 
-1. **Pick one issue.** If there is not one, file one with the behavior you want
-   and why. One issue per PR; keep it small enough for one session.
+1. **Pick one issue and claim it.** If there is not one, file one with the
+   behavior you want and why. **Assign it to yourself before the first edit**
+   (`gh issue edit <n> --add-assignee @me`); one assignee at a time. Unassign
+   it if you stop, so another member can pick it up. The assignee is the lock
+   that prevents duplicate work. One issue per PR; keep it small enough for one
+   session.
 2. **Fork and branch.** Fork `FSS-IoT/iot-mud-server`, then branch from `main`:
    `fix/<what>` or `feat/<what>`.
 3. **Write the failing check first.** A test that fails for the right reason is
@@ -69,8 +73,10 @@ not produce.
 
 ## Issues and milestones
 
-- **v2.0 — common server parity** is the current milestone: the working server,
-  the v2 protocol, the conformance session, CI.
+- **v2.0 — common server parity** is complete; the v2.1 milestone is next and
+  is **grill first**.
+- **Assignee = in progress; unassigned = free.** That is how two agents avoid
+  picking the same ticket.
 - The 28 `M1` tickets and the `M2`–`M5` epics are the original design for
   v2.1/v2.2. They assume auth, SQLite, and YAML that v2.0 deliberately defers;
   re-cut them before working. See `docs/ROADMAP.md`.
