@@ -6,6 +6,7 @@ contract and delegates all game logic to `Engine` through the adapter.
 
 from __future__ import annotations
 
+import argparse
 import asyncio
 import json
 import logging
@@ -302,15 +303,49 @@ class V2Server:
         self._stop_event.set()
 
 
+def _port(value: str) -> int:
+    try:
+        port = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("port must be an integer") from exc
+    if not 1 <= port <= 65535:
+        raise argparse.ArgumentTypeError("port must be between 1 and 65535")
+    return port
+
+
+def _host(value: str) -> str:
+    host = value.strip()
+    if not host:
+        raise argparse.ArgumentTypeError("host must not be empty")
+    return host
+
+
+def build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Protocol-v2 IoT MUD server")
+    parser.add_argument(
+        "--host", default="localhost", type=_host,
+        help="interface to bind (default: localhost)")
+    parser.add_argument(
+        "--port", default=8765, type=_port,
+        help="TCP port to bind (default: 8765)")
+    return parser
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    return build_arg_parser().parse_args(argv)
+
+
 if __name__ == "__main__":
-    from src.mud.engine.core import Engine
     from src.mud.world.loader import load_demo_village
+
+    args = parse_args()
 
     async def main():
         engine = Engine()
         await load_demo_village(engine)
-        server = V2Server(engine, port=8765)
-        print(f"Protocol-v2 server on ws://localhost:{server.port}")
+        server = V2Server(engine, host=args.host, port=args.port)
+        print(f"Protocol-v2 server on ws://{args.host}:{args.port}")
         await server.run()
 
     try:
