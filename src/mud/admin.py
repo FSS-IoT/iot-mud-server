@@ -10,26 +10,52 @@ only its salt and scrypt hash are stored.
 from __future__ import annotations
 
 import argparse
+import os
 import sqlite3
 import sys
+import tempfile
 from pathlib import Path
 
 from src.mud.auth import RekeyError, rekey_character
 from src.mud.config import DEFAULT_WORLD, ConfigError, load_config
 from src.mud.content.models import ContentModelError
 from src.mud.content.validator import check_world
-from src.mud.storage.db import SCHEMA_VERSION, DatabaseError, open_database
+from src.mud.storage.db import (
+    SCHEMA_VERSION,
+    DatabaseError,
+    migrate,
+    open_database,
+)
 from src.mud.world.geometry import WorldDataError
 from src.mud.world.seed import SeedError, SeedResult, seed_world
 
 # Repository root: <root>/src/mud/admin.py
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
+# Every IoT MUD database has these tables. A restore refuses a valid SQLite
+# file that does not: a foreign database is a mistyped path, not a backup.
+MUD_TABLES = frozenset(
+    {
+        "world_meta",
+        "rooms",
+        "players",
+        "character_keys",
+        "objects",
+        "npcs",
+        "exits",
+        "event_log",
+    }
+)
+
 DESTRUCTIVE_WARNING = (
     "warning: a reset is destructive: it replaces the world (rooms, exits, "
     "objects, and NPCs) and clears every character's inventory. Characters "
     "and their character keys are kept and placed at the new start room."
 )
+
+
+class OpsError(RuntimeError):
+    """A backup or restore input is missing, foreign, or inconsistent."""
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -87,6 +113,36 @@ def build_parser() -> argparse.ArgumentParser:
         "--db", type=Path, default=None,
         help="SQLite database path (overrides [storage].path)")
 
+    backup = commands.add_parser(
+        "backup", help="copy the database to a file (server must be offline)")
+    backup.add_argument(
+        "--to", type=Path, required=True,
+        help="destination file for the backup")
+    backup.add_argument(
+        "--config", type=Path, default=None,
+        help="TOML config file (default: ./mud.toml if it exists)")
+    backup.add_argument(
+        "--db", type=Path, default=None,
+        help="SQLite database path (overrides [storage].path)")
+    backup.add_argument(
+        "--yes", action="store_true",
+        help="overwrite an existing destination")
+
+    restore = commands.add_parser(
+        "restore", help="replace the database from a backup (server offline)")
+    restore.add_argument(
+        "--from", dest="source", type=Path, required=True,
+        help="backup file to restore")
+    restore.add_argument(
+        "--config", type=Path, default=None,
+        help="TOML config file (default: ./mud.toml if it exists)")
+    restore.add_argument(
+        "--db", type=Path, default=None,
+        help="SQLite database path (overrides [storage].path)")
+    restore.add_argument(
+        "--yes", action="store_true",
+        help="confirm replacing an existing target database")
+
     return parser
 
 
@@ -128,6 +184,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "rekey":
         return _rekey(args)
+
+    if args.command == "backup":
+        return _backup(args)
+
+    if args.command == "restore":
+        return _restore(args)
 
     return 2
 
@@ -248,6 +310,245 @@ def _rekey(args: argparse.Namespace) -> int:
         "stored in plaintext",
         file=sys.stderr,
     )
+    return 0
+
+
+def _storage_path(args: argparse.Namespace) -> Path | None:
+    """Resolve `--db`, or `[storage].path`; print a config error and return None."""
+    try:
+        config = load_config(args.config)
+    except ConfigError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return None
+    return args.db or config.storage.path
+
+
+def _connect_read_only(path: Path) -> sqlite3.Connection:
+    """Open the database without creating it or writing to it."""
+    conn = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 5000")
+    return conn
+
+
+def _validate_database(path: Path, *, label: str) -> int:
+    """Prove `path` is a current-or-older IoT MUD database; return its version.
+
+    The check is read-only and ordered so the error names the real problem: a
+    missing file, a file that is not SQLite, a foreign SQLite database, a
+    corrupt database, or one written by a newer server.
+    """
+    if not path.is_file():
+        raise OpsError(f"{label} not found: {path}")
+
+    try:
+        conn = _connect_read_only(path)
+    except sqlite3.Error as exc:
+        raise OpsError(f"could not open {path}: {exc}") from exc
+
+    try:
+        try:
+            version = int(conn.execute("PRAGMA user_version").fetchone()[0])
+            tables = {
+                row["name"]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                )
+            }
+            integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
+        except sqlite3.Error as exc:
+            raise OpsError(
+                f"{path} is not a SQLite database: {exc}") from exc
+    finally:
+        conn.close()
+
+    if version > SCHEMA_VERSION:
+        raise OpsError(
+            f"{path} has schema version {version}, newer than this server "
+            f"supports ({SCHEMA_VERSION}); upgrade the server or restore an "
+            "older backup"
+        )
+
+    missing = MUD_TABLES - tables
+    if missing:
+        raise OpsError(
+            f"{path} is not an IoT MUD database "
+            f"(missing tables: {', '.join(sorted(missing))})"
+        )
+
+    if integrity != "ok":
+        raise OpsError(f"{path} failed SQLite integrity_check: {integrity}")
+
+    return version
+
+
+def _sidecars(path: Path) -> tuple[Path, ...]:
+    return tuple(Path(f"{path}{suffix}") for suffix in ("-wal", "-shm", "-journal"))
+
+
+def _remove_database_files(path: Path) -> None:
+    path.unlink(missing_ok=True)
+    for sidecar in _sidecars(path):
+        sidecar.unlink(missing_ok=True)
+
+
+def _remove_stale_sidecars(path: Path) -> None:
+    """Drop journals that belonged to the database being replaced.
+
+    The server must be offline. A stale `-wal` replayed against a restored
+    database would mix two worlds, so it goes with the old file.
+    """
+    for sidecar in _sidecars(path):
+        sidecar.unlink(missing_ok=True)
+
+
+def _copy_to_staging(source: Path, destination: Path) -> Path:
+    """Copy `source` through SQLite's backup API into a sibling temp file."""
+    handle, raw = tempfile.mkstemp(
+        dir=destination.parent,
+        prefix=f".{destination.name}.",
+        suffix=".tmp",
+    )
+    os.close(handle)
+    staged = Path(raw)
+    try:
+        source_conn = _connect_read_only(source)
+        try:
+            staged_conn = sqlite3.connect(staged)
+            try:
+                # The online backup API reads a consistent snapshot, including
+                # committed rows still in the WAL.
+                source_conn.backup(staged_conn)
+                staged_conn.commit()
+            finally:
+                staged_conn.close()
+        finally:
+            source_conn.close()
+    except BaseException:
+        _remove_database_files(staged)
+        raise
+    return staged
+
+
+def _backup(args: argparse.Namespace) -> int:
+    """Copy the live database to `--to`; return the process exit code."""
+    path = _storage_path(args)
+    if path is None:
+        return 2
+    destination: Path = args.to
+
+    if destination.resolve() == path.resolve():
+        print(
+            f"error: {destination} is already the source database; "
+            "choose another --to path",
+            file=sys.stderr,
+        )
+        return 2
+
+    if not path.is_file():
+        print(f"error: database not found: {path}", file=sys.stderr)
+        return 1
+
+    try:
+        version = _validate_database(path, label="database")
+    except (OpsError, sqlite3.Error) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    if destination.exists() and not args.yes:
+        print(
+            f"error: {destination} exists; pass --yes to overwrite it",
+            file=sys.stderr,
+        )
+        return 2
+
+    try:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        staged = _copy_to_staging(path, destination)
+        try:
+            os.replace(staged, destination)
+        except BaseException:
+            _remove_database_files(staged)
+            raise
+        _remove_stale_sidecars(destination)
+    except (sqlite3.Error, OSError) as exc:
+        print(
+            f"error: could not back up {path} to {destination}: {exc}",
+            file=sys.stderr,
+        )
+        return 1
+
+    print(f"backed up {path} to {destination} (schema version {version})")
+    return 0
+
+
+def _restore(args: argparse.Namespace) -> int:
+    """Replace the target database from `--from`; return the process exit code."""
+    target = _storage_path(args)
+    if target is None:
+        return 2
+    source: Path = args.source
+
+    if source.resolve() == target.resolve():
+        print(
+            f"error: {source} is already the target database; "
+            "choose another --db path",
+            file=sys.stderr,
+        )
+        return 2
+
+    try:
+        source_version = _validate_database(source, label="backup")
+    except (OpsError, sqlite3.Error) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+    if target.exists() and not args.yes:
+        print(
+            f"error: {target} exists; restoring replaces it, so the server "
+            "must be offline; pass --yes to confirm",
+            file=sys.stderr,
+        )
+        return 2
+
+    if target.is_dir():
+        print(
+            f"error: {target} is a directory, not a database file",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        staged = _copy_to_staging(source, target)
+        try:
+            # An older backup is brought up to this server's schema before it
+            # replaces the target; a newer one was already refused above.
+            conn = sqlite3.connect(staged)
+            try:
+                migrate(conn, target)
+                conn.commit()
+            finally:
+                conn.close()
+            os.replace(staged, target)
+        except BaseException:
+            _remove_database_files(staged)
+            raise
+        _remove_stale_sidecars(target)
+    except (DatabaseError, sqlite3.Error, OSError) as exc:
+        print(
+            f"error: could not restore {source} to {target}: {exc}",
+            file=sys.stderr,
+        )
+        return 1
+
+    if source_version == SCHEMA_VERSION:
+        detail = f"schema version {SCHEMA_VERSION}"
+    else:
+        detail = (
+            f"migrated schema version {source_version} -> {SCHEMA_VERSION}"
+        )
+    print(f"restored {source} to {target} ({detail})")
     return 0
 
 
