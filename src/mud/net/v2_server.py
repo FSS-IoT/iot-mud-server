@@ -10,8 +10,11 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import sqlite3
+import subprocess
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -20,11 +23,67 @@ import websockets
 from src.mud.config import ConfigError, load_config
 from src.mud.engine.core import Engine
 from src.mud.protocol.adapter import _room_id, build_room_state, execute
-from src.mud.protocol.v2 import PROTOCOL_VERSION, envelope, utc_now
+from src.mud.protocol.v2 import (
+    PROTOCOL_VERSION,
+    UNKNOWN_SERVER_COMMIT,
+    envelope,
+    is_server_commit,
+    utc_now,
+)
 from src.mud.storage.db import DatabaseError, open_database
 from src.mud.storage.store import WriteThroughStore
 
 logger = logging.getLogger(__name__)
+
+SERVER_COMMIT_ENV = "MUD_SERVER_COMMIT"
+
+# Repository root: <root>/src/mud/net/v2_server.py
+REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def read_git_head(root: Path) -> str | None:
+    """Return the 40-character git HEAD for `root`, or None.
+
+    A released copy without `.git` (a Nix store path, an exported tarball)
+    returns None without running git at all.
+    """
+    if not (root / ".git").exists():
+        return None
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    head = result.stdout.strip()
+    return head if is_server_commit(head) else None
+
+
+@lru_cache(maxsize=1)
+def _git_commit() -> str:
+    """The checkout's commit, resolved at most once per process."""
+    return read_git_head(REPO_ROOT) or UNKNOWN_SERVER_COMMIT
+
+
+def resolve_server_commit(explicit: str | None = None) -> str:
+    """Resolve the commit reported in `hello.data.server_commit`.
+
+    Order: an explicit value (tests and embedders), `MUD_SERVER_COMMIT`, then
+    `git rev-parse HEAD` at the repository root. Only a 40-character lowercase
+    hex commit counts; anything else is passed over for the next source.
+    `"unknown"` when nothing resolves.
+    """
+    if is_server_commit(explicit):
+        return explicit
+    from_env = os.environ.get(SERVER_COMMIT_ENV)
+    if is_server_commit(from_env):
+        return from_env
+    return _git_commit()
 
 
 @dataclass
@@ -46,6 +105,7 @@ class V2Server:
         world_name: str = "Starting Village",
         epoch: str | None = None,
         db_path: str | Path | None = None,
+        server_commit: str | None = None,
     ):
         self.engine = engine
         self.host = host
@@ -53,6 +113,7 @@ class V2Server:
         self.world_name = world_name
         self.epoch = epoch or utc_now()
         self.db_path = Path(db_path) if db_path is not None else None
+        self.server_commit = resolve_server_commit(server_commit)
         self.db: sqlite3.Connection | None = None
         self.store: WriteThroughStore | None = None
         self._stop_event = asyncio.Event()
@@ -264,6 +325,7 @@ class V2Server:
                 "server": "iot-mud-server",
                 "protocol": [PROTOCOL_VERSION],
                 "world": {"name": self.world_name, "epoch": self.epoch},
+                "server_commit": self.server_commit,
                 "auth_required": False,
                 "motd": "Welcome to the IoT MUD!",
                 "text": "Welcome to the IoT MUD!",

@@ -67,11 +67,23 @@ Rules:
   "server":"iot-mud-server",
   "protocol":[2],
   "world":{"name":"Starting Village","epoch":"2026-11-21T18:00:00Z"},
+  "server_commit":"0123456789abcdef0123456789abcdef01234567",
   "auth_required":false,
   "motd":"Welcome to the IoT MUD!",
   "text":"Welcome to the IoT MUD!"
 }}
 ```
+
+`hello.data.server_commit` is the 40-character lowercase hex git commit the
+running server was built from, so a client that pins a commit can compare it
+with its own and read the [changelog](#changelog) for what it is missing. The
+field is additive; v2.0 clients ignore it. The server resolves it in this
+order: an explicit value injected at startup (tests and embedders),
+`MUD_SERVER_COMMIT` from the environment, then `git rev-parse HEAD` at the
+repository root. Only a 40-character lowercase hex commit counts; any other
+value is skipped and the next source is tried. A copy without `.git` (a Nix
+store path, an exported tarball) still serves and reports `"unknown"`. The
+lookup is cached for the life of the process, not repeated per connection.
 
 2. **Join.** The client sends `join` with a name. This is the v2.0 guest path;
    `hello.auth_required` is `false`.
@@ -169,7 +181,7 @@ vs "Ada takes the coin.").
 
 | Type | Data |
 |---|---|
-| `hello` | `server`, `protocol`, `world{name,epoch}`, `auth_required`, `auth_modes?`, `motd`, `text` |
+| `hello` | `server`, `protocol`, `world{name,epoch}`, `server_commit`, `auth_required`, `auth_modes?`, `motd`, `text` |
 | `session.ok` | `player{name}`, `world{name,epoch}`, `mode`, `text` |
 | `auth.ok` | `player{name}`, `world{name,epoch}`, `mode` (`register`\|`login`), `key?` (v2.1; register only) |
 | `auth.error` | `code`, `message`, `text` (v2.1) |
@@ -382,6 +394,33 @@ protocol version, `4004` idle timeout, `4005` rate-limit abuse. v2.0 uses
 | `hello` | `notice` (private) |
 | `exit` / `quit` | close `1000`; no direct reply; `room.leave` to the room |
 | malformed / unknown | `error`; socket stays open |
+
+## Changelog
+
+Every change to the wire contract gets an entry here, newest version first.
+`v` stays `2` while the changes are additive; a breaking change becomes
+version 3. A client that pins a server commit reads this section together with
+`hello.data.server_commit` to see what it may be missing. v2.1 is the
+in-progress release; its entry grows as each documented addition lands.
+
+### v2.1 — protocol 2
+
+- `hello.data.server_commit`: the commit the server was built from, or
+  `"unknown"`. Additive; v2.0 clients ignore it.
+- `hello.data.auth_required` may be `true`, with `hello.data.auth_modes`, the
+  `auth` client message, the `auth.ok` and `auth.error` events, and one-time
+  character keys.
+- `player.emoted`, `player.told`, `who.list`, and `shutdown`.
+- `room.state.data.room.geometry`: the optional room map, with its validation
+  rules.
+- Error codes `invalid_key`, `invalid_name`, `not_authenticated`, and
+  `rate_limited`; close codes `4001`, `4002`, `4004`, and `4005`.
+
+### v2.0 — protocol 2
+
+- Baseline: envelope, `hello`/`session.ok`, `join`/`input`/`quit`,
+  `room.state`/`room.enter`/`room.leave`, `player.said`, the v2.0 `object.*`
+  events, `player.inventory`, `notice`, `error`, and the command map.
 
 ## Appendix: changes from version 1
 
