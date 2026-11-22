@@ -88,6 +88,103 @@ Operators tuning a playtest should raise `command_burst` for client macros, not
 `idle_timeout_seconds` only when the client reconnects promptly, because an
 idle close is a real disconnect after the character has already slept.
 
+## Load smoke
+
+SPEC v2.1.4 criterion 2 is proven by `tests/test_load.py`: 20 in-process
+clients, each sending 200 commands (4,000 total) to a real `V2Server` on an
+ephemeral port with a temporary SQLite database and key registration. The gate
+is **zero protocol errors** and **command p95 ≤ 100 ms**. The run also checks
+the v2 envelope on every message (`v`, `seq`, `data`, request-id pairing), so a
+malformed or misordered reply fails even when the latency is good.
+
+The test is marked `load`. The PR `test` job runs the normal suite with the
+marker excluded:
+
+```bash
+uv run pytest -m "not load"
+```
+
+Run just the load smoke locally:
+
+```bash
+uv run pytest tests/test_load.py -m load -q
+```
+
+Run every load-marked test (there is one today):
+
+```bash
+uv run pytest -m load -q
+```
+
+The same harness is a CLI when an operator wants the raw numbers without
+pytest:
+
+```bash
+uv run python -m tools.load_smoke \
+  --clients 20 --commands 200 \
+  --report load-report.json
+```
+
+It prints sent/replied counts, wall time, commands per second, p50/p95/p99/max
+latency, and any protocol errors, and exits non-zero when the gate fails. A
+run takes about three seconds on a laptop. `--db` names a database path; the
+default is a temporary directory. The server always binds port 0, so the load
+smoke is safe while a real server still holds 8765, unlike the legacy v1 tests.
+
+### Why the limits are injected
+
+The harness uses `load_limits()`: 1,000 commands/s, a burst of 1,000, and the
+normal 15-minute idle timeout. This is deliberate. The production default is 10
+commands/s with a burst of 20 (#85), and an unpaced 200-command burst spends
+that burst in two seconds and then gets `error{rate_limited}` for most commands.
+That would trip the zero-protocol-error gate while measuring the command
+limiter, not load. `tests/test_limits.py` owns the limiter; the load smoke
+raises the budget so every command in the run is a real engine/transport round
+trip. The red evidence for #86 was exactly this: with the production default,
+the same test failed with 3,500 `rate_limited` errors.
+
+Do not "fix" a load failure by changing `[limits]` in `mud.toml`; the test
+constructs its own `LimitsConfig` and never reads the service config.
+
+### Latency is client-observed
+
+Each sample is monotonic time from sending one `input` to receiving the direct
+reply that echoes its request id. Broadcasts (`room.enter`, `player.said`,
+`player.inventory`, and so on) are read and validated by a background reader,
+not counted as command latency. Counting them would let a client that never
+drains its socket report a low p95 while the server is blocked on backpressure;
+the harness deliberately keeps reading.
+
+The mixed script cycles through `look`, `who`, `inventory`, `examine`, movement
+between two rooms, `say`, and `read`, so room-state rendering and broadcast
+fan-out are under load too. A p95 failure therefore points at the whole path,
+not one command.
+
+### Nightly workflow
+
+`load-nightly` runs daily at **04:17 UTC** and can be started by hand with
+"Run workflow" (`workflow_dispatch`):
+
+```text
+.github/workflows/load-nightly.yml
+```
+
+It runs `uv run pytest -m load -q`, writes `load-report.json` through
+`MUD_LOAD_REPORT`, and uploads it as the `load-report` artifact even when the
+gate fails. The job has a 15-minute timeout.
+
+What the numbers mean when it fails:
+
+- **Any protocol error** is a release blocker. Read the first lines of the
+  report; they name the client, command, and error code. A `rate_limited` error
+  means the injected limits did not take effect, not that the server is slow.
+- **p95 over 100 ms with zero errors** is usually host contention: check the
+  runner's CPU and whether another job shares it. Re-run by hand before
+  changing code. On the owner's laptop the expected p95 is roughly 20 ms at
+  2,500 commands/s; a CI runner is slower, which is why the gate is 100 ms.
+- **A timeout or short reply count** means the server stopped answering. The
+  command timeout is 10 s and the whole run is capped at 180 s in the test.
+
 ## First start
 
 Install the dependencies in the checkout once. Then seed the world before the

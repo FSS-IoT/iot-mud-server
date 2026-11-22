@@ -15,4 +15,6 @@ jobs:
       - name: Install
         run: uv sync --all-extras
       - name: Test
-        run: uv run pytest
+        # The load smoke runs nightly in load-nightly.yml; keep the PR gate
+        # fast and deterministic (#86).
+        run: uv run pytest -m "not load"

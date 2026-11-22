@@ -1,0 +1,37 @@
+name: load-nightly
+
+# SPEC v2.1.4 criterion 2 (#86): 20 in-process clients x 200 commands, zero
+# protocol errors, command p95 <= 100 ms. The PR `test` job excludes the `load`
+# marker; this workflow is the scheduled gate. Run it by hand from the Actions
+# tab with "Run workflow" (workflow_dispatch) after a risky transport change.
+on:
+  schedule:
+    # 04:17 UTC daily, a quiet hour and off the hour boundary.
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  load:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+      - name: Install
+        run: uv sync --all-extras
+      - name: Load smoke (20 clients x 200 commands)
+        env:
+          MUD_LOAD_REPORT: load-report.json
+        run: uv run pytest -m load -q
+      - name: Upload load report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: load-report
+          path: load-report.json
+          if-no-files-found: warn

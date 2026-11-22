@@ -26,6 +26,9 @@ testpaths = ["tests"]
 # `src/` is a namespace package, so the repo root must be importable for
 # `src.mud.*` regardless of how pytest is launched.
 pythonpath = ["."]
+markers = [
+    "load: end-to-end 20-client load smoke (#86); the PR test job excludes it, the load-nightly workflow runs `uv run pytest -m load`",
+]
 
 [tool.ruff]
 line-length = 88
