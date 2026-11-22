@@ -4,13 +4,20 @@ import asyncio
 import builtins
 import io
 import queue as _queue
+import stat
 import time
 from contextlib import redirect_stdout
 
 import pytest
 import websockets
 
-from examples.reference_client import client_handler, render_message
+from examples.reference_client import (
+    client_handler,
+    read_key,
+    render_hello,
+    render_message,
+    write_key,
+)
 from tools.mock_v2_server import MockServer
 
 
@@ -86,6 +93,61 @@ def test_render_player_said():
 
 def test_unknown_event_is_ignored():
     assert render_message({"v": 2, "type": "mystery", "data": {}}, "Ada") == ""
+
+
+def test_render_hello_shows_the_session_step_one_fields():
+    out = render_hello({
+        "protocol": [2],
+        "world": {"name": "The Commons", "epoch": "epoch-1"},
+        "auth_required": True,
+        "auth_modes": ["key"],
+        "server_commit": "a" * 40,
+        "motd": "Welcome",
+    })
+
+    assert "Protocol: 2" in out
+    assert "World: The Commons (epoch epoch-1)" in out
+    assert "Auth: required (key)" in out
+    assert f"Server commit: {'a' * 40}" in out
+
+
+def test_render_error_includes_the_typed_code():
+    out = render_message({
+        "v": 2, "type": "error", "data": {
+            "code": "malformed_message", "message": "That is not JSON.",
+            "text": "That is not JSON.",
+        },
+    }, "Ada")
+
+    assert "[malformed_message]" in out
+
+
+def test_render_who_and_inventory_are_structured_lines():
+    who = render_message({
+        "v": 2, "type": "who.list", "data": {"players": [
+            {"name": "Ada", "room_id": "market", "asleep": False,
+             "stone": False},
+            {"name": "Ben", "room_id": "gate", "asleep": True,
+             "stone": True},
+        ]},
+    }, "Ada")
+    assert "Who: Ada (market, awake); Ben (gate, asleep, stone)." in who
+
+    inventory = render_message({
+        "v": 2, "type": "player.inventory", "data": {
+            "items": [{"id": "torch", "name": "Torch", "lit": True}],
+            "capacity": 12.0, "used": 0.5,
+        },
+    }, "Ada")
+    assert "You are carrying: Torch (lit). (0.5/12.0)" in inventory
+
+
+def test_key_file_round_trips_with_owner_only_mode(tmp_path):
+    path = tmp_path / "keys" / "ada.key"
+    write_key(path, "mud1-example")
+
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert read_key(path) == "mud1-example"
 
 
 @pytest.mark.asyncio

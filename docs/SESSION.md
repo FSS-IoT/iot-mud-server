@@ -12,15 +12,63 @@ render them.
 
 ## Before you start
 
-1. Run the server locally (`../BOOTSTRAP.md` shows how). Seed a **fresh**
-   database for the acceptance; the session takes the gold coin, unlocks the
-   forest chest and the tavern door, and moves items. A used database can fail
-   in ways that look like client bugs. A v2.1 server requires auth, so have two
-   character names ready and somewhere outside the repository to keep the keys.
+1. Run the server locally (`../BOOTSTRAP.md` shows how). Seed a **new,
+   separate** database for the acceptance; the session takes the gold coin,
+   unlocks the forest chest and the tavern door, and moves items. A used
+   database can fail in ways that look like client bugs. Stop any server
+   already using the port.
+
+   ```bash
+   uv run python -m src.mud.admin seed --db .scratch/session.db
+   ./run_server.sh --port 8766 --db .scratch/session.db
+   ```
+
+   The server port is not part of the protocol. Whatever you choose, pass the
+   matching value to your client: `--uri ws://localhost:8766`. A v2.1 server
+   requires auth, so have two character names ready and somewhere outside the
+   repository to keep the keys (for the reference client,
+   `--save-key ~/.config/iot-mud/ada.key`).
 2. Read `PROTOCOL.md` version 2.1, especially "v2.1 auth" and "Session
    lifecycle", and `CLIENTS.md` for the key and sleep rules.
 3. Have two copies of your client ready, or two terminals, so you can see
    another player.
+
+For a second run, stop the server and use a new file (or delete it:
+`rm -f .scratch/session.db*`; on PowerShell,
+`Remove-Item -Force .scratch\session.db*`). Do not reseed the old file:
+`admin seed --reset` replaces the world but **keeps characters and their
+keys**, so Ada and Ben would still be registered and the session would start
+with them asleep.
+
+## Automated clients
+
+The default command limits are 10 commands per second with a burst of 20
+(`PROTOCOL.md`, "Command rate limit and idle timeout"). A person following this
+page stays under them; a script that sends the whole route as fast as it can
+gets `error{code:"rate_limited"}` and then waits forever for the next event.
+Either pace the script, or start the acceptance server with a scratch config
+that raises the limits:
+
+```toml
+[limits]
+commands_per_second = 1000
+command_burst = 1000
+```
+
+Save it as `~/.config/iot-mud/acceptance.toml` (create the directory first with
+`mkdir -p ~/.config/iot-mud` if needed) and add `--config` to the server
+command:
+
+```bash
+./run_server.sh --port 8766 --db .scratch/session.db \
+  --config ~/.config/iot-mud/acceptance.toml
+```
+
+Keeping the config outside the checkout means `git status` stays clean; only
+the scratch database lives in `.scratch/`, and `*.db` is already ignored.
+
+The limits are a host setting, never a protocol field. Do not raise them on the
+club server just to pass a client test.
 
 ## Effects are not part of the acceptance
 
@@ -52,7 +100,9 @@ Use two characters, **Ada** and **Ben**.
    Ada's lists no one yet because Ben registers second. When Ben registers,
    Ada receives `room.enter`. On a later connection, send
    `{"mode":"login","key":"mud1-..."}` instead: `auth.ok` returns the same
-   character without repeating the key, followed by `room.state`.
+   character without repeating the key, followed by `room.state`. With the
+   reference client, `--save-key PATH` writes the key with mode `0600` on
+   registration, and `--key-file PATH` logs in without printing it again.
 3. **Look.** Ada sends `input` `look`. Her new `room.state` now lists Ben under
    `room.players`.
 4. **Move.** Ada sends `go north`. Ada receives `room.state` for the
@@ -80,11 +130,14 @@ Use two characters, **Ada** and **Ben**.
 11. **Bad message.** Ada sends a frame that is not JSON. She receives
     `error` with `code: "malformed_message"`, and a following `look` still
     works on the same socket. Unknown commands return
-    `error` with `code: "unknown_command"` and do not close the socket.
+    `error` with `code: "unknown_command"` and do not close the socket. In the
+    reference client, type `!malformed` to send the broken frame; the error
+    renders with its code, for example `[malformed_message]`.
 12. **Quit.** Ada sends the `quit` message. Ben receives `room.leave` with
     `reason: "disconnect"`, `asleep: true`, and `stone: true` because Ada is an
     authenticated character; the character stays in the room. Ada's socket
-    closes with code `1000`. (The v2.0 guest path removes the character
+    closes with code `1000`. The reference client prints
+    `Connection closed: 1000`. (The v2.0 guest path removes the character
     instead; see "Sleep and wake" below for the full authenticated flow.) An
     `input quit` also closes `1000`, but (like the `quit` message) it is a
     session-level exception and does not send a direct reply; if your client
@@ -274,14 +327,61 @@ Your client is compatible when it can:
 It does **not** need to look like anyone else's client. The protocol is the
 contract; the presentation is yours.
 
+## You have passed when
+
+Tick these against your own client's output. The reference client's wording is
+shown in parentheses as one example; the structured fields are the contract.
+
+- [ ] **Hello.** `data.protocol` contains `2`, `data.auth_required` is `true`,
+      `data.auth_modes` is `["key"]`, and the world epoch and
+      `data.server_commit` are readable. (`Protocol: 2`, `Auth: required
+      (key)`, `World: ... (epoch ...)`, `Server commit: ...`)
+- [ ] **Register and log in.** Registration shows the key once; a later login
+      with the saved key says `mode: "login"`, returns no `key`, and puts the
+      character in its stored room. (`Registered as: Ada`; then `Logged in as:
+      Ada`, with no `mud1-` line)
+- [ ] **Movement and presence.** `go north` reaches the Marketplace; the other
+      client sees `room.leave{reason:"move"}` and then `room.enter`.
+- [ ] **Objects.** `take gold coin` gives `object.taken{self:true}` with no
+      automatic `player.inventory`; an explicit `inventory` lists it.
+- [ ] **Social.** `say`, `emote`, and `tell` produce `player.said`,
+      `player.emoted`, and `player.told`; `who` lists both characters with
+      room, asleep, and stone. (`Who: Ada (market, awake); Ben (market, awake).`)
+- [ ] **Bad frame.** A malformed frame produces `error{malformed_message}` and
+      the next `look` succeeds on the same socket. (`[malformed_message] ...`)
+- [ ] **Exit locks.** The tavern door is `locked`, the gold key unlocks it with
+      `exit.unlocked`, and the key is not consumed.
+- [ ] **NPC dialogue.** `talk Ysolde` and `ask Ysolde about chest` produce
+      `npc.say` with the NPC id and, for `ask`, `topic: "chest"`.
+- [ ] **Containers.** `open chest`, `get brass lantern from chest`, `put`, and
+      `close chest` produce `object.opened`, `object.got` plus
+      `player.inventory`, `object.put`, and `object.closed`.
+- [ ] **Sleep and wake.** `quit` sleeps the character (`asleep` and `stone`
+      true, `reason: "disconnect"`), drops the gold key, and a later login wakes
+      it in place; a `tell` to a sleeper is `error{not_awake}`.
+- [ ] **Clean close.** `quit` closes with `1000`. (`Connection closed: 1000`)
+
 ## Troubleshooting
 
 - **The client hangs after `join`.** A v2.1 server rejects `join` with
   `error{code:"not_authenticated"}` and keeps the socket open: send `auth`
   first. Check that you are sending `v: 2` and that you handle `auth.ok`,
   `auth.error`, and `room.state`; a v1 client cannot speak to a v2 server.
+- **Connection refused, or the client talks to the wrong world.** The URI must
+  match the server's `--port` (`--uri ws://localhost:8766` for the acceptance
+  server). 8765 is the default; 8766 is the scratch example.
+- **The seed says "the database already holds a world".** That file is used.
+  For a new acceptance, delete it (`rm -f .scratch/session.db*`) or point `--db`
+  at a new name. `--reset --yes` replaces the world but keeps characters and
+  keys, so it does not give you a fresh acceptance database.
+- **A scripted session stops with `rate_limited`.** The default burst is 20
+  commands. Pace the script or start the acceptance server with the higher
+  limits shown in "Automated clients".
 - **`auth.error` with `name_taken`.** The character name is already
   registered. Log in with its saved key, or register a different name.
+- **The key is in shell history.** Use `--key-file` (reference client) or the
+  operating system keyring; `--key` is visible to `ps` and the shell history.
+  If a key leaked, ask the operator for `admin rekey <name>`.
 - **`take` fails with "There is no ..."** Use the object's display name, not
   its `id` (`take gold coin`, not `take gold_coin`).
 - **The room is dark.** The Mysterious Forest is dark unless someone carries a
