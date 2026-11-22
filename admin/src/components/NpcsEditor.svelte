@@ -6,15 +6,19 @@
   interface Props {
     npcs: NPC[];
     allIds: string[];
+    focusId?: string | null;
     onchange: (npcs: NPC[]) => void;
   }
 
-  let { npcs, allIds, onchange }: Props = $props();
-  let selectedIndex = $state(0);
+  let { npcs, allIds, focusId = null, onchange }: Props = $props();
+  let selectedId = $state<string | null>(null);
 
-  const selected = $derived(
-    npcs[Math.min(selectedIndex, Math.max(0, npcs.length - 1))] ?? null,
-  );
+  const activeId = $derived(selectedId ?? focusId);
+  const selectedIndex = $derived.by(() => {
+    const index = npcs.findIndex((npc) => npc.id === activeId);
+    return index >= 0 ? index : 0;
+  });
+  const selected = $derived(npcs[selectedIndex] ?? null);
 
   function patch(changes: Partial<NPC>): void {
     onchange(
@@ -41,15 +45,16 @@
       effects: {},
     };
     onchange([...npcs, npc]);
-    selectedIndex = npcs.length;
+    selectedId = id;
   }
 
   function removeNpc(index: number): void {
     const npc = npcs[index];
     if (!npc) return;
     if (!window.confirm(`Remove NPC ${npc.name || npc.id}?`)) return;
-    onchange(npcs.filter((_, at) => at !== index));
-    selectedIndex = Math.max(0, Math.min(selectedIndex, npcs.length - 2));
+    const remaining = npcs.filter((_, at) => at !== index);
+    onchange(remaining);
+    selectedId = remaining[Math.min(index, remaining.length - 1)]?.id ?? null;
   }
 
   function updateTopicKey(oldKey: string, newKey: string): void {
@@ -133,7 +138,7 @@
                 <button
                   type="button"
                   class="small"
-                  onclick={() => (selectedIndex = index)}>Edit</button
+                  onclick={() => (selectedId = npc.id)}>Edit</button
                 >
                 <button
                   type="button"

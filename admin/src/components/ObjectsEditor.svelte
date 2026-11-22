@@ -6,16 +6,20 @@
   interface Props {
     objects: GameObject[];
     allIds: string[];
+    focusId?: string | null;
     onchange: (objects: GameObject[]) => void;
   }
 
-  let { objects, allIds, onchange }: Props = $props();
-  let selectedIndex = $state(0);
+  let { objects, allIds, focusId = null, onchange }: Props = $props();
+  let selectedId = $state<string | null>(null);
   let jsonError = $state('');
 
-  const selected = $derived(
-    objects[Math.min(selectedIndex, Math.max(0, objects.length - 1))] ?? null,
-  );
+  const activeId = $derived(selectedId ?? focusId);
+  const selectedIndex = $derived.by(() => {
+    const index = objects.findIndex((object) => object.id === activeId);
+    return index >= 0 ? index : 0;
+  });
+  const selected = $derived(objects[selectedIndex] ?? null);
   const kindLabel = $derived(selected?.kind ?? 'item');
 
   function patch(changes: Partial<GameObject>): void {
@@ -46,15 +50,17 @@
       effects: {},
     };
     onchange([...objects, object]);
-    selectedIndex = objects.length;
+    selectedId = id;
   }
 
   function removeObject(index: number): void {
     const object = objects[index];
     if (!object) return;
     if (!window.confirm(`Remove object ${object.name || object.id}?`)) return;
-    onchange(objects.filter((_, at) => at !== index));
-    selectedIndex = Math.max(0, Math.min(selectedIndex, objects.length - 2));
+    const remaining = objects.filter((_, at) => at !== index);
+    onchange(remaining);
+    selectedId =
+      remaining[Math.min(index, remaining.length - 1)]?.id ?? null;
   }
 
   function updateState(text: string): void {
@@ -128,7 +134,7 @@
                 <button
                   type="button"
                   class="small"
-                  onclick={() => (selectedIndex = index)}>Edit</button
+                  onclick={() => (selectedId = object.id)}>Edit</button
                 >
                 <button
                   type="button"

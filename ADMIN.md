@@ -12,13 +12,51 @@ three screens:
   sessions, features, and limits.
 - **Players** — the SQLite roster overlaid with live engine state, plus a
   one-time rekey.
-- **World editor** — area/room tree, room form, SVG geometry editor, exits,
-  objects, NPCs, dialogue, effects, flags, validate, save, and apply.
+- **World editor** — area/room tree, a visual world map, room form, SVG
+  geometry editor, exits, objects, NPCs, dialogue, effects, flags, validate,
+  save, and apply.
 
 The frontend is **Svelte 5 + Vite + TypeScript**, plain Svelte with no SvelteKit
 and no router. The backend is the Python standard library
 (`ThreadingHTTPServer`); there is no new Python dependency and no aiohttp or
-FastAPI.
+FastAPI. The map is hand-rolled SVG; there is no graph library.
+
+## The world map
+
+The World tab opens on a three-pane editor: the area tree, the map, and the room
+inspector. The inspector has tabs for Room, Geometry, Exits, Objects, NPCs, and
+Effects. Geometry remains the per-room tile editor; the map is the room-level
+overview.
+
+- **Rooms** are nodes coloured by area, with the name, id, object/NPC counts, a
+  `START` marker for `world.start_room`, and a red badge/border for validation
+  errors. Drag a node to move it.
+- **Exits** are edges. Reciprocal pairs are drawn once with an arrow and a
+  direction label at both ends. Locked exits are amber; one-way exits are dashed
+  blue and carry a `one-way` badge. Click an edge to select its source room on
+  the Exits tab.
+- **Pan/zoom** — drag empty canvas to pan, use the wheel to zoom at the pointer,
+  and use `+`, `−`, `Fit`, and `Auto-layout` in the toolbar. The map opens
+  centered on `start_room` at a readable zoom; `Fit` frames every room.
+  `Auto-layout` recomputes positions and marks the draft dirty.
+- **Add room** — click `Add room`, then click empty canvas. A small form asks for
+  area, id, and name at that point. The tree's `+ room` button still adds a room
+  with a generated id.
+- **Connect exits** — drag a node's `N`, `E`, `S`, or `W` handle onto another
+  room. In the default two-way mode the editor declares the exit once and the
+  loader creates the reciprocal; check `One-way connect` to set `one_way: true`.
+  Clicking a handle also arms it, so a following room click connects for
+  keyboard/touch use. Self-links and duplicate links are refused; an occupied
+  source direction, or an occupied opposite exit on the target, asks before
+  replacing. `up`, `down`, `in`, and `out` remain in the Exits tab.
+- **Palette** — drag an `Item`, `Container`, `Readable`, or `NPC` chip onto a
+  room, or arm a chip and click a room. The object/NPC gets a unique id and
+  sensible defaults, and the inspector switches to the right tab with the new
+  entity selected.
+
+The map is another view of the same browser draft. Save, Validate, Apply, the
+unsaved-change indicator, player confirmation, backups, and all existing
+property editing are unchanged.
 
 ## Run it
 
@@ -105,6 +143,26 @@ preserved. The old files are always in the backup directory. `git diff` on a
 saved world will be noisy even for a small edit. That is the documented
 tradeoff; use the backup or the previous commit when the comments matter.
 
+## Editor layout: `layout.json`
+
+Map positions are editor metadata, not world content. They live beside the
+world at:
+
+```text
+data/worlds/club_world/layout.json
+```
+
+The file is a plain room-id map: `{"gate": {"x": 60, "y": 60}, ...}`. It is not
+part of the YAML content model and never reaches the v2 wire protocol. If the
+file is absent, the map computes a deterministic layout: rooms reachable from
+`start_room` are layered by exit distance, and disconnected rooms/areas fall
+into a grid below. `Auto-layout` recomputes positions only when clicked.
+
+Save sanitizes the layout (finite `x`/`y`, known room ids only), writes it
+atomically, and includes it in the backup when an old copy exists. A malformed
+`layout.json` is treated as empty, not as a world error. Single-file worlds use
+`<world>.layout.json` next to the file.
+
 ## Known limitations
 
 - Apply does not reseed SQLite. World content is always loaded from YAML, while
@@ -117,6 +175,13 @@ tradeoff; use the backup or the previous commit when the comments matter.
   manual; the editor writes the areas it was given and does not delete omitted
   files.
 - Rekeying does not end an already-authenticated live session.
+- The map's connect handles cover `north`, `east`, `south`, and `west`. Use the
+  Exits tab for `up`, `down`, `in`, and `out`, locks, keys, labels, and editing an
+  existing one-way flag.
+- The map declares an exit once; the loader creates the reciprocal. It never
+  writes both directions into YAML, because the content validator rejects the
+  duplicate. `One-way connect` sets `one_way: true` on the source exit.
+- The layout is free-form; there is no snapping, grouping, or per-area frame.
 - The admin listener is plain HTTP. Put it behind a trusted network or a TLS
   proxy if it ever leaves localhost.
 - The console is a held experimental branch. There is no PR and no merge
@@ -128,7 +193,7 @@ tradeoff; use the backup or the previous commit when the comments matter.
 uv run ruff check src/mud/config.py src/mud/net/v2_server.py \
   src/mud/net/admin_console.py src/mud/world/editing.py src/mud/world/loader.py
 uv run pytest -q tests/test_admin_console.py
-cd admin && npm ci && npm run build
+cd admin && npm ci && npm run check && npm run build
 ```
 
 The normal Vite build is the local frontend gate; the branch CI may only run the

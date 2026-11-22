@@ -270,7 +270,11 @@ async def admin_server(tmp_path: Path, *, token: str = TOKEN):
 
 
 def _payload(world_doc: dict[str, Any]) -> dict[str, Any]:
-    return {"world": world_doc["world"], "areas": world_doc["areas"]}
+    return {
+        "world": world_doc["world"],
+        "layout": world_doc.get("layout", {}),
+        "areas": world_doc["areas"],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -521,6 +525,118 @@ async def test_bad_draft_does_not_replace_the_world(tmp_path):
         assert status == 422
         assert body["errors"]
         assert (world / "world.yaml").read_text(encoding="utf-8") == before
+
+
+@pytest.mark.asyncio
+async def test_world_returns_an_empty_layout_when_none_exists(tmp_path):
+    async with admin_server(tmp_path) as (server, world):
+        status, doc, _ = await _http(
+            server.admin_port, "GET", "/api/world")
+
+        assert status == 200
+        assert doc["layout"] == {}
+        assert not (world / "layout.json").exists()
+
+
+@pytest.mark.asyncio
+async def test_malformed_layout_is_ignored_and_sanitized(tmp_path):
+    async with admin_server(tmp_path) as (server, world):
+        (world / "layout.json").write_text(
+            json.dumps(
+                {
+                    "gate": {"x": "left", "y": 3},
+                    "market": {"x": 5, "y": 6},
+                    "unknown_room": {"x": 1, "y": 2},
+                    "bad_point": 4,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        status, doc, _ = await _http(
+            server.admin_port, "GET", "/api/world")
+        assert status == 200
+        assert doc["layout"] == {"market": {"x": 5.0, "y": 6.0}}
+
+        draft = _payload(doc)
+        draft["layout"] = {
+            "gate": {"x": "left", "y": 3},
+            "market": {"x": 5, "y": 6},
+            "unknown_room": {"x": 1, "y": 2},
+            "south_road": [1, 2],
+        }
+        status, body, _ = await _http(
+            server.admin_port, "POST", "/api/world/validate", body=draft)
+        assert status == 200
+        assert body == {"ok": True, "errors": []}
+
+        status, body, _ = await _http(
+            server.admin_port, "POST", "/api/world/save", body=draft)
+        assert status == 200
+        assert body["layout"] == {"market": {"x": 5.0, "y": 6.0}}
+        assert json.loads(
+            (world / "layout.json").read_text(encoding="utf-8")
+        ) == {"market": {"x": 5.0, "y": 6.0}}
+
+
+@pytest.mark.asyncio
+async def test_invalid_layout_json_is_an_empty_layout(tmp_path):
+    async with admin_server(tmp_path) as (server, world):
+        (world / "layout.json").write_text("{not json", encoding="utf-8")
+
+        status, doc, _ = await _http(
+            server.admin_port, "GET", "/api/world")
+
+        assert status == 200
+        assert doc["layout"] == {}
+
+
+@pytest.mark.asyncio
+async def test_world_save_writes_layout_atomically_and_backs_it_up(tmp_path):
+    async with admin_server(tmp_path) as (server, world):
+        (world / "layout.json").write_text(
+            json.dumps({"gate": {"x": 10, "y": 20}}),
+            encoding="utf-8",
+        )
+        _, doc, _ = await _http(server.admin_port, "GET", "/api/world")
+        assert doc["layout"] == {"gate": {"x": 10.0, "y": 20.0}}
+
+        draft = _payload(doc)
+        draft["layout"] = {
+            "gate": {"x": 30, "y": 40},
+            "market": {"x": -12.5, "y": 7},
+        }
+        status, body, _ = await _http(
+            server.admin_port, "POST", "/api/world/save", body=draft)
+
+        assert status == 200
+        assert body["layout"] == {
+            "gate": {"x": 30.0, "y": 40.0},
+            "market": {"x": -12.5, "y": 7.0},
+        }
+        saved = json.loads(
+            (world / "layout.json").read_text(encoding="utf-8"))
+        assert saved == body["layout"]
+        assert str(world / "layout.json") in body["saved"]
+        # Layout is editor metadata, not YAML content.
+        assert "layout" not in (
+            world / "areas" / "starting_village.yaml"
+        ).read_text(encoding="utf-8")
+
+        backup = Path(body["backup_dir"])
+        assert (backup / "layout.json").is_file()
+        assert json.loads(
+            (backup / "layout.json").read_text(encoding="utf-8")
+        ) == {"gate": {"x": 10.0, "y": 20.0}}
+        manifest = json.loads(
+            (backup / "manifest.json").read_text(encoding="utf-8"))
+        entries = {entry["path"]: entry for entry in manifest["files"]}
+        assert "layout.json" in entries
+        assert entries["layout.json"]["bytes"] > 0
+
+        _, refreshed, _ = await _http(
+            server.admin_port, "GET", "/api/world")
+        assert refreshed["layout"] == body["layout"]
 
 
 # ---------------------------------------------------------------------------

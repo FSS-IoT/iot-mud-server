@@ -11,6 +11,7 @@
     Geometry,
     NPC,
     Room,
+    RoomTab,
   } from '../lib/types';
 
   interface Props {
@@ -20,6 +21,9 @@
     allIds: string[];
     objectIds: string[];
     errors: string[];
+    tab?: RoomTab;
+    focusObjectId?: string | null;
+    focusNpcId?: string | null;
     onchange: (room: Room) => void;
     onremove: () => void;
   }
@@ -31,9 +35,21 @@
     allIds,
     objectIds,
     errors,
+    tab = $bindable<RoomTab>('room'),
+    focusObjectId = null,
+    focusNpcId = null,
     onchange,
     onremove,
   }: Props = $props();
+
+  const tabs: { id: RoomTab; label: string }[] = [
+    { id: 'room', label: 'Room' },
+    { id: 'geometry', label: 'Geometry' },
+    { id: 'exits', label: 'Exits' },
+    { id: 'objects', label: 'Objects' },
+    { id: 'npcs', label: 'NPCs' },
+    { id: 'effects', label: 'Effects' },
+  ];
 
   function patch(changes: Partial<Room>): void {
     onchange({ ...room, ...changes });
@@ -87,88 +103,120 @@
     </div>
   {/if}
 
-  <section class="editor-section">
-    <h3>Room</h3>
-    <div class="form-grid">
-      <label>
-        Id
-        <input
-          value={room.id}
-          class="mono"
-          oninput={(event) => patch({ id: event.currentTarget.value })}
-        />
-      </label>
-      <label>
-        Name
-        <input
-          value={room.name}
-          oninput={(event) => patch({ name: event.currentTarget.value })}
-        />
-      </label>
-      <label>
-        Area
-        <input
-          list="area-names"
-          value={room.area ?? ''}
-          oninput={(event) =>
-            patch({ area: event.currentTarget.value.trim() || null })}
-        />
-        <datalist id="area-names">
-          {#each areaNames as name (name)}
-            <option value={name}></option>
-          {/each}
-        </datalist>
-      </label>
-      <label class="check-inline">
-        <input
-          type="checkbox"
-          checked={room.dark}
-          onchange={(event) => patch({ dark: event.currentTarget.checked })}
-        />
-        Dark unless lit
-      </label>
-      <label class="span-2">
-        Description
-        <textarea
-          rows="3"
-          value={room.description}
-          oninput={(event) => patch({ description: event.currentTarget.value })}
-        ></textarea>
-      </label>
-    </div>
-  </section>
+  <nav class="room-tabs" aria-label="Room editor sections">
+    {#each tabs as item (item.id)}
+      <button
+        type="button"
+        class={tab === item.id ? 'active' : ''}
+        aria-current={tab === item.id ? 'page' : undefined}
+        onclick={() => (tab = item.id)}
+      >
+        {item.label}
+        {#if item.id === 'exits'}
+          <span class="tab-count">{Object.keys(room.exits).length}</span>
+        {:else if item.id === 'objects'}
+          <span class="tab-count">{room.objects.length}</span>
+        {:else if item.id === 'npcs'}
+          <span class="tab-count">{room.npcs.length}</span>
+        {/if}
+      </button>
+    {/each}
+  </nav>
 
-  <GeometryEditor
-    geometry={room.geometry}
-    {room}
-    onchange={updateGeometry}
-  />
-
-  <ExitsEditor
-    {room}
-    {rooms}
-    {objectIds}
-    onchange={updateExits}
-  />
-
-  <ObjectsEditor
-    objects={room.objects}
-    {allIds}
-    onchange={updateObjects}
-  />
-
-  <NpcsEditor npcs={room.npcs} {allIds} onchange={updateNpcs} />
-
-  <section class="editor-section">
-    <div class="section-head">
-      <div>
-        <h3>Room effects</h3>
-        <p class="muted">
-          Triggers such as <code>on_enter</code> publish effects to the bus and
-          the event log.
-        </p>
+  {#if tab === 'room'}
+    <section class="editor-section">
+      <h3>Room</h3>
+      <div class="form-grid">
+        <label>
+          Id
+          <input
+            value={room.id}
+            class="mono"
+            oninput={(event) => patch({ id: event.currentTarget.value })}
+          />
+        </label>
+        <label>
+          Name
+          <input
+            value={room.name}
+            oninput={(event) => patch({ name: event.currentTarget.value })}
+          />
+        </label>
+        <label>
+          Area
+          <input
+            list="area-names"
+            value={room.area ?? ''}
+            oninput={(event) =>
+              patch({ area: event.currentTarget.value.trim() || null })}
+          />
+          <datalist id="area-names">
+            {#each areaNames as name (name)}
+              <option value={name}></option>
+            {/each}
+          </datalist>
+        </label>
+        <label class="check-inline">
+          <input
+            type="checkbox"
+            checked={room.dark}
+            onchange={(event) => patch({ dark: event.currentTarget.checked })}
+          />
+          Dark unless lit
+        </label>
+        <label class="span-2">
+          Description
+          <textarea
+            rows="3"
+            value={room.description}
+            oninput={(event) => patch({ description: event.currentTarget.value })}
+          ></textarea>
+        </label>
       </div>
-    </div>
-    <EffectsEditor effects={room.effects} onchange={updateEffects} />
-  </section>
+    </section>
+  {:else if tab === 'geometry'}
+    <GeometryEditor
+      geometry={room.geometry}
+      {room}
+      onchange={updateGeometry}
+    />
+  {:else if tab === 'exits'}
+    <ExitsEditor
+      {room}
+      {rooms}
+      {objectIds}
+      onchange={updateExits}
+    />
+  {:else if tab === 'objects'}
+    {#key `${room.id}:${focusObjectId ?? ''}`}
+      <ObjectsEditor
+        objects={room.objects}
+        {allIds}
+        focusId={focusObjectId}
+        onchange={updateObjects}
+      />
+    {/key}
+  {:else if tab === 'npcs'}
+    {#key `${room.id}:${focusNpcId ?? ''}`}
+      <NpcsEditor
+        npcs={room.npcs}
+        {allIds}
+        focusId={focusNpcId}
+        onchange={updateNpcs}
+      />
+    {/key}
+  {:else}
+    <section class="editor-section">
+      <div class="section-head">
+        <div>
+          <h3>Room effects</h3>
+          <p class="muted">
+            Triggers such as <code>on_enter</code> publish effects to the bus and
+            the event log.
+          </p>
+        </div>
+      </div>
+      <EffectsEditor effects={room.effects} onchange={updateEffects} />
+    </section>
+  {/if}
 </div>

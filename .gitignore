@@ -77,4 +77,7 @@ admin/node_modules/
 admin/.vite/
 !admin/dist/
 !admin/dist/**
+# The generic Python `lib/` rule above must not hide the frontend helpers.
+!admin/src/lib/
+!admin/src/lib/**
 data/worlds/*/backups/

@@ -57,8 +57,9 @@ tab's `sessionStorage`.
 | `src/components/Login.svelte` | Static unauthenticated token screen |
 | `src/components/StatusPanel.svelte` | Commit, world/paths, counts, features, limits |
 | `src/components/PlayersPanel.svelte` | Roster, live overlay, one-time rekey |
-| `src/components/WorldEditor.svelte` | Document state, validation, save/apply, area tree |
-| `src/components/RoomEditor.svelte` | Room fields and the section editors |
+| `src/components/WorldEditor.svelte` | Document state, validation, save/apply, area tree, map + inspector split |
+| `src/components/WorldMap.svelte` | SVG map, pan/zoom/fit, node drag, connect handles, palette drops |
+| `src/components/RoomEditor.svelte` | Room fields, tabs, and the section editors |
 | `src/components/GeometryEditor.svelte` | SVG cell grid, spawn points, props |
 | `src/components/ExitsEditor.svelte` | Direction, target, lock, key, label, one-way |
 | `src/components/ObjectsEditor.svelte` | Objects, flags, state JSON, containment |
@@ -66,6 +67,7 @@ tab's `sessionStorage`.
 | `src/components/EffectsEditor.svelte` | Trigger groups and JSON-safe effect params |
 | `src/lib/api.ts` | Bearer fetch wrapper and typed API errors |
 | `src/lib/types.ts` | Wire types, normalization, default geometry, YAML payload |
+| `src/lib/layout.ts` | Deterministic auto-layout and layout bounds |
 
 The UI intentionally keeps no defeated "backup" or "reset" actions: backups are
 automatic on save, and destructive database operations stay in the offline CLI.
@@ -90,22 +92,59 @@ JSON out.
 ```json
 {
   "world": { "name": "The Commons", "start_room": "gate", "rng_seed": 20261121 },
+  "layout": { "gate": { "x": 60, "y": 60 } },
   "areas": [
     { "area": "caves", "file": "areas/caves.yaml", "rooms": [] }
   ]
 }
 ```
 
+## Map interactions
+
+- **Select** — click a node or a tree entry. The right-hand inspector keeps its
+  current tab; an edge click jumps to that room's Exits tab.
+- **Move** — drag a node. **Pan** empty canvas. **Zoom** with the wheel, `+`, or
+  `−`. The map opens centered on `start_room`; `Fit` frames every room;
+  `Auto-layout` also rewrites positions and marks the draft dirty.
+- **Add room** — `Add room`, then click empty canvas. The small form takes area,
+  id, and name. The form is also the only place a chosen id is entered; the tree
+  `+ room` still generates one.
+- **Connect** — drag a node's `N`/`E`/`S`/`W` handle onto another node. The
+  checkbox chooses one-way or the usual implicit reciprocal. A click on a handle
+  arms the same connection for keyboard/touch, then click the target.
+- **Palette** — drag `Item`, `Container`, `Readable`, or `NPC` onto a node, or
+  click the chip once and then the room. The new entity is selected on the
+  matching inspector tab.
+
+Positions live in `layout.json` at the world root. Save sanitizes it, writes it
+atomically, and backs up the previous copy; the backup `manifest.json` lists it.
+Malformed or missing layout files become an empty layout; the frontend then
+auto-layouts deterministically. The layout is editor metadata only and never
+enters YAML or the wire protocol.
+
 ## Behavior notes
 
+- **One draft** — the tree, map, palette, and inspector all edit the same
+  `WorldDoc`. Moving a node or dropping a chip marks the document dirty exactly
+  like a form field does.
 - **Unsaved changes** — every edit marks the document dirty; the World tab shows
   a dot and the browser warns on unload. Apply is disabled until Save.
 - **Validation errors** — the top panel lists all errors; errors naming the
-  selected room also appear inline in that room.
+  selected room also appear inline in that room, and every affected map node
+  gets a red border and count badge.
+- **Inspector tabs** — Room, Geometry, Exits, Objects, NPCs, Effects. Geometry
+  is still the per-room tile grid; tabs only change which section is displayed.
 - **Geometry** — clicking a cell cycles `#` → `.` → `+` → `^` → `v`. The default
   grid derives doors and stairs from the room's exits. Save validates the map,
   so a door without an exit (or a missing door) is reported, not silently
   written.
+- **Exits** — declare each way once. The loader creates the reciprocal unless
+  `one_way` is set; declaring both directions is a validation error. The map's
+  connect gesture follows that rule and shows both arrowheads for the implicit
+  reciprocal.
+- **Layout** — `layout.json` is sanitized and written atomically with Save. If it
+  is absent or malformed, the map auto-layouts from `start_room` and the
+  reachable exit graph, then a grid for disconnected rooms.
 - **Canonical YAML** — Save writes canonical YAML and loses authored comments.
   That is documented in `../ADMIN.md`; the server keeps a timestamped backup.
 - **Apply** — reloads from the saved YAML, closes MUD clients with `1001`, and

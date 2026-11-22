@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -34,6 +35,8 @@ from src.mud.content.validator import validate_world
 
 _SAFE_FILE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*\.ya?ml$")
 YAML_SUFFIXES = frozenset({".yaml", ".yml"})
+LAYOUT_FILE = "layout.json"
+_MAX_LAYOUT_COORD = 1_000_000.0
 
 
 class WorldEditError(ValueError):
@@ -110,6 +113,77 @@ def _manifest(path: Path) -> dict[str, Any]:
     return {"files": entries}
 
 
+def _layout_path(path: Path) -> Path:
+    """The editor-only layout sidecar for a world file or directory."""
+    if path.is_dir():
+        return path / LAYOUT_FILE
+    return path.with_name(f"{path.stem}.{LAYOUT_FILE}")
+
+
+def _layout_coordinate(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    if not math.isfinite(number):
+        return None
+    return round(max(-_MAX_LAYOUT_COORD, min(_MAX_LAYOUT_COORD, number)), 2)
+
+
+def sanitize_layout(
+    raw: Any, room_ids: set[str] | None = None
+) -> dict[str, dict[str, float]]:
+    """Keep only finite ``{x, y}`` points for known rooms.
+
+    The layout is editor metadata, never content: a malformed file is an empty
+    layout, not a reason to refuse to open or save the world.
+    """
+    if not isinstance(raw, dict):
+        return {}
+    layout: dict[str, dict[str, float]] = {}
+    for room_id, point in raw.items():
+        if not isinstance(room_id, str) or not room_id:
+            continue
+        if room_ids is not None and room_id not in room_ids:
+            continue
+        if not isinstance(point, dict):
+            continue
+        x = _layout_coordinate(point.get("x"))
+        y = _layout_coordinate(point.get("y"))
+        if x is None or y is None:
+            continue
+        layout[room_id] = {"x": x, "y": y}
+    return layout
+
+
+def _read_layout(
+    path: Path, room_ids: set[str]
+) -> dict[str, dict[str, float]]:
+    if not path.is_file():
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError):
+        return {}
+    return sanitize_layout(raw, room_ids)
+
+
+def _write_layout(path: Path, layout: dict[str, dict[str, float]]) -> None:
+    """Write ``layout.json`` atomically, replacing the old file in one step."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle, raw = tempfile.mkstemp(
+        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    os.close(handle)
+    staged = Path(raw)
+    try:
+        staged.write_text(
+            json.dumps(layout, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        os.replace(staged, path)
+    finally:
+        staged.unlink(missing_ok=True)
+
+
 def _room_json(room: Room) -> dict[str, Any]:
     return room.model_dump(mode="json", exclude_none=True)
 
@@ -127,6 +201,7 @@ def read_world_payload(path: str | Path) -> dict[str, Any]:
     loaded = load_world(world_path)
     errors = validate_world(loaded)
     root = world_path if world_path.is_dir() else world_path.parent
+    room_ids = {room.id for room in loaded.world.rooms}
 
     groups: dict[str, list[Room]] = {}
     for room, file in zip(loaded.world.rooms, loaded.room_files):
@@ -153,6 +228,7 @@ def read_world_payload(path: str | Path) -> dict[str, Any]:
             "rng_seed": loaded.world.rng_seed,
         },
         "areas": areas,
+        "layout": _read_layout(_layout_path(world_path), room_ids),
         "validation": {"ok": not errors, "errors": errors},
         "manifest": {
             **_manifest(world_path),
@@ -328,9 +404,16 @@ def validate_world_payload(
 ) -> list[str]:
     """Return every model or semantic error in a draft; empty means valid."""
     try:
-        _draft(payload, Path(path))
+        draft = _draft(payload, Path(path))
     except WorldEditError as exc:
         return list(exc.errors)
+    # Layout is editor metadata. Sanitize it so a bad point is dropped rather
+    # than reported as a content error; nothing here can fail.
+    if isinstance(payload, dict):
+        sanitize_layout(
+            payload.get("layout"),
+            {room.id for room in draft.loaded.world.rooms},
+        )
     return []
 
 
@@ -546,33 +629,42 @@ def save_world_payload(path: str | Path, payload: Any) -> dict[str, Any]:
         raise WorldEditError([f"{world_path}: world not found"])
 
     draft = _draft(payload, world_path)
+    room_ids = {room.id for room in draft.loaded.world.rooms}
+    layout = sanitize_layout(payload.get("layout"), room_ids)
+    layout_target = _layout_path(world_path)
 
     if world_path.is_dir():
         texts = _directory_texts(draft)
         staging = _write_staging(world_path, texts)
         targets = [world_path / relative for relative in texts]
         try:
-            backup_root, backups, manifest = _backup(world_path, targets)
+            backup_root, backups, manifest = _backup(
+                world_path, [*targets, layout_target])
             for relative in texts:
                 _atomic_write(staging / relative, world_path / relative)
+            _write_layout(layout_target, layout)
         finally:
             shutil.rmtree(staging, ignore_errors=True)
+        written = [*targets, layout_target]
     else:
         text = _file_text(draft)
         staging = _write_staging_file(world_path, text)
         try:
             backup_root, backups, manifest = _backup(
-                world_path, [world_path])
+                world_path, [world_path, layout_target])
             _atomic_write(staging / world_path.name, world_path)
+            _write_layout(layout_target, layout)
         finally:
             shutil.rmtree(staging, ignore_errors=True)
+        written = [world_path, layout_target]
 
     return {
-        "saved": [str(path) for path in targets],
+        "saved": [str(path) for path in written],
         "backup_dir": str(backup_root),
         "backups": backups,
         "manifest": str(manifest),
         "world": dict(draft.meta),
         "areas": len(draft.sections),
         "rooms": len(draft.loaded.world.rooms),
+        "layout": layout,
     }
