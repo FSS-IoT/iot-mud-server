@@ -128,7 +128,14 @@ On a guest server, `input` before `join` is `error{code:"not_joined"}`.
    `quit` or `exit` does the same. A socket close without `quit` also produces
    `room.leave`.
 
-5. **Reconnect.** Authenticating again sends a fresh `room.state`. The world
+5. **Idle.** An authenticated client that sends no message for
+   `[limits].idle_timeout_seconds` (default 15 minutes) is put to sleep through
+   the #72 path: the character stays in its room as asleep/stone and the room
+   receives the sleep `room.leave`. The socket then closes with `4004`. This is
+   not a guest-style removal; `who` still lists the character and login wakes
+   it in place.
+
+6. **Reconnect.** Authenticating again sends a fresh `room.state`. The world
    and its epoch live in SQLite: a client that reconnects to the same seeded
    database keeps the same `world.epoch`, so its cached map is still valid.
    `admin seed --reset` replaces the world and changes `epoch`; clients compare
@@ -218,6 +225,40 @@ The v2.0 guest path remains available only when `auth_required` is `false`. A
 `join` on a server that requires auth gets `not_authenticated`, and the socket
 stays open; so does `input` before auth. After a successful `auth`, `input`
 works without a separate `join`.
+
+### Command rate limit and idle timeout (v2.1)
+
+Commands have their own per-connection token bucket, separate from the
+auth-failure budget above. The bucket starts with `[limits].command_burst`
+tokens (default `20`), each `input` spends one, and
+`[limits].commands_per_second` (default `10`) tokens return per second. A
+command sent with no token left is answered directly with
+`error{code:"rate_limited"}`: it echoes the request `id`, is not executed, and
+does not close the socket. The next command succeeds once the bucket refills. A
+different connection has its own bucket, and no state is keyed by character
+name.
+
+The limits are set in `mud.toml`:
+
+```toml
+[limits]
+commands_per_second = 10
+command_burst = 20
+idle_timeout_seconds = 900
+```
+
+`commands_per_second` and `idle_timeout_seconds` must be positive finite
+numbers, and `command_burst` a positive integer. `quit`, and an `input` whose
+text is `quit` or `exit`, is never rate-limited, so a client can always leave.
+
+`idle_timeout_seconds` is measured from the last client message; server pushes
+do not refresh it. When an authenticated client has sent nothing for that long,
+the server runs the #72 sleep path: the character stays in its room, commits
+`asleep = 1`, the room receives `room.leave` with `reason: "disconnect"`,
+`asleep: true`, `stone: true`, and `dropped[]`, and then the socket closes with
+`4004`. `who` still lists the character, and a later login wakes it in place.
+The v2.0 guest path (`auth_required: false`) has no durable character and is
+not subject to the idle sleep.
 
 ## Client messages
 
@@ -430,7 +471,8 @@ future combat. `who.list` and `room.state` player entries expose the state.
 Login clears `players.asleep`, sends `room.state`, and restores the remaining
 inventory. `dropped_on_sleep` items that were dropped stay where they landed.
 The v2.0 guest path (`auth_required: false`, no durable character) keeps the
-remove-on-disconnect behavior.
+remove-on-disconnect behavior. The idle timeout uses this same path before it
+closes the socket with `4004`.
 
 ### Objects
 
@@ -500,12 +542,17 @@ with v2.1, where the command set grows.
 `unsupported_version`.
 
 An `error` is non-fatal unless the code says otherwise; clients print
-`message` and continue.
+`message` and continue. `rate_limited` covers both budgets: an over-budget
+`auth` gets `auth.error{rate_limited}`, and an over-budget `input` gets
+`error{rate_limited}`. Neither closes the socket.
 
 Close codes: `1000` normal, `1001` going away, `1002` protocol error, `1008`
 policy violation, `4001` auth timeout, `4002` auth failures, `4003` unsupported
-protocol version, `4004` idle timeout, `4005` rate-limit abuse. v2.0 uses
-`1000`, `1001`, `1002`, `1008`, and `4003`; the rest arrive with v2.1.
+protocol version, `4004` idle timeout, `4005` rate-limit abuse. v2.1 defines
+`1000`, `1001`, `1002`, `1008`, `4003`, and `4004`; `4001`, `4002`, and `4005`
+remain reserved. In particular, a normal auth failure, a command rate limit, or
+an idle sleep does not use `4005`: the first two keep the socket open, and the
+idle close is `4004` after the character is already asleep.
 
 ## Command to event map (v2.0 parity)
 
@@ -587,9 +634,19 @@ in-progress release; its entry grows as each documented addition lands.
   `dropped[]` on a sleep) for a stone occupant.
 - `room.state.data.room.geometry`: the optional room map, with its validation
   rules.
+- Commands are limited per connection by a token bucket in `[limits]`
+  (`commands_per_second`, default 10; `command_burst`, default 20), separate
+  from the auth-failure budget. An over-budget `input` gets a direct
+  `error{rate_limited}` that echoes `id` and the socket stays open; the bucket
+  refills on the server clock, and `quit`/`exit` is never limited.
+- An authenticated client that sends nothing for
+  `[limits].idle_timeout_seconds` (default 900, 15 minutes) is put to sleep
+  through the #72 path: it stays in its room as asleep/stone, the room receives
+  the sleep `room.leave`, `who` still lists it, and the socket closes with
+  `4004`. A later login wakes it in place. Guest sessions are not slept.
 - Error codes `invalid_key`, `invalid_name`, `not_authenticated`,
-  `not_awake`, and `rate_limited`; close codes `4001`, `4002`, `4004`, and
-  `4005`.
+  `not_awake`, and `rate_limited`; close code `4004` for an idle timeout.
+  `4001`, `4002`, and `4005` remain reserved.
 
 ### v2.0 — protocol 2
 

@@ -28,7 +28,7 @@ from src.mud.auth import (
     normalize_name,
     register_character,
 )
-from src.mud.config import AuthConfig, ConfigError, load_config
+from src.mud.config import AuthConfig, ConfigError, LimitsConfig, load_config
 from src.mud.engine.core import Engine
 from src.mud.protocol.adapter import _room_id, build_room_state, execute
 from src.mud.protocol.v2 import (
@@ -58,6 +58,10 @@ AUTH_FAILURE_CODES = frozenset(
     {"invalid_key", "invalid_name", "name_taken", "bad_args"})
 RATE_LIMITED_MESSAGE = (
     "Too many authentication attempts; wait and try again.")
+COMMAND_RATE_LIMITED_MESSAGE = "Too many commands; wait and try again."
+# The protocol reserves 4004 for an idle timeout (docs/PROTOCOL.md). The
+# character is asleep before this close is sent.
+IDLE_TIMEOUT_CLOSE = 4004
 
 # Repository root: <root>/src/mud/net/v2_server.py
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -125,6 +129,39 @@ def read_world_epoch(conn: sqlite3.Connection) -> str | None:
 
 
 @dataclass
+class TokenBucket:
+    """A monotonic-clock token bucket for one connection (#85).
+
+    The bucket starts full, which makes `command_burst` the number of commands
+    a client may spend back to back. The auth-failure limiter in `Session` is
+    a separate list and is never touched by commands or vice versa.
+    """
+
+    capacity: float
+    rate: float
+    tokens: float
+    updated_at: float
+
+    @classmethod
+    def full(cls, capacity: float, rate: float, now: float) -> TokenBucket:
+        return cls(
+            capacity=float(capacity), rate=rate,
+            tokens=float(capacity), updated_at=now,
+        )
+
+    def take(self, now: float) -> bool:
+        """Spend one command token, refilling first on the injected clock."""
+        if now > self.updated_at:
+            elapsed = now - self.updated_at
+            self.tokens = min(self.capacity, self.tokens + elapsed * self.rate)
+            self.updated_at = now
+        if self.tokens < 1.0:
+            return False
+        self.tokens -= 1.0
+        return True
+
+
+@dataclass
 class Session:
     ws: Any
     seq: int = 0
@@ -137,6 +174,15 @@ class Session:
     # connection: there is no shared table and no entry keyed by a name, so a
     # throttled connection can never lock a character name.
     auth_failures: list[float] = field(default_factory=list)
+    # Command-rate bucket, also per connection. It is lazily built on the
+    # first `input`, so auth traffic never spends a command token.
+    command_bucket: TokenBucket | None = None
+    # The last client message, on the server's clock. Server pushes do not
+    # refresh this; only a message from the client proves it is not idle.
+    last_activity: float = 0.0
+    # Set once the #72 sleep path has run for this session, so an idle close
+    # followed by `_cleanup` cannot sleep and broadcast the leave twice.
+    slept: bool = False
 
 
 class V2Server:
@@ -153,7 +199,9 @@ class V2Server:
         server_commit: str | None = None,
         auth_required: bool = True,
         auth_limits: AuthConfig | None = None,
+        limits: LimitsConfig | None = None,
         clock: Callable[[], float] | None = None,
+        idle_poll_seconds: float = 1.0,
     ):
         self.engine = engine
         self.host = host
@@ -169,11 +217,17 @@ class V2Server:
         # The limiter is per connection and in memory, and the window is read
         # from this clock, so tests advance time instead of sleeping.
         self.auth_limits = auth_limits if auth_limits is not None else AuthConfig()
+        # Command limits and the idle timeout are independent of the auth
+        # limiter. Both read the same injected clock, so tests advance time
+        # instead of sleeping.
+        self.limits = limits if limits is not None else LimitsConfig()
         self.clock = clock if clock is not None else time.monotonic
+        self.idle_poll_seconds = idle_poll_seconds
         self.db: sqlite3.Connection | None = None
         self.store: WriteThroughStore | None = None
         self._stop_event = asyncio.Event()
         self._server = None
+        self._idle_task: asyncio.Task | None = None
         self._sessions: dict[Any, Session] = {}
         self._ws_by_name: dict[str, Any] = {}
 
@@ -220,6 +274,16 @@ class V2Server:
         recent = [at for at in session.auth_failures if now - at < window]
         session.auth_failures[:] = recent
         return len(recent) >= self.auth_limits.max_attempts
+
+    def _command_bucket(self, session: Session) -> TokenBucket:
+        """This connection's command bucket, created full on first use."""
+        if session.command_bucket is None:
+            session.command_bucket = TokenBucket.full(
+                self.limits.command_burst,
+                self.limits.commands_per_second,
+                self.clock(),
+            )
+        return session.command_bucket
 
     async def _announce_connect(self, player) -> None:
         """Tell the character's room that it arrived."""
@@ -497,6 +561,10 @@ class V2Server:
                 await self._send_error(ws, session, "not_joined",
                                        "Join before sending commands.", msg_id)
             return None
+        if session.slept:
+            # An idle frame that was already in flight must not run a command
+            # for a stone character. The idle path is closing with this code.
+            return IDLE_TIMEOUT_CLOSE
         if msg_id is None:
             await self._send_error(ws, session, "bad_args",
                                    "Input needs a request id.")
@@ -518,9 +586,19 @@ class V2Server:
 
         # `quit`/`exit` are commands in the v1 vocabulary and in the protocol's
         # command map. Honor them at the session layer; the cleanup path then
-        # broadcasts room.leave and closes 1000.
+        # broadcasts room.leave and closes 1000. A quit is never rate-limited:
+        # a client must always be able to leave.
         if text.strip().lower() in ("quit", "exit"):
             return 1000
+
+        # The command bucket is separate from the auth-failure budget. A
+        # limited command is a direct typed error that echoes the request id;
+        # the socket stays open and the bucket refills on the clock.
+        if not self._command_bucket(session).take(self.clock()):
+            await self._send_error(
+                ws, session, "rate_limited",
+                COMMAND_RATE_LIMITED_MESSAGE, msg_id)
+            return None
 
         result = await execute(self.engine, session.player_name, text)
         player = self.engine.get_player(session.player_name)
@@ -601,6 +679,46 @@ class V2Server:
                                msg.get("id"))
         return None
 
+    async def _sleep_authenticated(self, session: Session) -> None:
+        """Run the #72 sleep path once for an authenticated session.
+
+        Works for both a disconnect (`_cleanup`) and an idle timeout
+        (`check_idle_timeouts`). `session.slept` makes it idempotent, so the
+        idle close followed by the handler's cleanup cannot sleep twice or
+        broadcast two `room.leave` events.
+        """
+        name = session.player_name
+        if name is None or session.slept:
+            return
+        session.slept = True
+        player = self.engine.get_player(name)
+        if player is None:
+            return
+        room = player.location
+        # The durable character sleeps in place (#72). Only items marked
+        # `dropped_on_sleep` drop into the room; the rest of the inventory
+        # stays. The store commits each drop before the engine moves it.
+        dropped = []
+        try:
+            dropped = self.engine.sleep_player(name)
+        except StorageWriteError:
+            logger.exception("could not persist sleep for %s", name)
+            player.asleep = True
+        if room is None:
+            return
+        await self._broadcast_room(room.name, "room.leave", {
+            "room": {"id": _room_id(room), "name": room.name},
+            "actor": {"name": name},
+            "reason": "disconnect",
+            "asleep": True,
+            "stone": True,
+            "dropped": [
+                {"id": object_key(item), "name": item.name}
+                for item in dropped
+            ],
+            "text": f"{name} turns to stone.",
+        }, exclude_name=name)
+
     async def _cleanup(self, session: Session) -> None:
         name = session.player_name
         if name is None:
@@ -611,29 +729,7 @@ class V2Server:
                 return
             room = player.location
             if session.authenticated:
-                # The durable character sleeps in place (#72). Only items
-                # marked `dropped_on_sleep` drop into the room; the rest of
-                # the inventory stays. The store commits each drop before the
-                # engine moves it.
-                dropped = []
-                try:
-                    dropped = self.engine.sleep_player(name)
-                except StorageWriteError:
-                    logger.exception("could not persist sleep for %s", name)
-                    player.asleep = True
-                if room is not None:
-                    await self._broadcast_room(room.name, "room.leave", {
-                        "room": {"id": _room_id(room), "name": room.name},
-                        "actor": {"name": name},
-                        "reason": "disconnect",
-                        "asleep": True,
-                        "stone": True,
-                        "dropped": [
-                            {"id": object_key(item), "name": item.name}
-                            for item in dropped
-                        ],
-                        "text": f"{name} turns to stone.",
-                    }, exclude_name=name)
+                await self._sleep_authenticated(session)
             else:
                 # The explicit guest path keeps the v2.0 remove-on-disconnect
                 # behavior: there is no durable character to sleep.
@@ -646,10 +742,52 @@ class V2Server:
                     }, exclude_name=name)
                 self.engine.remove_player(name)
         finally:
-            self._ws_by_name.pop(name, None)
+            # An idle close may already have let a fresh login bind the same
+            # character to a new socket; only this session's mapping is ours
+            # to remove.
+            if self._ws_by_name.get(name) is session.ws:
+                self._ws_by_name.pop(name, None)
+
+    async def check_idle_timeouts(self) -> None:
+        """Sleep authenticated sessions whose last client message is too old.
+
+        The monitor below calls this on `idle_poll_seconds`; tests advance the
+        injected clock and call it directly, so no test waits for a timeout.
+        The character sleeps first (#72), then the socket closes with `4004`.
+        Guest sessions have no durable character and are left alone.
+        """
+        now = self.clock()
+        timeout = self.limits.idle_timeout_seconds
+        for ws, session in list(self._sessions.items()):
+            if not session.authenticated or session.player_name is None:
+                continue
+            if session.slept:
+                continue
+            if now - session.last_activity < timeout:
+                continue
+            await self._sleep_authenticated(session)
+            if self._ws_by_name.get(session.player_name) is ws:
+                self._ws_by_name.pop(session.player_name, None)
+            try:
+                await ws.close(code=IDLE_TIMEOUT_CLOSE)
+            except websockets.exceptions.ConnectionClosed:
+                pass
+
+    async def _idle_loop(self) -> None:
+        while not self._stop_event.is_set():
+            try:
+                await asyncio.wait_for(
+                    self._stop_event.wait(), timeout=self.idle_poll_seconds)
+                return
+            except TimeoutError:
+                pass
+            try:
+                await self.check_idle_timeouts()
+            except Exception:
+                logger.exception("idle sweep failed")
 
     async def handler(self, websocket) -> None:
-        session = Session(ws=websocket)
+        session = Session(ws=websocket, last_activity=self.clock())
         self._sessions[websocket] = session
         try:
             hello = {
@@ -666,6 +804,9 @@ class V2Server:
             await self._send(websocket, session, "hello", hello)
 
             async for raw in websocket:
+                # Only a client message proves the client is not idle; server
+                # pushes deliberately do not refresh this.
+                session.last_activity = self.clock()
                 try:
                     message = json.loads(raw)
                 except json.JSONDecodeError:
@@ -713,10 +854,18 @@ class V2Server:
             self._server = await websockets.serve(
                 self.handler, self.host, self.port, max_size=65536)
             self.port = self._server.sockets[0].getsockname()[1]
+            self._idle_task = asyncio.create_task(self._idle_loop())
             await self._stop_event.wait()
             self._server.close()
             await self._server.wait_closed()
         finally:
+            if self._idle_task is not None:
+                self._idle_task.cancel()
+                try:
+                    await self._idle_task
+                except asyncio.CancelledError:
+                    pass
+                self._idle_task = None
             if self.store is not None:
                 self.engine.attach_store(None)
                 self.store = None
@@ -781,7 +930,8 @@ if __name__ == "__main__":
         engine = Engine()
         await load_demo_village(engine)
         server = V2Server(engine, host=args.host, port=args.port,
-                          db_path=db_path, auth_limits=config.auth)
+                          db_path=db_path, auth_limits=config.auth,
+                          limits=config.limits)
         print(f"Protocol-v2 server on ws://{args.host}:{args.port} "
               f"(db: {db_path})")
         await server.run()

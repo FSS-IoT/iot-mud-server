@@ -48,6 +48,46 @@ Run the admin commands as root against the absolute database path. Restoring as
 root creates a root-owned database file, so give it back to the service user
 before starting (shown under [Restore](#restore)).
 
+## Runtime limits
+
+Command rate limits and the idle timeout live in the same `mud.toml` as auth,
+under `[limits]`:
+
+```toml
+[limits]
+commands_per_second = 10
+command_burst = 20
+idle_timeout_seconds = 900
+```
+
+The defaults are shown: 10 commands per second, a burst of 20, and a 15-minute
+idle timeout. All three must be positive; `commands_per_second` and
+`idle_timeout_seconds` are finite numbers and `command_burst` is an integer.
+The server reads the file at startup, so restart the service after a change.
+
+- **Command budget.** Each connection has one token bucket, starting full with
+  `command_burst` tokens. Every `input` spends a token and the bucket refills
+  at `commands_per_second`. A command with no token left gets a direct
+  `error{code:"rate_limited"}` that echoes the request id; the command is not
+  executed and the socket stays open. The next command succeeds after enough
+  time passes to refill a token. A second connection has its own bucket.
+- **Auth is separate.** `[auth].max_attempts` and `[auth].window_seconds` are
+  the #70 auth-failure budget, not the command bucket. A failed login neither
+  spends a command token nor changes the command refill rate; a burst of
+  commands does not count toward a name or an auth failure.
+- **Idle timeout.** The timer starts at the last message from the client;
+  server pushes do not reset it. When an authenticated client is silent for
+  `idle_timeout_seconds`, the server puts the character to sleep in place,
+  drops only `dropped_on_sleep` items, broadcasts the sleep `room.leave`, and
+  closes the socket with `4004`. The character stays in its room as
+  asleep/stone and appears in `who`; logging in again wakes it where it slept.
+  Guest sessions (`auth_required = false`) are not put to sleep.
+
+Operators tuning a playtest should raise `command_burst` for client macros, not
+`commands_per_second`; the sustained rate is what bounds a flood. Lower
+`idle_timeout_seconds` only when the client reconnects promptly, because an
+idle close is a real disconnect after the character has already slept.
+
 ## First start
 
 Install the dependencies in the checkout once. Then seed the world before the
