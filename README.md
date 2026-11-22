@@ -35,6 +35,25 @@ uv run python -m src.mud.net.v2_server --host 0.0.0.0 --port 9000
 Run one server at a time: the v1 server and the v2 server both default to
 port 8765.
 
+## Storage
+
+The v2 server creates and migrates `data/mud.db` on startup. Override it with
+`--db PATH` or a `mud.toml` in the working directory:
+
+```toml
+[storage]
+path = "data/mud.db"
+```
+
+Create or migrate the database offline with:
+
+```bash
+uv run python -m src.mud.admin init-db --db data/mud.db
+```
+
+`user_version` is the schema version. A database from a newer server refuses to
+start with an actionable message.
+
 ## Test
 
 ```bash

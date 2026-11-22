@@ -10,14 +10,18 @@ import argparse
 import asyncio
 import json
 import logging
+import sqlite3
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import websockets
 
+from src.mud.config import ConfigError, load_config
 from src.mud.engine.core import Engine
 from src.mud.protocol.adapter import _room_id, build_room_state, execute
 from src.mud.protocol.v2 import PROTOCOL_VERSION, envelope, utc_now
+from src.mud.storage.db import DatabaseError, open_database
 
 logger = logging.getLogger(__name__)
 
@@ -40,12 +44,15 @@ class V2Server:
         port: int = 0,
         world_name: str = "Starting Village",
         epoch: str | None = None,
+        db_path: str | Path | None = None,
     ):
         self.engine = engine
         self.host = host
         self.port = port
         self.world_name = world_name
         self.epoch = epoch or utc_now()
+        self.db_path = Path(db_path) if db_path is not None else None
+        self.db: sqlite3.Connection | None = None
         self._stop_event = asyncio.Event()
         self._server = None
         self._sessions: dict[Any, Session] = {}
@@ -292,12 +299,19 @@ class V2Server:
                 pass
 
     async def run(self) -> None:
-        self._server = await websockets.serve(
-            self.handler, self.host, self.port, max_size=65536)
-        self.port = self._server.sockets[0].getsockname()[1]
-        await self._stop_event.wait()
-        self._server.close()
-        await self._server.wait_closed()
+        if self.db_path is not None:
+            self.db = open_database(self.db_path)
+        try:
+            self._server = await websockets.serve(
+                self.handler, self.host, self.port, max_size=65536)
+            self.port = self._server.sockets[0].getsockname()[1]
+            await self._stop_event.wait()
+            self._server.close()
+            await self._server.wait_closed()
+        finally:
+            if self.db is not None:
+                self.db.close()
+                self.db = None
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -329,6 +343,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--port", default=8765, type=_port,
         help="TCP port to bind (default: 8765)")
+    parser.add_argument(
+        "--config", type=Path, default=None,
+        help="TOML config file (default: ./mud.toml if it exists)")
+    parser.add_argument(
+        "--db", type=Path, default=None,
+        help="SQLite database path (overrides [storage].path)")
     return parser
 
 
@@ -340,15 +360,24 @@ if __name__ == "__main__":
     from src.mud.world.loader import load_demo_village
 
     args = parse_args()
+    try:
+        config = load_config(args.config)
+    except ConfigError as exc:
+        raise SystemExit(f"error: {exc}") from exc
+    db_path = args.db or config.storage.path
 
     async def main():
         engine = Engine()
         await load_demo_village(engine)
-        server = V2Server(engine, host=args.host, port=args.port)
-        print(f"Protocol-v2 server on ws://{args.host}:{args.port}")
+        server = V2Server(engine, host=args.host, port=args.port,
+                          db_path=db_path)
+        print(f"Protocol-v2 server on ws://{args.host}:{args.port} "
+              f"(db: {db_path})")
         await server.run()
 
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
         print("\nShutting down.")
+    except DatabaseError as exc:
+        raise SystemExit(f"error: {exc}") from exc
