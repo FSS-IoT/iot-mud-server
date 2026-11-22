@@ -1,6 +1,0 @@
-# Review ownership
-#
-# One approving review is required on `main`, and GitHub never counts the
-# author's own approval. With two owners, every PR therefore needs the other
-# person (or their agent) before it can merge.
-* @micahn @docx73

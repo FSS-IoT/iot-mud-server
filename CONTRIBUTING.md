@@ -24,11 +24,12 @@ reviews.
 5. **Open a PR.** Say what changed, link the issue (`Closes #N`), keep the
    changed paths inside the issue's `Touches:` list (or add `scope:expanded`),
    and include the test result.
-6. **Fresh review.** Someone who did not write the code reviews it. GitHub
-   requires one approving review from an account other than the author. Admins
-   can bypass with `gh pr merge --admin`, but the review is still expected.
-   Reviewers reject and send back; they do not fix the branch.
-7. **Merge** after the review and green tests. Delete the branch.
+6. **Request a review when it matters.** Ask for a review when the change is
+   risky or cross-cutting: the protocol, persistence, auth, the world format,
+   or a shared contract. Otherwise the required `test` and `claim-guard` checks
+   are the gate. A requested reviewer rejects and sends back; they do not fix
+   the branch.
+7. **Merge** on green checks (and after a requested review). Delete the branch.
 
 Work lands through a pull request. Do not push to `main` directly. Forking is
 deliberate: it is the same workflow an open-source project uses.

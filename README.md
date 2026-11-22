@@ -85,8 +85,10 @@ then `input` commands, and receives typed events plus a `data.text` line. See
 ## Contributing
 
 See `CONTRIBUTING.md`. The short version: fork, branch from `main`, write the
-failing test first, run `uv run pytest`, open a PR, and get a fresh review.
-Work lands through a PR; do not push to `main` directly.
+failing test first, run `uv run pytest`, and open a PR. Request a review when
+the change is risky or cross-cutting; otherwise the required `test` and
+`claim-guard` checks are the gate. Work lands through a PR; do not push to
+`main` directly.
 
 ## Credit and license
 
