@@ -321,7 +321,7 @@ stays in the room and appears in the next `room.state`.
     {"id": "chest_forest", "kind": "chest_forest", "name": "Chest", "portable": true, "container": true, "open": false}
   ],
   "players": [{"name": "Ben"}],
-  "npcs": []
+  "npcs": [{"id": "npc_merchant", "name": "Mira the Merchant"}]
 }
 ```
 
@@ -330,7 +330,7 @@ stays in the room and appears in the next `room.state`.
   distinct `id`s (`gold_coin-1`, `gold_coin-2`) so `take coin 2` is possible.
   An instance id is stable for the life of the object, including when it moves
   between a room and an inventory.
-- `objects` and `players` are sorted by name; `exits` by direction.
+- `objects`, `players`, and `npcs` are sorted by name; `exits` by direction.
 - `exits[].locked` is `true` while that exit's door is locked (v2.1, additive).
   `exits[].label` is present only when the world author named the door (for
   example `"tavern door"`), so a client can show what the key opens. A locked
@@ -349,7 +349,12 @@ stays in the room and appears in the next `room.state`.
   `{"name": "Ben"}`. A sleeping occupant adds `asleep: true` and `stone: true`:
   the character is still in the room, invincible, and not a valid combat
   target. No combat consumes the flag yet.
-- `npcs` is empty in v2.0; the field is reserved.
+- `npcs` lists the scripted characters in the room, sorted by name, as
+  `{"id": "<npc id>", "name": "<display name>"}` (v2.1, additive). An NPC is
+  not an object: it never appears in `objects`, cannot be taken or dropped,
+  and has no carry weight. `id` is the stable id authored in the world file;
+  #82 may move an NPC between rooms but keeps that id. A v2.0 server sends an
+  empty array.
 - In a dark room (`dark: true`), `exits`, `objects`, `players`, and `npcs` are
   empty, and `data.text` says it is too dark to see. A carried light source must
   be lit (`light <source>`) before it produces the normal state with
@@ -465,6 +470,51 @@ should treat `text` as presentation.
 the same unit as the authored object `weight`: `used` is the sum of the
 carried objects' own weights (nested container contents are not counted a
 second time), rounded to three decimals. The server default is `12.0`.
+
+### NPC dialogue (v2.1)
+
+The world file may author scripted NPCs in a room's `npcs` list. Each NPC has
+`name`, `description`, optional `wander`/`wander_every` (#82), and a
+`dialogue` block:
+
+```yaml
+npcs:
+  - id: npc_merchant
+    name: Mira the Merchant
+    description: A sharp-eyed trader in a patched green coat.
+    dialogue:
+      greeting: "Fresh coin, fresh gossip. Which do you want?"
+      default: "I sell what the village makes and hears what it hides."
+      topics:
+        market: "Everything here came up the south road or down the river."
+        gold: "The gold key? The alchemist keeps it."
+```
+
+`talk <npc>` speaks the `greeting`; if the NPC has none, it speaks `default`.
+`ask <npc> about <topic>` matches the topic case-insensitively and speaks that
+line. An unknown topic is not an error: the NPC answers with `default`, so a
+client need not know the script. Dialogue is authored text only; a v2.1 server
+uses no LLM on this path.
+
+| Type | Data | Recipients |
+|---|---|---|
+| `npc.say` | `npc{id,name}`, `topic?`, `text`, `self` | Actor (direct, `self: true`) and the rest of the room (`self: false`) |
+
+- `npc.id` is the stable world id, not an instance id. `npc.name` is the
+  display name.
+- `topic` is present only on `ask` when the asked topic matched the authored
+  map. It is the lowercased topic key. An unknown-topic fallback carries no
+  `topic`.
+- `text` is presentation (`Mira the Merchant says, "..."`); the same line is
+  sent to the actor and the room. Structured `npc` is the contract.
+- NPC names resolve with the same rules as object names: exact display name,
+  then a case-insensitive prefix, then a substring, with `<name> <n>` for a
+  tie. A missing NPC changes nothing and is `error{not_found}`; `ask` without
+  `about` is `error{bad_args}`. Neither emits `npc.say`.
+- NPC dialogue is room-local and needs no state on the client. `room.state`
+  is the source for which NPCs are present; an NPC in a dark room is hidden
+  with the rest of the contents. Movement and effects are #82/#84; this
+  release does not move an NPC on its own.
 
 ### Carry limit and target resolution (v2.1)
 
@@ -618,7 +668,7 @@ container (`object.unlocked`), and `use <key> on <exit>` opens a locked way
 `id`, not its display name.
 
 Reserved for later, never emitted in v2.0: `object.locked`,
-`npc.say`, `npc.enter`, `npc.leave`, `effect`, `device.event`,
+`npc.enter`, `npc.leave`, `effect`, `device.event`,
 `narration.append`, `room.generated`.
 
 **Why container locks and exit locks:** the reference engine has keys and locks
@@ -697,6 +747,8 @@ idle close is `4004` after the character is already asleep.
 | `say <text>` | actor: `player.said` (`self:true`); room: `player.said` (`self:false`) |
 | `emote <action>` / `me <action>` | actor: `player.emoted` (`self:true`); room: `player.emoted` (`self:false`); no other room |
 | `tell <player> <text>` | sender and awake target: `player.told` (`self:true`/`false`), no room broadcast; asleep/stone target: `error{not_awake}`; unknown name: `error{not_found}` |
+| `talk <npc>` | `npc.say` (actor `self:true` direct + room `self:false`); unknown NPC `error{not_found}` |
+| `ask <npc> about <topic>` | `npc.say` with the matched `topic`, or the NPC's default line when the topic is unknown; missing `about` `error{bad_args}`, unknown NPC `error{not_found}` |
 | `hello` | `notice` (private) |
 | `exit` / `quit` | close `1000`; no direct reply; `room.leave` to the room |
 | malformed / unknown | `error`; socket stays open |
@@ -785,6 +837,15 @@ in-progress release; its entry grows as each documented addition lands.
 - Error codes `invalid_key`, `invalid_name`, `not_authenticated`,
   `not_awake`, and `rate_limited`; close code `4004` for an idle timeout.
   `4001`, `4002`, and `4005` remain reserved.
+- NPCs authored in a room's `npcs` list are placed in the running world and
+  listed in `room.state.npcs[]` as `{id,name}` (additive; the field was
+  reserved and empty in v2.0). `talk <npc>` speaks the authored greeting (or
+  `default`), and `ask <npc> about <topic>` speaks the matching topic with the
+  NPC's `default` line as the unknown-topic fallback. Success emits
+  `npc.say{npc{id,name}, topic?, text, self}` to the actor and the room; an
+  unknown NPC is `error{not_found}` and a missing `about` is
+  `error{bad_args}`. Dialogue is YAML content, not generated. NPC wandering
+  (#82) and NPC effects (#84) are not part of this entry.
 
 ### v2.0 — protocol 2
 

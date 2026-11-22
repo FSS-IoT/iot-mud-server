@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 from src.mud.config import DEFAULT_WORLD
-from src.mud.content import Entity, ExitLock, Room
+from src.mud.content import NPC, Entity, ExitLock, Room
 from src.mud.content.models import OPPOSITE_EXITS, Exit
 from src.mud.content.models import load_world as load_content_world
 from src.mud.content.validator import validate_world
@@ -94,6 +94,27 @@ async def _load_yaml_world(engine: Engine, data_path: Path) -> None:
         )
         room.item_id = room_data.id
         room_map[room_data.id] = room
+
+    # 2b. Place the scripted NPCs. An NPC lives in its room's `npcs` list and
+    # never in `contents`, so `take`, `drop`, capacity, and container contents
+    # keep their v2.1.2 behavior (#81). The authored dialogue is copied as
+    # plain strings; the engine never reads the YAML model directly.
+    for room_data in world.rooms:
+        room = room_map[room_data.id]
+        for npc_data in room_data.npcs:
+            npc = NPC(
+                name=npc_data.name,
+                description=npc_data.description,
+                greeting=npc_data.dialogue.greeting,
+                default=npc_data.dialogue.default,
+                topics=npc_data.dialogue.topics,
+                item_id=npc_data.id,
+                wander=npc_data.wander,
+                wander_every=npc_data.wander_every,
+                effects=npc_data.effects,
+            )
+            npc.instance_id = npc_data.id
+            room.npcs.append(npc)
 
     # 3. Exits. The YAML declares each exit once; create the reciprocal here.
     # `one_way` opts out, and `setdefault` keeps an explicit target if a

@@ -138,6 +138,36 @@ class Player(Entity):
         self.asleep = False
 
 
+class NPC(Entity):
+    """A scripted character in a room (#81).
+
+    Dialogue is authored in the YAML world and answers `talk` and
+    `ask <npc> about <topic>`; there is no LLM behind it. An NPC is *not* a
+    room object: it lives in `Room.npcs`, never in `Room.contents`, so the
+    item vocabulary (`take`, `drop`, carry weight) never sees it.
+
+    `topics` is keyed by the lowercased topic a player types. `greeting` is
+    what `talk` says first, and `default` is the fallback for an unknown topic
+    (or for `talk` when no greeting is authored). `wander` is authored here
+    for #82; this class does not move on its own. `effects` is kept for the
+    #84 trigger seam.
+    """
+
+    def __init__(self, name: str, description: str = "",
+                 greeting: str = "", default: str = "",
+                 topics: dict[str, str] | None = None,
+                 item_id: str | None = None,
+                 wander: bool = False, wander_every: int = 15,
+                 effects: dict | None = None):
+        super().__init__(name=name, description=description, item_id=item_id)
+        self.greeting = greeting
+        self.default = default
+        self.topics: dict[str, str] = dict(topics or {})
+        self.wander = wander
+        self.wander_every = wander_every
+        self.effects = dict(effects or {})
+
+
 class Room(Entity):
     """A location where entities can reside."""
     def __init__(self, name: str, description: str, exits: Optional[Dict[str, Room]] = None,
@@ -160,6 +190,11 @@ class Room(Entity):
         # validates it and stores the normalized wire shape; None means the
         # room has no map, and the protocol omits the field entirely.
         self.geometry: dict | None = None
+        # Scripted characters that live here (#81). NPCs are kept out of
+        # `contents` so they never enter the item vocabulary: `take`, `drop`,
+        # capacity, and container contents are unaffected. A wandering NPC
+        # (#82) moves between rooms' `npcs` lists, not through contents.
+        self.npcs: list[NPC] = []
 
     def exit_is_locked(self, direction: str) -> bool:
         """Whether this room's `direction` exit is currently locked."""
