@@ -28,7 +28,13 @@ from src.mud.auth import (
     normalize_name,
     register_character,
 )
-from src.mud.config import AuthConfig, ConfigError, LimitsConfig, load_config
+from src.mud.config import (
+    AuthConfig,
+    ConfigError,
+    FeaturesConfig,
+    LimitsConfig,
+    load_config,
+)
 from src.mud.engine.core import Engine
 from src.mud.protocol.adapter import _room_id, build_room_state, execute
 from src.mud.protocol.v2 import (
@@ -216,6 +222,7 @@ class V2Server:
         auth_required: bool = True,
         auth_limits: AuthConfig | None = None,
         limits: LimitsConfig | None = None,
+        features: FeaturesConfig | None = None,
         clock: Callable[[], float] | None = None,
         idle_poll_seconds: float = 1.0,
         tick_seconds: float = 1.0,
@@ -238,6 +245,11 @@ class V2Server:
         # limiter. Both read the same injected clock, so tests advance time
         # instead of sleeping.
         self.limits = limits if limits is not None else LimitsConfig()
+        # Optional behavior switches (#84). `effects=false` (the default)
+        # keeps authored effects on the bus and in `event_log` while sending
+        # no `effect` event to any client.
+        self.features = (
+            features if features is not None else FeaturesConfig())
         self.clock = clock if clock is not None else time.monotonic
         self.idle_poll_seconds = idle_poll_seconds
         # The world tick is wall-clock paced by the server, but game logic
@@ -319,8 +331,24 @@ class V2Server:
             "text": f"{player.name} has arrived.",
         }, exclude_name=player.name)
 
+    async def _relay_effect(self, event_type: str, data: Any) -> None:
+        """Send one triggered effect to its room when the flag allows (#84).
+
+        The engine publishes `effect` for every authored trigger whether or
+        not this feature is on; the log sink has already appended the row by
+        the time this runs. With `features.effects=false` this is a deliberate
+        no-op, which is why the disable switch cannot change gameplay.
+        """
+        if not self.features.effects or not isinstance(data, dict):
+            return
+        room = data.get("room")
+        room_name = room.get("name") if isinstance(room, dict) else None
+        await self._broadcast_room(
+            room_name, "effect", data, exclude_name=None)
+
     async def _broadcast_room(self, room_name: str | None, type_: str,
-                              data: dict, exclude_name: str) -> None:
+                              data: dict,
+                              exclude_name: str | None = None) -> None:
         if room_name is None:
             return
         room = self.engine.get_room(room_name)
@@ -937,6 +965,10 @@ class V2Server:
             # memory or another client (SPEC v2.1.0 criterion 2).
             self.store = WriteThroughStore(self.db)
             self.engine.attach_store(self.store)
+        # Authored effects are room events (#84). The engine publishes them
+        # for the log either way; this subscriber is the only client path and
+        # it is a no-op while `features.effects` is false.
+        await self.engine.subscribe("effect", self._relay_effect)
         try:
             self._server = await websockets.serve(
                 self.handler, self.host, self.port, max_size=65536)
@@ -961,6 +993,7 @@ class V2Server:
                 except asyncio.CancelledError:
                     pass
                 self._wander_task = None
+            await self.engine.unsubscribe("effect", self._relay_effect)
             if self.store is not None:
                 self.engine.attach_store(None)
                 self.store = None
@@ -1026,7 +1059,7 @@ if __name__ == "__main__":
         await load_demo_village(engine)
         server = V2Server(engine, host=args.host, port=args.port,
                           db_path=db_path, auth_limits=config.auth,
-                          limits=config.limits)
+                          limits=config.limits, features=config.features)
         print(f"Protocol-v2 server on ws://{args.host}:{args.port} "
               f"(db: {db_path})")
         await server.run()

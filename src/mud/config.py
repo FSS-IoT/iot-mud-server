@@ -74,10 +74,25 @@ class LimitsConfig:
 
 
 @dataclass(frozen=True)
+class FeaturesConfig:
+    """Optional v2.1 behavior switches (#84).
+
+    `effects` is the client-delivery switch for authored effects. Effects are
+    always published on the engine bus and appended to `event_log`; with
+    `False` (the default until the effect-consuming clients and devices
+    exist), no client receives an `effect` event and gameplay is identical to
+    a run with the block absent. It never changes engine state.
+    """
+
+    effects: bool = False
+
+
+@dataclass(frozen=True)
 class Config:
     storage: StorageConfig = field(default_factory=StorageConfig)
     auth: AuthConfig = field(default_factory=AuthConfig)
     limits: LimitsConfig = field(default_factory=LimitsConfig)
+    features: FeaturesConfig = field(default_factory=FeaturesConfig)
 
 
 def _positive_number(path: Path, section: dict, section_name: str,
@@ -93,7 +108,7 @@ def _positive_number(path: Path, section: dict, section_name: str,
 
 
 def load_config(path: str | Path | None = None) -> Config:
-    """Load `[storage]`, `[auth]`, and `[limits]`, or the built-in defaults."""
+    """Load `[storage]`, `[auth]`, `[limits]`, and `[features]`, or defaults."""
     if path is None:
         candidate = DEFAULT_CONFIG
         if not candidate.exists():
@@ -147,6 +162,15 @@ def load_config(path: str | Path | None = None) -> Config:
         raise ConfigError(
             f"{path}: [limits].command_burst must be a positive integer")
 
+    features = data.get("features", {})
+    if not isinstance(features, dict):
+        raise ConfigError(f"{path}: [features] must be a table")
+
+    raw_effects = features.get("effects", False)
+    if not isinstance(raw_effects, bool):
+        raise ConfigError(
+            f"{path}: [features].effects must be true or false")
+
     return Config(
         storage=StorageConfig(Path(raw_path)),
         auth=AuthConfig(
@@ -162,4 +186,5 @@ def load_config(path: str | Path | None = None) -> Config:
                 path, limits, "limits", "idle_timeout_seconds",
                 DEFAULT_IDLE_TIMEOUT_SECONDS),
         ),
+        features=FeaturesConfig(effects=raw_effects),
     )

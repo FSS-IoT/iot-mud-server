@@ -72,6 +72,9 @@ async def _load_yaml_world(engine: Engine, data_path: Path) -> None:
                 open=bool(obj.state.get("open", False)),
             )
             entity.instance_id = obj.id
+            # Authored triggers travel with the object into the running world
+            # (#84): the engine publishes them when `on_open` and friends fire.
+            entity.effects = dict(obj.effects)
             # Kept for the v2.1.3 read/effects seam. The v2.0 adapter reads
             # `description`, so the YAML carries the same text in both places.
             entity.readable_text = obj.readable_text or obj.description
@@ -94,6 +97,9 @@ async def _load_yaml_world(engine: Engine, data_path: Path) -> None:
             dark=room_data.dark,
         )
         room.item_id = room_data.id
+        # The room's authored triggers (#84). Same seam as an object or NPC;
+        # `on_enter` is driven by player movement.
+        room.effects = dict(room_data.effects)
         room_map[room_data.id] = room
 
     # 2b. Place the scripted NPCs. An NPC lives in its room's `npcs` list and

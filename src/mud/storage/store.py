@@ -20,7 +20,9 @@ the mutation itself. Both happen in the same transaction.
 
 from __future__ import annotations
 
+import json
 import sqlite3
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -316,6 +318,38 @@ class WriteThroughStore:
             )
             for row in rows
         )
+
+    def record_event(
+        self,
+        event_type: str,
+        payload: dict[str, Any],
+        *,
+        actor: str | None = None,
+        room_id: str | None = None,
+    ) -> None:
+        """Append one semantic event to the existing `event_log` table (#84).
+
+        The table shipped with the v2.1.0 schema and needs no migration. The
+        payload is stored as canonical JSON (`sort_keys`, compact separators)
+        so the same bus event always has the same durable text. `actor` and
+        `room_id` are the queryable columns; the payload remains the complete
+        record. A write failure raises `StorageWriteError`, and the engine's
+        effect sink deliberately logs and drops it: effects are not
+        authoritative state.
+        """
+        event_id = f"{event_type}-{uuid.uuid4().hex}"
+        body = json.dumps(
+            payload, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        try:
+            with self.conn:
+                self.conn.execute(
+                    "INSERT INTO event_log(event_id, ts, type, actor, "
+                    "room_id, payload) VALUES (?, ?, ?, ?, ?, ?)",
+                    (event_id, self._now(), event_type, actor, room_id, body),
+                )
+        except sqlite3.Error as exc:
+            raise StorageWriteError(
+                f"{event_type} event could not be logged: {exc}") from exc
 
 
 def ensure_room(conn: sqlite3.Connection, room: Any) -> None:
