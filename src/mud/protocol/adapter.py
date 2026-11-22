@@ -181,7 +181,20 @@ def build_room_state(engine: Engine, player: Player) -> dict[str, Any]:
     return {"room": payload, "text": text}
 
 
-def _inventory_data(player: Player, text: str | None = None) -> dict[str, Any]:
+def _weight(value: float) -> float:
+    """Round a sum of authored weights to a stable wire value (#78)."""
+    return round(float(value), 3)
+
+
+def _inventory_data(engine: Engine, player: Player,
+                    text: str | None = None) -> dict[str, Any]:
+    """The actor's pack, always with the carry-limit fields (#78).
+
+    `capacity` and `used` are in the same unit as `Entity.weight`; `used` is
+    the sum of the carried objects' own weights, not their nested contents.
+    Every inventory push (the `inventory` verb and the take/drop/put/get
+    follow-ups) goes through here, so the numbers cannot drift.
+    """
     items = []
     for item in player.contents:
         data = _object_data(item, player.contents)
@@ -201,7 +214,44 @@ def _inventory_data(player: Player, text: str | None = None) -> dict[str, Any]:
         if "lit" in item:
             entry["lit"] = item["lit"]
         payload.append(entry)
-    return {"items": payload, "text": text}
+    return {
+        "items": payload,
+        "capacity": _weight(engine.carry_capacity(player)),
+        "used": _weight(engine.carry_used(player)),
+        "text": text,
+    }
+
+
+def _candidates(engine: Engine, collection: list[Entity],
+                name: str | None) -> list[dict[str, Any]]:
+    """The structured ambiguity candidates for `name` in `collection`.
+
+    Empty when the name resolves uniquely or not at all; `_failure` only
+    attaches the list to an `ambiguous` error. The same order as the engine's
+    `<name> <n>` index: display name, then collection order.
+    """
+    if not collection or not name:
+        return []
+    matches = engine.target_matches(collection, name)
+    if len(matches) < 2:
+        return []
+    return [_object_data(item, collection) for item in matches]
+
+
+def _too_heavy(engine: Engine, player: Player, collection: list[Entity],
+               name: str | None, reply: str) -> CommandResult:
+    """The typed carry-limit refusal, with the numbers behind it (#78)."""
+    data: dict[str, Any] = {
+        "code": "too_heavy",
+        "message": reply,
+        "capacity": _weight(engine.carry_capacity(player)),
+        "used": _weight(engine.carry_used(player)),
+    }
+    item = _find(engine, collection, name)
+    if item is not None:
+        data["object"] = _object_data(item, collection)
+        data["weight"] = _weight(float(getattr(item, "weight", 0.0) or 0.0))
+    return CommandResult([Outbound("error", data)])
 
 
 def _find(engine: Engine, collection: list[Entity], name: str | None) -> Entity | None:
@@ -232,6 +282,10 @@ def _classify(reply: str) -> str:
     lowered = reply.lower()
     if "i don't understand" in lowered:
         return "unknown_command"
+    # The carry limit refuses before moving anything (#78). Match the whole
+    # refusal, not the words in an object description.
+    if lowered.startswith("you cannot carry ") and "too heavy" in lowered:
+        return "too_heavy"
     if lowered.startswith("there is nothing readable"):
         return "not_found"
     if lowered.startswith(("you see no ", "you can't read")):
@@ -264,9 +318,10 @@ def _classify(reply: str) -> str:
         return "locked"
     if "is already open" in lowered:
         return "already_open"
-    if ("which " in lowered or "did you mean" in lowered
-            or "specify" in lowered):
-        return "ambiguous_target"
+    if lowered.startswith("there are several ") or "did you mean" in lowered:
+        # v2.1 spells this `ambiguous` and attaches `candidates[]` (#78);
+        # the v2.0 `ambiguous_target` name remains in the reserved list.
+        return "ambiguous"
     if lowered.startswith("you cannot go"):
         return "no_exit"
     if ("what? try" in lowered or "use a key on something" in lowered
@@ -283,11 +338,17 @@ def _notice(text: str) -> CommandResult:
     return CommandResult([Outbound("notice", {"text": text, "level": "info"})])
 
 
-def _failure(reply: str) -> CommandResult:
+def _failure(reply: str,
+             candidates: list[dict[str, Any]] | None = None) -> CommandResult:
     code = _classify(reply)
     if code == "internal":
         return _notice(reply)
-    return _error(code, reply)
+    if code != "ambiguous":
+        return _error(code, reply)
+    data: dict[str, Any] = {"code": code, "message": reply}
+    # An ambiguous refusal always says what it was choosing between.
+    data["candidates"] = candidates or []
+    return CommandResult([Outbound("error", data)])
 
 
 def _actor(type_: str, data: dict[str, Any]) -> Outbound:
@@ -447,14 +508,18 @@ async def execute(engine: Engine, player_name: str,
                     "object": obj, "by": player.name, "self": True,
                     "text": reply,
                 }),
-                Outbound("player.inventory", _inventory_data(player),
+                Outbound("player.inventory", _inventory_data(engine, player),
                          direct=False),
                 _room("object.taken", {
                     "object": obj, "by": player.name, "self": False,
                     "text": f"{player.name} picks up the {item.name}.",
                 }),
             ])
-        return _failure(reply)
+        if _classify(reply) == "too_heavy":
+            return _too_heavy(
+                engine, player, before_room_contents, arg, reply)
+        return _failure(
+            reply, _candidates(engine, before_room_contents, arg))
 
     if verb == "drop":
         dropped = [
@@ -469,17 +534,18 @@ async def execute(engine: Engine, player_name: str,
                     "object": obj, "by": player.name, "self": True,
                     "text": reply,
                 }),
-                Outbound("player.inventory", _inventory_data(player),
+                Outbound("player.inventory", _inventory_data(engine, player),
                          direct=False),
                 _room("object.dropped", {
                     "object": obj, "by": player.name, "self": False,
                     "text": f"{player.name} drops the {item.name}.",
                 }),
             ])
-        return _failure(reply)
+        return _failure(
+            reply, _candidates(engine, before_inventory, arg))
 
     if verb == "put":
-        _item_arg, _, container_arg = (
+        item_arg, _, container_arg = (
             arg.rpartition(" in ") if arg and " in " in arg else ("", "", ""))
         moved = [item for item in before_inventory
                  if item not in player.contents]
@@ -493,7 +559,7 @@ async def execute(engine: Engine, player_name: str,
                     "object": obj, "container": cont,
                     "by": player.name, "self": True, "text": reply,
                 }),
-                Outbound("player.inventory", _inventory_data(player),
+                Outbound("player.inventory", _inventory_data(engine, player),
                          direct=False),
                 _room("object.put", {
                     "object": obj, "container": cont,
@@ -502,7 +568,10 @@ async def execute(engine: Engine, player_name: str,
                              f"{container.name}."),
                 }),
             ])
-        return _failure(reply)
+        return _failure(
+            reply,
+            _candidates(engine, before_inventory, item_arg)
+            or _candidates(engine, before_room_contents, container_arg))
 
     if verb == "open":
         container = _find(engine, before_room_contents, arg)
@@ -522,7 +591,8 @@ async def execute(engine: Engine, player_name: str,
                     "text": f"{player.name} opens the {container.name}.",
                 }),
             ])
-        return _failure(reply)
+        return _failure(
+            reply, _candidates(engine, before_room_contents, arg))
 
     if verb == "close":
         container = _find(engine, before_room_contents, arg)
@@ -541,10 +611,11 @@ async def execute(engine: Engine, player_name: str,
                     "text": f"{player.name} closes the {container.name}.",
                 }),
             ])
-        return _failure(reply)
+        return _failure(
+            reply, _candidates(engine, before_room_contents, arg))
 
     if verb == "get":
-        _item_arg, _, container_arg = (
+        item_arg, _, container_arg = (
             arg.rpartition(" from ") if arg and " from " in arg
             else ("", "", ""))
         container = _find(engine, before_room_contents, container_arg.strip())
@@ -560,7 +631,7 @@ async def execute(engine: Engine, player_name: str,
                     "object": obj, "container": cont,
                     "by": player.name, "self": True, "text": reply,
                 }),
-                Outbound("player.inventory", _inventory_data(player),
+                Outbound("player.inventory", _inventory_data(engine, player),
                          direct=False),
                 _room("object.got", {
                     "object": obj, "container": cont,
@@ -569,7 +640,17 @@ async def execute(engine: Engine, player_name: str,
                              f"{container.name}."),
                 }),
             ])
-        return _failure(reply)
+        if _classify(reply) == "too_heavy":
+            return _too_heavy(
+                engine, player,
+                container.contents if container is not None else [],
+                item_arg, reply)
+        return _failure(
+            reply,
+            _candidates(engine, before_room_contents, container_arg)
+            or _candidates(
+                engine, container.contents if container is not None else [],
+                item_arg))
 
     if verb == "use":
         if before_room is not None:
@@ -592,10 +673,14 @@ async def execute(engine: Engine, player_name: str,
                         "text": f"{player.name} unlocks the way {direction}.",
                     }, room_name=before_room.name),
                 ])
+        key_name = arg.split(" on ", 1)[0].strip() if arg and " on " in arg else None
         lock_name = arg.split(" on ", 1)[1].strip() if arg and " on " in arg else None
         container = _find(engine, before_room_contents, lock_name)
         if container is None:
-            return _failure(reply)
+            return _failure(
+                reply,
+                _candidates(engine, before_inventory, key_name)
+                or _candidates(engine, before_room_contents, lock_name))
         was_locked = before_locked.get(id(container), False)
         still_locked = bool(getattr(container, "locked", False))
         if was_locked and not still_locked:
@@ -611,7 +696,10 @@ async def execute(engine: Engine, player_name: str,
                 }),
             ])
         # The reply decides: "already open", "does not fit", or missing key.
-        return _failure(reply)
+        return _failure(
+            reply,
+            _candidates(engine, before_inventory, key_name)
+            or _candidates(engine, before_room_contents, lock_name))
 
     if verb == "light":
         target = _find(engine, before_inventory, arg)
@@ -630,7 +718,8 @@ async def execute(engine: Engine, player_name: str,
                     "text": f"{player.name} lights the {target.name}.",
                 }),
             ])
-        return _failure(reply)
+        return _failure(
+            reply, _candidates(engine, before_inventory, arg))
 
     if verb == "read":
         if reply.lower().startswith("it is too dark"):
@@ -645,11 +734,15 @@ async def execute(engine: Engine, player_name: str,
                 "content": target.description,
                 "text": reply,
             })])
-        return _failure(reply)
+        return _failure(
+            reply,
+            _candidates(engine, before_inventory, arg)
+            or _candidates(engine, before_room_contents, arg))
 
     if verb == "inventory":
         return CommandResult([
-            _actor("player.inventory", _inventory_data(player, text=reply)),
+            _actor("player.inventory",
+                   _inventory_data(engine, player, text=reply)),
         ])
 
     if verb == "who":
@@ -719,7 +812,11 @@ async def execute(engine: Engine, player_name: str,
     if verb == "examine":
         if not arg:
             return _error("bad_args", "Examine what? Try `examine <thing>`.")
-        return _notice(reply)
+        # A description is a notice; a miss or an ambiguity is typed (#78).
+        return _failure(
+            reply,
+            _candidates(engine, before_inventory, arg)
+            or _candidates(engine, before_room_contents, arg))
 
     if verb in ("show_exits", "help", "hello"):
         return _notice(reply)
@@ -730,7 +827,8 @@ async def execute(engine: Engine, player_name: str,
                           "Look in what? Try `look in <container>`.")
         if " is locked" in reply.lower():
             return _error("locked", reply)
-        return _notice(reply)
+        return _failure(
+            reply, _candidates(engine, before_room_contents, arg))
 
     if verb == "empty":
         return _notice(reply)

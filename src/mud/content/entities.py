@@ -1,6 +1,13 @@
 from __future__ import annotations
 from typing import Dict, Optional, List
 
+# How much authored `weight` a character may carry by default (#78). The world
+# authors item weight in the content model; capacity is the same unit, so a
+# character's `used` is the sum of the `weight` of everything in `contents`.
+# A non-positive capacity means no limit (the legacy single-player slot and
+# in-memory test entities keep working without opting in).
+DEFAULT_CARRY_CAPACITY = 12.0
+
 class Entity:
     """Base class for everything in the world: Players, Items, Rooms."""
     def __init__(self, name: str, description: str, weight: float = 0.0,
@@ -111,10 +118,18 @@ class ExitLock:
 
 
 class Player(Entity):
-    """A named player in the world. Owns its current location."""
+    """A named player in the world. Owns its current location.
 
-    def __init__(self, name: str, description: str = "A player."):
+    `capacity` is the carry limit in the same unit as `Entity.weight` (#78).
+    `used` is not stored: the engine sums the weights of `contents`, so memory
+    and the `player.inventory` wire fields can never disagree. A non-positive
+    capacity means no limit.
+    """
+
+    def __init__(self, name: str, description: str = "A player.",
+                 capacity: float = DEFAULT_CARRY_CAPACITY):
         super().__init__(name=name, description=description)
+        self.capacity = capacity
         self.location: Optional[Room] = None
         # Sleep is the stone state (#72): the character stays in its room while
         # its session is gone. It is present, invincible, and not a valid

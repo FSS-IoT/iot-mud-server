@@ -4,7 +4,7 @@ import asyncio
 import re
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
-from src.mud.content import Entity, Room, Player
+from src.mud.content import DEFAULT_CARRY_CAPACITY, Entity, Room, Player
 from src.mud.storage.keys import object_key, room_key
 
 if TYPE_CHECKING:
@@ -334,22 +334,64 @@ class Engine:
         return response
 
     @staticmethod
-    def _find_item(collection, arg: str):
-        """Find an item in `collection` by a forgiving name match.
+    def _split_target(arg: str) -> tuple[str, int | None]:
+        """Split a target into its lowercase base name and optional index.
 
-        Matches when the typed argument is a substring of the item's display name
-        (case-insensitive), so both "gold coin" and "coin" match an item named
-        "Gold Coin". Leading articles ("the", "a", "an") are stripped first so
+        A trailing integer is the 1-based `<name> <n>` disambiguation index, not
+        part of the name. Leading filler ("the", "a", "an") is stripped so
         natural phrasings like "the gold coin" resolve to "gold coin".
         """
-        arg = re.sub(r"^(the|a|an)\s+", "", arg.strip().lower())
-        for candidate in collection:
-            if candidate.name.lower() == arg or arg in candidate.name.lower():
-                return candidate
-        return None
+        tokens = arg.strip().split()
+        index = None
+        if tokens and tokens[-1].isdigit():
+            index = int(tokens[-1])
+            tokens = tokens[:-1]
+        key = re.sub(
+            r"^(the|a|an)\s+", "", " ".join(tokens).strip().lower())
+        return key, index
 
-    @staticmethod
-    def _disambiguate(collection, arg: str):
+    @classmethod
+    def target_matches(cls, collection, arg: str) -> list[Entity]:
+        """Every object `arg` names, in deterministic resolution order.
+
+        Resolution is tiered so a natural name is never made ambiguous by a
+        longer name that merely contains it:
+
+        1. an exact display name (case-insensitive);
+        2. otherwise, a case-insensitive prefix of a display name;
+        3. otherwise, the v2.0 substring match, kept for compatibility
+           (`coin` still finds `Gold Coin`).
+
+        Players are never objects even though they live in `room.contents`. A
+        bare index (`take 1`) has no name and matches nothing. The list is
+        sorted by display name (then stable collection order), which is the
+        order the `<name> <n>` index addresses. The protocol adapter uses this
+        same list to fill `error{candidates}`.
+        """
+        key, _index = cls._split_target(arg)
+        if not key:
+            return []
+        candidates = [c for c in collection if not isinstance(c, Player)]
+        exact = [c for c in candidates if c.name.lower() == key]
+        if exact:
+            matches = exact
+        else:
+            prefixed = [
+                c for c in candidates if c.name.lower().startswith(key)
+            ]
+            matches = prefixed or [
+                c for c in candidates if key in c.name.lower()
+            ]
+        return sorted(matches, key=lambda c: c.name.lower())
+
+    @classmethod
+    def _find_item(cls, collection, arg: str):
+        """Find the unique item `arg` names, using `target_matches` rules."""
+        matches = cls.target_matches(collection, arg)
+        return matches[0] if len(matches) == 1 else None
+
+    @classmethod
+    def _disambiguate(cls, collection, arg: str):
         """Resolve `arg` against `collection`, supporting `<name> <n>` disambiguation.
 
         When a bare name matches several items (e.g. two "keys"), the player can
@@ -362,26 +404,11 @@ class Engine:
 
         Returns a tuple `(item, message)`: exactly one is non-None.
         """
-        arg = arg.strip()
-        tokens = arg.split()
-        # A trailing integer is a 1-based index into the sorted matches, e.g.
-        # "gold key 1". Everything before it is the base name.
-        index = None
-        if tokens and tokens[-1].isdigit():
-            index = int(tokens[-1])
-            tokens = tokens[:-1]
-        name_tokens = tokens
-        key = re.sub(r"^(the|a|an)\s+", "", " ".join(name_tokens).strip().lower())
-        # A missing name (e.g. `take 1`) must not match every item, and a
-        # player is never an item even though players live in room.contents.
+        key, index = cls._split_target(arg)
+        # A missing name (e.g. `take 1`) must not match every item.
         if not key:
             return None, None
-        item_candidates = [c for c in collection if not isinstance(c, Player)]
-        matches = sorted(
-            (c for c in item_candidates
-             if c.name.lower() == key or key in c.name.lower()),
-            key=lambda c: c.name.lower(),
-        )
+        matches = cls.target_matches(collection, arg)
         if not matches:
             return None, None
         # A trailing index is authoritative even for a single match, so an
@@ -410,6 +437,38 @@ class Engine:
         if entity is None:
             return []
         return sorted(c.name for c in entity.contents)
+
+    # --- Carry limit (#78) ---------------------------------------------------
+
+    @staticmethod
+    def carry_capacity(player) -> float:
+        """The actor's carry limit in `Entity.weight` units.
+
+        A legacy `Entity` used as the single-player slot has no capacity
+        attribute and keeps the documented default. A non-positive capacity
+        means no limit, so test doubles and old callers do not have to opt in.
+        """
+        return float(
+            getattr(player, "capacity", DEFAULT_CARRY_CAPACITY) or 0.0)
+
+    @staticmethod
+    def carry_used(player) -> float:
+        """The sum of the weights the actor is carrying right now."""
+        if player is None:
+            return 0.0
+        return sum(
+            float(getattr(item, "weight", 0.0) or 0.0)
+            for item in player.contents
+        )
+
+    def can_carry(self, player, item) -> bool:
+        """Whether `item` fits in `player`'s pack without changing state."""
+        capacity = self.carry_capacity(player)
+        if capacity <= 0:
+            return True
+        weight = float(getattr(item, "weight", 0.0) or 0.0)
+        # A tiny epsilon keeps exact-boundary float sums (0.1 + 0.2) working.
+        return self.carry_used(player) + weight <= capacity + 1e-9
 
     def _room_is_lit(self, player, room) -> bool:
         """Whether `room` is lit from the perspective of `player` (or legacy slot).
@@ -505,6 +564,12 @@ class Engine:
             if disambig:
                 return disambig
             if target_item:
+                # Carry limit (#78): refuse before the write-through, so a
+                # refused take changes neither SQLite nor memory.
+                if not self.can_carry(target_player, target_item):
+                    return (
+                        f"You cannot carry the {target_item.name}; it is "
+                        "too heavy.")
                 # Write-through: the take is durable before memory moves.
                 if self.store is not None:
                     self.store.player(target_player.name).take(
@@ -524,6 +589,10 @@ class Engine:
         if disambig:
             return disambig
         if target_item:
+            if not self.can_carry(self.player, target_item):
+                return (
+                    f"You cannot carry the {target_item.name}; it is "
+                    "too heavy.")
             self._player_location.remove_content(target_item)
             self.player.add_content(target_item)
             await self.emit("item_taken", {"item_name": target_item.name.lower(), "owner": "player"})
@@ -869,6 +938,8 @@ class Engine:
             return f"The {item_arg} is not in the {container.name}."
         if not getattr(item, "portable", True):
             return f"The {item.name} is fixed in place and cannot be put in your pack."
+        if not self.can_carry(target_player, item):
+            return f"You cannot carry the {item.name}; it is too heavy."
 
         container.remove_content(item)
         target_player.add_content(item)
@@ -1266,9 +1337,15 @@ class Engine:
             # the examiner being registered).
             player = self._resolve_player(player_name)
             room = player.location if player is not None else self._player_location
-            held = self._find_item(player.contents, resolved_arg) if player is not None else None
+            held, held_disambig = (
+                self._disambiguate(player.contents, resolved_arg)
+                if player is not None else (None, None)
+            )
             if not self._room_is_lit(player, room):
                 response = "It is too dark to see anything."
+                matched = True
+            elif held_disambig:
+                response = held_disambig
                 matched = True
             elif held is not None:
                 response = f"It is {held.description}."
@@ -1297,9 +1374,15 @@ class Engine:
         elif resolved_verb == "read" and resolved_arg:
             player = self._resolve_player(player_name)
             room = player.location if player is not None else self._player_location
-            held = self._find_item(player.contents, resolved_arg) if player is not None else None
+            held, held_disambig = (
+                self._disambiguate(player.contents, resolved_arg)
+                if player is not None else (None, None)
+            )
             if not self._room_is_lit(player, room):
                 response = "It is too dark to see anything."
+                matched = True
+            elif held_disambig:
+                response = held_disambig
                 matched = True
             elif held is not None and held.readable:
                 response = f"It is {held.description}."

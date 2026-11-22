@@ -431,7 +431,7 @@ unknown field.
 
 | Type | Data | Recipients |
 |---|---|---|
-| `player.inventory` | `items[]{id,name,lit?}`, `capacity?`, `used?` | Actor only |
+| `player.inventory` | `items[]{id,name,lit?}`, `capacity`, `used` | Actor only (v2.1) |
 | `player.said` | `from`, `text`, `self` | Room, including actor |
 | `player.emoted` | `from`, `text`, `self` | Room, including actor (v2.1) |
 | `player.told` | `from`, `to`, `text`, `self` | Target and sender (v2.1) |
@@ -460,6 +460,62 @@ name is `error{not_found}`.
 `player.said.text` is the rendered line (`Ada says, "hello".`), not the raw
 utterance. A structured raw-message field is a v2.1 candidate; v2.0 clients
 should treat `text` as presentation.
+
+`player.inventory.capacity` and `used` are always present in v2.1. Both use
+the same unit as the authored object `weight`: `used` is the sum of the
+carried objects' own weights (nested container contents are not counted a
+second time), rounded to three decimals. The server default is `12.0`.
+
+### Carry limit and target resolution (v2.1)
+
+`take <item>` (and `get <item> from <container>`) refuses a move that would
+put `used` above `capacity`:
+
+```json
+{"type":"error","data":{
+  "code":"too_heavy",
+  "message":"You cannot carry the Boulder; it is too heavy.",
+  "object":{"id":"boulder","kind":"boulder","name":"Boulder"},
+  "weight":20.0,
+  "capacity":12.0,
+  "used":1.5
+}}
+```
+
+The refusal changes nothing: the object stays where it was, neither memory nor
+SQLite moves, and the socket stays open. `object` and `weight` describe the
+refused object; `capacity` and `used` are the same numbers the actor's
+`player.inventory` carries. Exactly at the limit is allowed.
+
+Target resolution is shared by every command that names an object or
+container. It is case-insensitive, ignores leading filler (`the`, `a`, `an`),
+and supports the v2.0 `<name> <n>` index (`key 1` is the first match in sorted
+order). Without an index, the first tier with any match wins:
+
+1. an exact display name;
+2. a prefix of a display name;
+3. a substring of a display name (the v2.0 forgiving match, so `coin` still
+   finds `Gold Coin`).
+
+A name that matches nothing is `error{not_found}`. A name that matches more
+than one object at the winning tier is `error{ambiguous}` with the full list;
+nothing moves:
+
+```json
+{"type":"error","data":{
+  "code":"ambiguous",
+  "message":"There are several key here: 1 Gold Key, 2 Silver Key. Specify which, e.g. `key 1`.",
+  "candidates":[
+    {"id":"gold_key","kind":"gold_key","name":"Gold Key"},
+    {"id":"silver_key","kind":"silver_key","name":"Silver Key"}
+  ]
+}}
+```
+
+`candidates` are the same `{id,kind,name}` objects `object.taken` uses, in the
+same display-name order the index addresses. `ambiguous` is the v2.1 spelling;
+the v2.0 name `ambiguous_target` remains reserved and is not sent by a v2.1
+server. Every command `error` is non-fatal: the socket stays open.
 
 ### Sleep and stone (v2.1)
 
@@ -582,12 +638,18 @@ and exits add the declarative lock the design calls for, with one command
 
 ## Error codes
 
-`unknown_command`, `bad_args`, `ambiguous_target`, `not_found`, `not_here`,
+`unknown_command`, `bad_args`, `ambiguous`, `not_found`, `not_here`,
 `not_portable`, `container_closed`, `no_exit`, `locked`, `already_open`,
-`already_closed`, `malformed_message`, `unknown_message`, `not_joined`,
-`already_joined`, `name_taken`, `not_authenticated`, `invalid_key`,
-`invalid_name`, `not_awake`, `rate_limited`, `internal`,
+`already_closed`, `too_heavy`, `malformed_message`, `unknown_message`,
+`not_joined`, `already_joined`, `name_taken`, `not_authenticated`,
+`invalid_key`, `invalid_name`, `not_awake`, `rate_limited`, `internal`,
 `unsupported_version`.
+
+`ambiguous_target` is the v2.0 name for an ambiguous target. A v2.1 server
+sends `ambiguous` with `candidates[]` (see
+[carry limit and target resolution](#carry-limit-and-target-resolution-v21))
+and keeps `ambiguous_target` reserved so a client that pinned a v2.0 server
+still recognizes its error.
 
 An `error` is non-fatal unless the code says otherwise; clients print
 `message` and continue. `rate_limited` covers both budgets: an over-budget
@@ -607,16 +669,16 @@ idle close is `4004` after the character is already asleep.
 | Command | Result |
 |---|---|
 | `look` | `room.state` (private) |
-| `look at <x>` / `examine <x>` | `notice` (private; optional `object`) |
-| `look in <container>` | `notice` (private; container contents) |
+| `look at <x>` / `examine <x>` | `notice` (private; optional `object`); unknown `error{not_found}`, ambiguous `error{ambiguous}` with `candidates` |
+| `look in <container>` | `notice` (private; container contents); unknown `error{not_found}`, ambiguous `error{ambiguous}` with `candidates` |
 | `exits` | `notice` (private) |
 | `go <dir>` / `n`/`s`/`e`/`w`/`u`/`d` | actor: `room.state`; others: `room.leave` then `room.enter`; a locked exit: `error{locked}` to the actor and `exit.locked` to the room |
-| `take <x>` / `get <x>` | `object.taken` (actor `self:true` + room `self:false`) + `player.inventory` |
-| `drop <x>` | `object.dropped` + `player.inventory` |
+| `take <x>` / `get <x>` | `object.taken` (actor `self:true` + room `self:false`) + `player.inventory`; over capacity `error{too_heavy}`, unknown `error{not_found}`, ambiguous `error{ambiguous}` with `candidates` |
+| `drop <x>` | `object.dropped` + `player.inventory`; unknown `error{not_found}`, ambiguous `error{ambiguous}` with `candidates` |
 | `put <x> in <y>` | `object.put` + `player.inventory` |
 | `open <x>` | `object.opened` (contents listed in text and kept inside; an empty unlocked container also emits it; an open one is `error{already_open}`) |
 | `close <x>` | `object.closed` (or `error{already_closed}` / `error{bad_args}` for a non-container) |
-| `get <x> from <y>` | `object.got` (actor `self:true` + room `self:false`) + `player.inventory`; closed container `error{container_closed}`, item not inside `error{not_here}`, fixed item `error{not_portable}` |
+| `get <x> from <y>` | `object.got` (actor `self:true` + room `self:false`) + `player.inventory`; closed container `error{container_closed}`, item not inside `error{not_here}`, fixed item `error{not_portable}`, over capacity `error{too_heavy}`, ambiguous `error{ambiguous}` with `candidates` |
 | `use <key> on <container>` | `object.unlocked` (or `error{locked}` / `error{already_open}`) |
 | `use <key> on <exit>` | `exit.unlocked` (actor `self:true` + room `self:false`; wrong or missing key `error{locked}`, already open `error{already_open}`) |
 | `light <source>` | `object.lit` (or `notice` if already lit / not a light) |
@@ -685,6 +747,16 @@ in-progress release; its entry grows as each documented addition lands.
   `error{locked}` and the room sees `exit.locked`; `use <key> on <direction
   |label|room name>` emits `exit.unlocked` and unlocks both sides of a
   two-way door. The product tavern door is locked with the existing gold key.
+- `player.inventory` always carries `capacity` and `used`, in authored
+  `weight` units. A `take`/`get from` that would exceed `capacity` is
+  `error{too_heavy}` with the refused `object`, its `weight`, and the
+  actor's `capacity`/`used`; nothing moves. Same-limit takes are allowed.
+- Target resolution is documented and deterministic: exact display name,
+  then a case-insensitive prefix, then the v2.0 substring match; leading
+  `the`/`a`/`an` is filler, and `<name> <n>` still selects the 1-based sorted
+  match. A miss is `error{not_found}`; a tie is `error{ambiguous}` with
+  `candidates[]{id,kind,name}`. This replaces the v2.0 `ambiguous_target`
+  spelling, which remains reserved. No command error closes the socket.
 - `room.state` player entries and `room.leave` carry `asleep`/`stone` (and
   `dropped[]` on a sleep) for a stone occupant.
 - `room.state.data.room.geometry`: the optional room map, with its validation
