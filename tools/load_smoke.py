@@ -2,9 +2,10 @@
 
 Twenty clients, each sending a script of valid commands over a real websocket
 to a real `V2Server` on an ephemeral port, with a temporary SQLite database and
-key registration. The measured quantity is per-command latency: monotonic time
-from `send` to the direct reply that echoes the request id, plus a protocol
-check on every server message.
+key registration, against the 34-room `data/worlds/club_world` product world.
+The measured quantity is per-command latency: monotonic time from `send` to the
+direct reply that echoes the request id, plus a protocol check on every server
+message.
 
 The transport and the server are in one process, so the run also exercises the
 engine, SQLite write-through, room-state rendering, and broadcast fan-out under
@@ -29,19 +30,20 @@ import json
 import math
 import tempfile
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
 import websockets
 
+from src.mud.config import DEFAULT_WORLD as CONFIG_WORLD
 from src.mud.config import LimitsConfig
 from src.mud.engine.core import Engine
 from src.mud.net.v2_server import V2Server
 from src.mud.world.loader import load_world
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_WORLD = REPO_ROOT / "data" / "worlds" / "starting_village.yaml"
+DEFAULT_WORLD = REPO_ROOT / CONFIG_WORLD
 DEFAULT_CLIENTS = 20
 DEFAULT_COMMANDS = 200
 P95_BUDGET_MS = 100.0
@@ -330,6 +332,7 @@ class LoadResult:
     commands_sent: int
     commands_replied: int
     broadcasts: int
+    world_rooms: int
     wall_seconds: float
 
     @property
@@ -381,6 +384,7 @@ class LoadResult:
             "commands_sent": self.commands_sent,
             "commands_replied": self.commands_replied,
             "broadcasts": self.broadcasts,
+            "world_rooms": self.world_rooms,
             "wall_seconds": round(self.wall_seconds, 6),
             "commands_per_second": round(self.command_rate, 3),
             "latency_ms": {
@@ -407,7 +411,8 @@ def format_report(result: LoadResult,
         (f"commands: {result.commands_sent} sent, "
          f"{result.commands_replied} replied in {result.wall_seconds:.3f}s "
          f"({result.command_rate:.0f}/s)"),
-        (f"broadcasts read: {result.broadcasts}"),
+        f"world: {result.world_rooms} rooms",
+        f"broadcasts read: {result.broadcasts}",
         (f"latency ms: p50={result.p50_ms:.3f} p95={result.p95_ms:.3f} "
          f"p99={result.p99_ms:.3f} max={result.max_ms:.3f} "
          f"(n={len(result.latencies_ms)})"),
@@ -446,15 +451,15 @@ async def _wait_for_bind(server: V2Server, task: asyncio.Task,
 
 
 async def _close_all(clients: list[LoadClient]) -> None:
-    """Close clients one at a time, letting the server's cleanup keep up.
+    """Close every client at once.
 
-    Closing all of them at once races the server's `room.leave` cleanup
-    against sockets that are already gone. That is harmless server logging,
-    but it makes a load report noisy, so give each handler a tick.
+    Simultaneous disconnects are part of the load: each handler broadcasts
+    `room.leave` while its peers are closing, which is the cleanup race fixed
+    alongside this harness. A drop for an already-closed target is normal and
+    must not surface as an unhandled handler failure.
     """
-    for client in clients:
-        await client.close()
-        await asyncio.sleep(0.01)
+    await asyncio.gather(
+        *(client.close() for client in clients), return_exceptions=True)
 
 
 def client_names(count: int, prefix: str = "Load") -> list[str]:
@@ -518,6 +523,7 @@ async def run_scenario(
         commands_sent=sum(client.sent for client in load_clients),
         commands_replied=sum(client.replied for client in load_clients),
         broadcasts=sum(client.broadcasts for client in load_clients),
+        world_rooms=0,
         wall_seconds=wall_seconds,
     )
 
@@ -549,12 +555,13 @@ async def run_load(
     task = asyncio.create_task(server.run())
     try:
         await _wait_for_bind(server, task)
-        return await asyncio.wait_for(
+        result = await asyncio.wait_for(
             run_scenario(
                 f"ws://localhost:{server.port}",
                 clients=clients, commands=commands, prefix=prefix),
             timeout=timeout,
         )
+        return replace(result, world_rooms=len(engine.rooms))
     finally:
         server.stop()
         try:
@@ -574,7 +581,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="database path (default: a temporary file)")
     parser.add_argument(
         "--world", type=Path, default=DEFAULT_WORLD,
-        help="world file (default: data/worlds/starting_village.yaml)")
+        help=f"world file or directory (default: {CONFIG_WORLD})")
     parser.add_argument(
         "--budget-ms", type=float, default=P95_BUDGET_MS,
         help="p95 latency budget in milliseconds")

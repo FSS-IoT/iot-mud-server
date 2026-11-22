@@ -92,10 +92,11 @@ idle close is a real disconnect after the character has already slept.
 
 SPEC v2.1.4 criterion 2 is proven by `tests/test_load.py`: 20 in-process
 clients, each sending 200 commands (4,000 total) to a real `V2Server` on an
-ephemeral port with a temporary SQLite database and key registration. The gate
-is **zero protocol errors** and **command p95 ≤ 100 ms**. The run also checks
-the v2 envelope on every message (`v`, `seq`, `data`, request-id pairing), so a
-malformed or misordered reply fails even when the latency is good.
+ephemeral port with a temporary SQLite database and key registration, against
+the 34-room `data/worlds/club_world` product world. The gate is **zero protocol
+errors** and **command p95 ≤ 100 ms**. The run also checks the v2 envelope on
+every message (`v`, `seq`, `data`, request-id pairing), so a malformed or
+misordered reply fails even when the latency is good.
 
 The test is marked `load`. The PR `test` job runs the normal suite with the
 marker excluded:
@@ -158,7 +159,8 @@ the harness deliberately keeps reading.
 The mixed script cycles through `look`, `who`, `inventory`, `examine`, movement
 between two rooms, `say`, and `read`, so room-state rendering and broadcast
 fan-out are under load too. A p95 failure therefore points at the whole path,
-not one command.
+not one command. The clients also close together at the end, which exercises
+the simultaneous-disconnect room cleanup fixed with this ticket.
 
 ### Nightly workflow
 

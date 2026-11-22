@@ -77,6 +77,8 @@ async def test_20_clients_200_commands_zero_protocol_errors_and_p95(tmp_path):
     if summary := os.environ.get("GITHUB_STEP_SUMMARY"):
         _append_step_summary(summary, report)
 
+    # The product world is the 34-room club_world, not the 5-room fixture.
+    assert result.world_rooms >= 30
     assert result.commands_sent == DEFAULT_CLIENTS * DEFAULT_COMMANDS
     assert result.commands_replied == DEFAULT_CLIENTS * DEFAULT_COMMANDS
     assert len(result.latencies_ms) == DEFAULT_CLIENTS * DEFAULT_COMMANDS
