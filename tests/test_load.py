@@ -79,6 +79,7 @@ async def test_20_clients_200_commands_zero_protocol_errors_and_p95(tmp_path):
 
     assert result.commands_sent == DEFAULT_CLIENTS * DEFAULT_COMMANDS
     assert result.commands_replied == DEFAULT_CLIENTS * DEFAULT_COMMANDS
+    assert len(result.latencies_ms) == DEFAULT_CLIENTS * DEFAULT_COMMANDS
     assert result.per_client_counts == [DEFAULT_COMMANDS] * DEFAULT_CLIENTS
     # The mixed script includes say and movement; if no broadcast arrived, the
     # run did not exercise fan-out and the latency number is not the one this
