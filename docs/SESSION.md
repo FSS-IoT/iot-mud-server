@@ -191,6 +191,9 @@ Your client is compatible when it can:
 - render `room.enter` / `room.leave`, `player.said`, `player.emoted`,
   `player.told`, `who.list`, `object.*`, `exit.locked` / `exit.unlocked`,
   `player.inventory`, `notice`, and `error`;
+- render `npc.say`, and treat `npc.enter` / `npc.leave` as optional ambient
+  updates: a wandering NPC may move between rooms during the session, and the
+  next `room.state` already lists it in its new room;
 - keep running after an error or a malformed frame;
 - quit cleanly.
 

@@ -46,6 +46,7 @@ from src.mud.storage.store import (
     StorageWriteError,
     WriteThroughStore,
 )
+from src.mud.world.wander import NpcMove
 
 logger = logging.getLogger(__name__)
 
@@ -217,6 +218,7 @@ class V2Server:
         limits: LimitsConfig | None = None,
         clock: Callable[[], float] | None = None,
         idle_poll_seconds: float = 1.0,
+        tick_seconds: float = 1.0,
     ):
         self.engine = engine
         self.host = host
@@ -238,11 +240,16 @@ class V2Server:
         self.limits = limits if limits is not None else LimitsConfig()
         self.clock = clock if clock is not None else time.monotonic
         self.idle_poll_seconds = idle_poll_seconds
+        # The world tick is wall-clock paced by the server, but game logic
+        # never reads the clock: one tick is one step of the seeded wanderer.
+        # Tests shorten it or call `wander_tick` directly.
+        self.tick_seconds = tick_seconds
         self.db: sqlite3.Connection | None = None
         self.store: WriteThroughStore | None = None
         self._stop_event = asyncio.Event()
         self._server = None
         self._idle_task: asyncio.Task | None = None
+        self._wander_task: asyncio.Task | None = None
         self._sessions: dict[Any, Session] = {}
         self._ws_by_name: dict[str, Any] = {}
 
@@ -819,6 +826,49 @@ class V2Server:
             except Exception:
                 logger.exception("idle sweep failed")
 
+    async def wander_tick(self) -> list[NpcMove]:
+        """Run one 1 Hz world tick and tell each affected room (#82).
+
+        The engine owns the seed, schedule, and mutation; this method is only
+        the transport fan-out. The old room receives `npc.leave`, the new room
+        `npc.enter`; both carry the structured `npc`, `from`, `to`, and
+        `direction` fields. `room.state` (on `look` or a move) remains the
+        resynchronization path for clients that ignore the events.
+
+        The broadcast reuses `_broadcast_room` unchanged and passes an empty
+        exclude name: an NPC move excludes nobody. The task that paces this
+        method is separate from the idle monitor and from connection cleanup
+        (#86).
+        """
+        moves = await self.engine.tick_world()
+        for move in moves:
+            data = move.event_data()
+            await self._broadcast_room(
+                move.from_room.name, "npc.leave",
+                {**data, "text": f"{move.npc_name} leaves."},
+                exclude_name="",
+            )
+            await self._broadcast_room(
+                move.to_room.name, "npc.enter",
+                {**data, "text": f"{move.npc_name} arrives."},
+                exclude_name="",
+            )
+        return moves
+
+    async def _wander_loop(self) -> None:
+        """Pace `wander_tick` at one tick per `tick_seconds` (1 Hz default)."""
+        while not self._stop_event.is_set():
+            try:
+                await asyncio.wait_for(
+                    self._stop_event.wait(), timeout=self.tick_seconds)
+                return
+            except TimeoutError:
+                pass
+            try:
+                await self.wander_tick()
+            except Exception:
+                logger.exception("npc wander tick failed")
+
     async def handler(self, websocket) -> None:
         session = Session(ws=websocket, last_activity=self.clock())
         self._sessions[websocket] = session
@@ -892,6 +942,7 @@ class V2Server:
                 self.handler, self.host, self.port, max_size=65536)
             self.port = self._server.sockets[0].getsockname()[1]
             self._idle_task = asyncio.create_task(self._idle_loop())
+            self._wander_task = asyncio.create_task(self._wander_loop())
             await self._stop_event.wait()
             self._server.close()
             await self._server.wait_closed()
@@ -903,6 +954,13 @@ class V2Server:
                 except asyncio.CancelledError:
                     pass
                 self._idle_task = None
+            if self._wander_task is not None:
+                self._wander_task.cancel()
+                try:
+                    await self._wander_task
+                except asyncio.CancelledError:
+                    pass
+                self._wander_task = None
             if self.store is not None:
                 self.engine.attach_store(None)
                 self.store = None

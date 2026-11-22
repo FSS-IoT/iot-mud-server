@@ -299,6 +299,8 @@ vs "Ada takes the coin.").
 | `room.state` | `room{...}` | Actor only |
 | `room.enter` | `room{id,name}`, `actor{name}`, `direction?`, `reason` (`move`\|`connect`) | Others in the new room |
 | `room.leave` | `room{id,name}`, `actor{name}`, `direction?`, `reason` (`move`\|`disconnect`), `asleep?`, `stone?`, `dropped?[]` | Others in the old room |
+| `npc.enter` | `npc{id,name}`, `from{id,name}`, `to{id,name}`, `direction`, `text` | Everyone in the new room (v2.1) |
+| `npc.leave` | `npc{id,name}`, `from{id,name}`, `to{id,name}`, `direction`, `text` | Everyone in the old room (v2.1) |
 
 A `room.leave` with `reason: "disconnect"` from an authenticated session is a
 sleep, not a removal: `asleep` and `stone` are `true`, and `dropped` lists the
@@ -353,8 +355,8 @@ stays in the room and appears in the next `room.state`.
   `{"id": "<npc id>", "name": "<display name>"}` (v2.1, additive). An NPC is
   not an object: it never appears in `objects`, cannot be taken or dropped,
   and has no carry weight. `id` is the stable id authored in the world file;
-  #82 may move an NPC between rooms but keeps that id. A v2.0 server sends an
-  empty array.
+  a wandering NPC keeps that id when it moves between rooms (#82). A v2.0
+  server sends an empty array.
 - In a dark room (`dark: true`), `exits`, `objects`, `players`, and `npcs` are
   empty, and `data.text` says it is too dark to see. A carried light source must
   be lit (`light <source>`) before it produces the normal state with
@@ -513,8 +515,42 @@ uses no LLM on this path.
   `about` is `error{bad_args}`. Neither emits `npc.say`.
 - NPC dialogue is room-local and needs no state on the client. `room.state`
   is the source for which NPCs are present; an NPC in a dark room is hidden
-  with the rest of the contents. Movement and effects are #82/#84; this
-  release does not move an NPC on its own.
+  with the rest of the contents. Movement is the next section (#82); effects
+  are #84.
+
+### NPC wandering (v2.1, additive)
+
+An NPC authored with `wander: true` moves on the server's 1 Hz world tick. It
+waits `wander_every` ticks between moves (the product world uses 12, 15, or
+20), so a move is due when `tick % wander_every == 0`. An NPC authored with
+`wander: false` never moves.
+
+Movement is deterministic. The world file's `rng_seed` and the NPC's stable
+`id` seed that NPC's stream, so a reload of the same world replays the same
+paths from the first tick; there is no wall-clock or unseeded randomness on
+this path. An NPC takes only an unlocked exit that leads to a room loaded by
+the engine. A locked door, an invalid exit, and an exit with no walkable
+destination are skipped.
+
+An NPC moves between room `npcs` lists, never into `objects` or `contents`.
+Two additive room events announce the move:
+
+| Type | Data | Recipients |
+|---|---|---|
+| `npc.enter` | `npc{id,name}`, `from{id,name}`, `to{id,name}`, `direction`, `text` | Everyone in the new room |
+| `npc.leave` | `npc{id,name}`, `from{id,name}`, `to{id,name}`, `direction`, `text` | Everyone in the old room |
+
+- `npc.id` is the same stable world id `room.state.npcs[].id` publishes.
+- `from` and `to` are the room ids and names on either side of the move;
+  `direction` is the exit the NPC took.
+- `text` is presentation (`Mira the Merchant arrives.`). Structured `npc`,
+  `from`, `to`, and `direction` are the contract.
+- A client may ignore both events: the next `room.state` (sent on `look` and
+  after a successful move) lists the NPC in its current room, so it remains
+  the resynchronization path. A dark room hides its NPCs exactly as it hides
+  its objects.
+- The events are room-local. The mover sends no message; an NPC never
+  initiates dialogue or a command.
 
 ### Carry limit and target resolution (v2.1)
 
@@ -844,8 +880,15 @@ in-progress release; its entry grows as each documented addition lands.
   NPC's `default` line as the unknown-topic fallback. Success emits
   `npc.say{npc{id,name}, topic?, text, self}` to the actor and the room; an
   unknown NPC is `error{not_found}` and a missing `about` is
-  `error{bad_args}`. Dialogue is YAML content, not generated. NPC wandering
-  (#82) and NPC effects (#84) are not part of this entry.
+  `error{bad_args}`. Dialogue is YAML content, not generated. NPC movement and
+  effects are separate entries below; #84 owns effects.
+- NPC wandering (#82): an NPC authored `wander: true` moves on the 1 Hz world
+  tick, every `wander_every` ticks, by an unlocked exit to a loaded room. The
+  path is seeded from `rng_seed` plus the NPC's stable id, so a reload replays
+  it. The old room receives `npc.leave`, the new room `npc.enter`, each with
+  `npc{id,name}`, `from{id,name}`, `to{id,name}`, `direction`, and `text`.
+  `room.state.npcs[]` remains the resynchronization path; `wander: false`
+  never moves.
 
 ### v2.0 — protocol 2
 
