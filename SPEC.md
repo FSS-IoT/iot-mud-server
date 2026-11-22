@@ -39,12 +39,13 @@ v2.
 | v2.1.4 Acceptance | Rate limits, idle timeout, load, docs, ops, club playtest | yes |
 | v2.2 | IoT bridge and optional LLM narration | no, grill first |
 
-**Order:** v2.1.0 blocks identity and world. v2.1.1 builds the persistence
-store (`PlayerStore`/`WorldStore`: the interface plus the SQLite schema for
-location and contents, write-through), and v2.1.2 depends on that store for the
-verb logic, so the two can run in parallel after v2.1.0 without two competing
-persistence layers. v2.1.3 content can start as soon as the YAML format and
-validator exist. v2.1.4 closes the milestone.
+**Order:** v2.1.0 blocks identity and world and builds the write-through store
+(`PlayerStore`/`WorldStore`: the interface plus the SQLite schema for location
+and contents), because its durability criterion needs it. v2.1.1 owns identity
+and the character lifecycle on that store; v2.1.2 depends on it for the verb
+logic, so identity and depth can run in parallel after v2.1.0 without two
+competing persistence layers. v2.1.3 content can start as soon as the YAML
+format and validator exist. v2.1.4 closes the milestone.
 
 ## Acceptance criteria
 
@@ -205,3 +206,6 @@ Each has a resolution and an owner; none blocks the spec signature.
   success event; the password minimum and the name lock are removed.
 - 2026-11-21: milestone split accepted from review. v2.1.1 owns the store
   (`PlayerStore`/`WorldStore`) and v2.1.2 depends on it for the verb logic.
+- 2026-11-21: ticket cut resolved the store ownership. v2.1.0 builds the
+  write-through store because its durability criterion needs it; v2.1.1 owns
+  identity and the character lifecycle on it. No acceptance criterion moved.
