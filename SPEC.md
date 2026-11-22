@@ -8,10 +8,10 @@ Reviewed: Doc's agent, 2026-11-21 — one change requested: v2.1.1 owns the
 store, v2.1.2 depends on it. Applied before merge; the owner accepted with the
 admin bypass.
 
-No v2.1 code is written before the signature line exists. Every PR from a
-non-admin account needs an approving review from another account. Admins can
-bypass with `gh pr merge --admin`, but the fresh review is still the
-expectation.
+No v2.1 code is written before the signature line exists. The merge gate is a
+pull request with the required `test` and `claim-guard` checks; reviews are
+requested when a change is risky or cross-cutting, not for every PR. Admins can
+merge on green checks when no review was requested.
 
 This spec covers **v2.1**. v2.0 (common-server parity) is delivered; v2.2 is a
 placeholder to be grilled later. The historical design is
@@ -209,3 +209,6 @@ Each has a resolution and an owner; none blocks the spec signature.
 - 2026-11-21: ticket cut resolved the store ownership. v2.1.0 builds the
   write-through store because its durability criterion needs it; v2.1.1 owns
   identity and the character lifecycle on it. No acceptance criterion moved.
+- 2026-11-21: the repo-wide required approval was removed. Reviews are
+  request-only for risky or cross-cutting changes; the required checks are
+  `test` and `claim-guard`. CODEOWNERS and the blanket review signoff are gone.

@@ -20,7 +20,8 @@ The spec criterion or user-visible behavior this answers.
 
 ## Review
 
-A fresh session that did not write this code must review it. The reviewer
-checks the linked spec criterion, the red/green evidence, and one mutation:
-break the code on purpose and confirm the check catches it. Approval is the
-signoff; request changes otherwise.
+Request a review when the change is risky or cross-cutting: the protocol,
+persistence, auth, the world format, or a shared contract. Otherwise the
+required `test` and `claim-guard` checks are the gate. A requested reviewer
+checks the linked spec criterion and the red/green evidence, and may ask for a
+mutation check; they do not fix the branch.
