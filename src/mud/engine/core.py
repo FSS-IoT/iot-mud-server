@@ -1,11 +1,22 @@
+from __future__ import annotations
+
 import asyncio
 import re
-from typing import Any, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 from src.mud.content import Entity, Room, Player
 
+if TYPE_CHECKING:
+    from src.mud.storage.store import WriteThroughStore
+
 class Engine:
-    def __init__(self):
-        """The authoritative brain of the MUD."""
+    def __init__(self, store: WriteThroughStore | None = None):
+        """The authoritative brain of the MUD.
+
+        `store` is the write-through seam (SPEC v2.1.0): a take, drop, or move
+        commits there before the engine touches memory, so a failed write
+        raises `StorageWriteError` with memory untouched. None keeps the engine
+        purely in memory for the v1 server and the unit tests.
+        """
         self._rooms: Dict[str, Room] = {}
         self._player_location: Optional[Room] = None
         self.player: Optional[Entity] = None
@@ -14,6 +25,11 @@ class Engine:
         # is authoritative over who is where. Legacy single-player accessors
         # (self.player / self._player_location) remain for backward compatibility.
         self._players: Dict[str, Player] = {}
+        self.store: WriteThroughStore | None = store
+
+    def attach_store(self, store: WriteThroughStore | None) -> None:
+        """Persist each mutation to `store` before applying it in memory."""
+        self.store = store
 
     @property
     def rooms(self) -> Dict[str, Room]:
@@ -85,6 +101,10 @@ class Engine:
         destination = player.location.exits.get(exit_name)
         if not isinstance(destination, Room):
             return False, f"You cannot go {exit_name}."
+
+        # Commit first, then apply, then publish (SPEC v2.1.0 criterion 2).
+        if self.store is not None:
+            self.store.player(name).move(room=destination)
 
         old_name = player.location.name
         player.location.remove_content(player)
@@ -284,6 +304,8 @@ class Engine:
 
         Returns the reply string. Supports both the registered-player path (a
         socket-bound client passes a name) and the legacy single-player slot.
+        With a store attached, the item's new owner commits before the
+        in-memory move; a `StorageWriteError` propagates with nothing changed.
         """
         target_player = self._resolve_player(player_name)
         if target_player is not None:
@@ -295,6 +317,10 @@ class Engine:
             if disambig:
                 return disambig
             if target_item:
+                # Write-through: the take is durable before memory moves.
+                if self.store is not None:
+                    self.store.player(target_player.name).take(
+                        target_item, room=room)
                 room.remove_content(target_item)
                 target_player.add_content(target_item)
                 await self.emit("item_taken", {"item_name": target_item.name.lower(), "owner": target_player.name})
@@ -320,7 +346,9 @@ class Engine:
         """Drop an item named `arg` from the player's inventory into their room.
 
         Returns the reply string. Supports both the registered-player path and the
-        legacy single-player slot.
+        legacy single-player slot. With a store attached, the item's new room
+        commits before the in-memory move; a `StorageWriteError` propagates with
+        nothing changed.
         """
         target_player = self._resolve_player(player_name)
         if target_player is not None:
@@ -332,6 +360,10 @@ class Engine:
             if disambig:
                 return disambig
             if target_item:
+                # Write-through: the drop is durable before memory moves.
+                if self.store is not None:
+                    self.store.player(target_player.name).drop(
+                        target_item, room=room)
                 target_player.remove_content(target_item)
                 room.add_content(target_item)
                 await self.emit("item_dropped", {"item_name": target_item.name.lower(), "location": room.name})
