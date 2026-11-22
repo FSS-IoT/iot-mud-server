@@ -81,3 +81,7 @@ class Room(Entity):
         # (in the room or carried by the observer). The default is a LIT room,
         # so the demo world stays lit until a room opts into darkness.
         self.dark = dark
+        # Optional authoring data for map-rendering clients. The loader
+        # validates it and stores the normalized wire shape; None means the
+        # room has no map, and the protocol omits the field entirely.
+        self.geometry: dict | None = None

@@ -1,23 +1,23 @@
 import json
 from pathlib import Path
-from typing import List
+
 from src.mud.content import Entity, Room
 from src.mud.engine.core import Engine
+from src.mud.world.geometry import validate_geometry
 
-async def load_demo_village(engine: Engine) -> None:
-    """
-    Populates the engine from a JSON definition file.
-    Implements TASK-015: Data-Driven Worlds.
-    """
-    # Find project root relative to this file (src/mud/world/loader.py -> project root)
-    current_file = Path(__file__).resolve()
-    project_root = current_file.parents[3] 
-    data_path = project_root / "data" / "worlds" / "starting_village.json"
-    
-    if not data_path.exists():
-        raise FileNotFoundError(f"World data file not found at {data_path}")
 
-    with open(data_path, 'r') as f:
+async def load_world(engine: Engine, data_path: str | Path) -> None:
+    """Populate the engine from a world JSON file.
+
+    Geometry is validated while the world loads: a bad map raises
+    `WorldDataError` instead of being served. A room without a `geometry` key
+    stays geometry-less, and the protocol simply omits the field.
+    """
+    path = Path(data_path)
+    if not path.exists():
+        raise FileNotFoundError(f"World data file not found at {path}")
+
+    with open(path, 'r') as f:
         data = json.load(f)
 
     # Maps to hold created objects during construction phase
@@ -61,7 +61,7 @@ async def load_demo_village(engine: Engine) -> None:
         room.item_id = r_data["id"]
         room_map[r_data["id"]] = room
 
-    # 3. Third pass: Establish interconnections (Exits) and Inventory
+    # 3. Third pass: Establish interconnections (Exits), geometry, and Inventory
     for r_data in data.get("rooms", []):
         current_room = room_map[r_data["id"]]
 
@@ -69,6 +69,13 @@ async def load_demo_village(engine: Engine) -> None:
         for exit_name, target_room_id in r_data.get("exits", {}).items():
             if target_room_id in room_map:
                 current_room.exits[exit_name] = room_map[target_room_id]
+
+        # Validate against the resolved exits so the map can never describe a
+        # door the engine cannot walk through.
+        if "geometry" in r_data:
+            current_room.geometry = validate_geometry(
+                r_data["id"], r_data["geometry"], current_room.exits,
+            )
 
         # Handle a fixed light source in the room, if any. The value is the id of
         # an item (built in pass 1); that item sheds light on the room so it is
@@ -85,13 +92,26 @@ async def load_demo_village(engine: Engine) -> None:
     # 4. Finalize Engine state
     for room in room_map.values():
         engine._rooms[room.name] = room
-    
+
     start_room_id = data.get("start_location")
     if start_room_id in room_map:
         engine._player_location = room_map[start_room_id]
-    
+
     # Spawn legacy single-player placeholder. It is kept on the engine for
     # backward compatibility but must NOT be added to a room's contents: it is
     # not a real item, and showing up as one would make `look` report "Here you
     # see: Adventurer" — confusing phantom clutter in an otherwise empty start room.
     engine.player = Entity("Adventurer", "A traveler passing through.")
+
+
+async def load_demo_village(engine: Engine) -> None:
+    """
+    Populates the engine from a JSON definition file.
+    Implements TASK-015: Data-Driven Worlds.
+    """
+    # Find project root relative to this file (src/mud/world/loader.py -> project root)
+    current_file = Path(__file__).resolve()
+    project_root = current_file.parents[3]
+    data_path = project_root / "data" / "worlds" / "starting_village.json"
+
+    await load_world(engine, data_path)
