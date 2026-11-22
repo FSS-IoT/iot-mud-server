@@ -1,9 +1,9 @@
 """Red-green: `close` and `get <item> from <container>` (SPEC v2.1.2 #76).
 
-`open <container>` lifts the lid and, as in v2.0, spills its loot into the
-room. `close <container>` puts the lid back down. `get <item> from <container>`
-takes one item out of an **open** container into the actor's inventory, with
-the same typed events as the other object verbs.
+`open <container>` lifts the lid and lists what is inside, keeping the contents
+in the container. `get <item> from <container>` pulls one item out into the
+actor's inventory, and `close <container>` puts the lid back down. This is the
+v2.1 container flow (#76); v2.0 spilled loot onto the room floor.
 
 These tests are written before the verbs exist, so they fail now (RED).
 """
@@ -100,15 +100,24 @@ async def test_close_a_plain_item_refuses():
 
 
 @pytest.mark.asyncio
-async def test_get_from_an_open_container_moves_it_to_inventory():
-    engine, player, _room, chest, coin = _market(container_open=True)
+async def test_open_get_close_flow_keeps_contents_until_get():
+    """The normal command path: open lists, get pulls one out, close shuts."""
+    engine, player, room, chest, coin = _market(container_open=False)
 
-    response = await engine.process_command("get coin from chest", "Ada")
+    opened = await engine.process_command("open chest", "Ada")
+    assert chest.open is True
+    assert "coin" in opened.lower()
+    assert coin in chest.contents
+    assert coin not in room.contents
 
-    assert response == "You get the Coin from the Chest."
+    got = await engine.process_command("get coin from chest", "Ada")
+    assert got == "You get the Coin from the Chest."
     assert coin in player.contents
     assert coin not in chest.contents
-    assert chest.open is True
+
+    closed = await engine.process_command("close chest", "Ada")
+    assert closed == "You close the Chest."
+    assert chest.open is False
 
 
 @pytest.mark.asyncio
@@ -201,7 +210,8 @@ async def test_close_already_closed_is_typed():
 
 @pytest.mark.asyncio
 async def test_get_emits_object_got_and_inventory_follow_up():
-    engine, player, _room, chest, coin = _market(container_open=True)
+    engine, player, _room, chest, coin = _market()
+    await execute(engine, "Ada", "open chest")
 
     result = await execute(engine, "Ada", "get coin from chest")
 

@@ -446,6 +446,11 @@ remove-on-disconnect behavior.
 | `object.lit` | `object{id,kind,name,lit}`, `by`, `self` | Room |
 | `object.unlocked` | `object{id,kind,name}`, `by`, `self` | Room |
 
+`open <container>` sets the container's lid state and lists what is inside in
+the reply text. The contents stay inside; since v2.1 (#76) opening no longer
+spills loot into the room, so a plain `take` cannot reach it. `get <item> from
+<container>` pulls one item out; `close <container>` shuts the lid.
+
 `close <container>` closes an open container and emits `object.closed` to the
 actor (`self: true`) and the room (`self: false`). Closing an already closed
 container is `error{already_closed}`; a plain item is `error{bad_args}`.
@@ -514,7 +519,7 @@ protocol version, `4004` idle timeout, `4005` rate-limit abuse. v2.0 uses
 | `take <x>` / `get <x>` | `object.taken` (actor `self:true` + room `self:false`) + `player.inventory` |
 | `drop <x>` | `object.dropped` + `player.inventory` |
 | `put <x> in <y>` | `object.put` + `player.inventory` |
-| `open <x>` | `object.opened` (container contents in text; an empty unlocked container also emits it; an open one is `error{already_open}`) |
+| `open <x>` | `object.opened` (contents listed in text and kept inside; an empty unlocked container also emits it; an open one is `error{already_open}`) |
 | `close <x>` | `object.closed` (or `error{already_closed}` / `error{bad_args}` for a non-container) |
 | `get <x> from <y>` | `object.got` (actor `self:true` + room `self:false`) + `player.inventory`; closed container `error{container_closed}`, item not inside `error{not_here}`, fixed item `error{not_portable}` |
 | `use <key> on <container>` | `object.unlocked` (or `error{locked}` / `error{already_open}`) |
@@ -570,12 +575,14 @@ in-progress release; its entry grows as each documented addition lands.
   character in place, drops `dropped_on_sleep` items into its room, and login
   wakes it with the rest of its inventory.
 - Containers carry an explicit `open` state, authored as `state.open` and
-  exposed as `objects[].open` (additive). `close <container>` emits
-  `object.closed`; `get <item> from <container>` emits `object.got` plus the
-  `player.inventory` follow-up and requires an open container. Typed errors:
-  `container_closed`, `not_portable`, `not_here` (item not inside),
-  `already_closed`, and `already_open` for `open`. Opening an already open
-  container no longer repeats the open.
+  exposed as `objects[].open` (additive). `open <container>` lists the contents
+  and keeps them inside (v2.0 spilled them into the room; that behavior is
+  replaced). `close <container>` emits `object.closed`; `get <item> from
+  <container>` emits `object.got` plus the `player.inventory` follow-up and
+  requires an open container. Typed errors: `container_closed`,
+  `not_portable`, `not_here` (item not inside), `already_closed`, and
+  `already_open` for `open`. Opening an already open container no longer
+  repeats the open.
 - `room.state` player entries and `room.leave` carry `asleep`/`stone` (and
   `dropped[]` on a sleep) for a stone occupant.
 - `room.state.data.room.geometry`: the optional room map, with its validation

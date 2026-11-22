@@ -657,12 +657,11 @@ class Engine:
         """Open a container: `open <chest>`.
 
         A locked container refuses. An already-open one refuses with
-        `already_open`. An open container with nothing inside reports empty.
-        Otherwise every item it holds is spilled into the player's room so a
-        plain `take <loot>` can then pick it up, and a `chest_opened` event
-        fires. The container's explicit `open` flag is set (#76), so `close`
-        and `get <item> from <container>` can read it. Names are resolved by
-        the same forgiving match as take/examine. Returns the reply string.
+        `already_open`. Opening sets the explicit `open` flag (#76) and
+        reports what is inside; it does not move anything. `get <item> from
+        <container>` pulls one item out, and `close` puts the lid back down.
+        An empty container reports empty. Names are resolved by the same
+        forgiving match as take/examine. Returns the reply string.
         """
         target_player = self._resolve_player(player_name)
         if target_player is not None:
@@ -696,9 +695,6 @@ class Engine:
         if not loot:
             return f"The {container.name} is empty."
 
-        for item in loot:
-            container.remove_content(item)
-            room.add_content(item)
         await self.emit("chest_opened", {"item_name": container.name.lower(), "location": room.name})
 
         listed = ", ".join(sorted(c.name for c in loot))
@@ -1146,8 +1142,8 @@ class Engine:
                 matched = True
 
         # OPEN — open a container: `open <chest>`. A locked one refuses; an
-        # open, empty one reports empty; otherwise its contents spill into the
-        # room so a plain `take` can then pick them up.
+        # open, empty one reports empty; otherwise it lists the contents and
+        # keeps them inside so `get <item> from <chest>` can pull one out.
         elif resolved_verb == "open":
             if not resolved_arg:
                 response = "Open what? Try `open <chest>`."

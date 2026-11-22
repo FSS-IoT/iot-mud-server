@@ -76,7 +76,7 @@ async def test_take_emits_object_event_and_inventory(vault):
 
 
 @pytest.mark.asyncio
-async def test_use_unlocks_container_then_open_spills_loot(vault):
+async def test_use_unlocks_container_then_open_lists_contents(vault):
     engine, _player, room, chest, coin, _key = vault
 
     unlocked = await execute(engine, "Ada", "use gold key on chest")
@@ -87,7 +87,10 @@ async def test_use_unlocks_container_then_open_spills_loot(vault):
     opened = await execute(engine, "Ada", "open chest")
     assert _events(opened, "object.opened", "actor")
     assert _events(opened, "object.opened", "room")
-    assert coin in room.contents
+    assert chest.open is True
+    assert "Coin" in opened.events[0].data["text"]
+    assert coin in chest.contents
+    assert coin not in room.contents
 
 
 @pytest.mark.asyncio

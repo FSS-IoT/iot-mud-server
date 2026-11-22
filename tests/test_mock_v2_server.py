@@ -121,8 +121,9 @@ async def test_mock_runs_the_session_and_container_flow():
             opened = await _next(ws, "object.opened")
             assert "brass lantern" in opened["data"]["text"].lower()
 
-            await _send(ws, "input", {"text": "take brass lantern"}, 11)
-            await _next(ws, "object.taken")
+            await _send(ws, "input", {"text": "get brass lantern from chest"}, 11)
+            got = await _next(ws, "object.got")
+            assert got["data"]["container"]["id"] == "chest_forest"
 
             await _send(ws, "input", {"text": "put brass lantern in chest"}, 12)
             put = await _next(ws, "object.put")

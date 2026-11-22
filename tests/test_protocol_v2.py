@@ -524,7 +524,7 @@ async def test_dark_room_state_hides_contents(server):
 
 @pytest.mark.asyncio
 async def test_container_sequence_over_websocket(server):
-    """The v2.0 lock/open/take/put path works end-to-end over the socket."""
+    """The lock/open/get/put container path works end-to-end over the socket."""
     instance, _ = server
     async with V2Client(f"ws://localhost:{instance.port}") as ada:
         await ada.register("Ada")
@@ -557,8 +557,10 @@ async def test_container_sequence_over_websocket(server):
         opened = await ada.next("object.opened")
         assert "brass lantern" in opened["data"]["text"].lower()
 
-        await ada.input("take brass lantern", 12)
-        await ada.next("object.taken")
+        await ada.input("get brass lantern from chest", 12)
+        got = await ada.next("object.got")
+        assert got["data"]["container"]["id"] == "chest_forest"
+        assert got["data"]["self"] is True
 
         await ada.input("put brass lantern in chest", 13)
         put = await ada.next("object.put")
