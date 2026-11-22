@@ -238,7 +238,8 @@ async def test_move_broadcasts_leave_and_enter(server):
 
 
 @pytest.mark.asyncio
-async def test_take_drop_and_inventory(server):
+async def test_take_does_not_relist_inventory(server):
+    """`take` emits both object.taken events and no inventory follow-up."""
     instance, _engine = server
     async with V2Client(f"ws://localhost:{instance.port}") as ada, \
             V2Client(f"ws://localhost:{instance.port}") as ben:
@@ -253,18 +254,29 @@ async def test_take_drop_and_inventory(server):
 
         await ada.input("take gold coin", 2)
         taken = await ada.next("object.taken")
-        inventory = await ada.next("player.inventory")
         other = await ben.next("object.taken")
 
         assert taken["id"] == 2
         assert taken["data"]["self"] is True
         assert taken["data"]["object"]["id"] == "gold_coin"
-        assert inventory["data"]["items"][0]["id"] == "gold_coin"
-        assert inventory.get("id") is None
         assert other["data"]["self"] is False
         assert "Ada picks up" in other["data"]["text"]
 
-        await ada.input("drop gold coin", 3)
+        # `take` pushes no unsolicited `player.inventory`: the next inventory
+        # event must answer the explicit request and echo its id. Ambient
+        # events, if any, are skipped.
+        await ada.input("inventory", 3)
+        while True:
+            message = await ada.next_any()
+            if message.get("type") == "player.inventory":
+                break
+        inventory = message
+        assert inventory.get("id") == 3
+        assert [item["id"] for item in inventory["data"]["items"]] == [
+            "gold_coin"]
+
+        # `drop` is unchanged; #56 owns its inventory follow-up.
+        await ada.input("drop gold coin", 4)
         dropped = await ada.next("object.dropped")
         empty = await ada.next("player.inventory")
         other_drop = await ben.next("object.dropped")

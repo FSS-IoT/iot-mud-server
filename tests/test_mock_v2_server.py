@@ -97,39 +97,48 @@ async def test_mock_runs_the_session_and_container_flow():
 
             await _send(ws, "input", {"text": "take torch"}, 3)
             assert (await _next(ws, "object.taken"))["data"]["object"]["name"] == "Torch"
-            await _send(ws, "input", {"text": "take gold key"}, 4)
+            # `take` has no inventory follow-up; the explicit request answers
+            # as the very next frame on this connection.
+            await _send(ws, "input", {"text": "inventory"}, 4)
+            inventory = json.loads(
+                await asyncio.wait_for(ws.recv(), timeout=2.0))
+            assert inventory["type"] == "player.inventory"
+            assert inventory["id"] == 4
+            assert [item["name"] for item in inventory["data"]["items"]] == [
+                "Torch"]
+            await _send(ws, "input", {"text": "take gold key"}, 5)
             assert (await _next(ws, "object.taken"))["data"]["object"]["name"] == "Gold Key"
 
-            await _send(ws, "input", {"text": "light torch"}, 5)
+            await _send(ws, "input", {"text": "light torch"}, 6)
             lit = await _next(ws, "object.lit")
             assert lit["data"]["object"]["lit"] is True
 
-            await _send(ws, "input", {"text": "go east"}, 6)
+            await _send(ws, "input", {"text": "go east"}, 7)
             await _next(ws, "room.state")
-            await _send(ws, "input", {"text": "go north"}, 7)
+            await _send(ws, "input", {"text": "go north"}, 8)
             forest = await _next(ws, "room.state")
             assert forest["data"]["room"]["id"] == "forest"
             assert forest["data"]["room"]["dark"] is False
 
-            await _send(ws, "input", {"text": "open chest"}, 8)
+            await _send(ws, "input", {"text": "open chest"}, 9)
             assert (await _next(ws, "error"))["data"]["code"] == "locked"
 
-            await _send(ws, "input", {"text": "use gold key on chest"}, 9)
+            await _send(ws, "input", {"text": "use gold key on chest"}, 10)
             assert (await _next(ws, "object.unlocked"))["data"]["self"] is True
 
-            await _send(ws, "input", {"text": "open chest"}, 10)
+            await _send(ws, "input", {"text": "open chest"}, 11)
             opened = await _next(ws, "object.opened")
             assert "brass lantern" in opened["data"]["text"].lower()
 
-            await _send(ws, "input", {"text": "get brass lantern from chest"}, 11)
+            await _send(ws, "input", {"text": "get brass lantern from chest"}, 12)
             got = await _next(ws, "object.got")
             assert got["data"]["container"]["id"] == "chest_forest"
 
-            await _send(ws, "input", {"text": "put brass lantern in chest"}, 12)
+            await _send(ws, "input", {"text": "put brass lantern in chest"}, 13)
             put = await _next(ws, "object.put")
             assert put["data"]["container"]["id"] == "chest_forest"
 
-            await _send(ws, "input", {"text": "say hello"}, 13)
+            await _send(ws, "input", {"text": "say hello"}, 14)
             said = await _next(ws, "player.said")
             assert said["data"]["self"] is True
             assert said["data"]["from"] == "Ada"
