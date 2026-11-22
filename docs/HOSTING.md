@@ -14,17 +14,23 @@ changes, share the machine.
 
 ### 1. Run the server on a reachable interface
 
-The default binds `localhost`, which only works on the host itself:
+The default binds `localhost`, which only works on the host itself. Seed the
+database once before the first start; the world is YAML content and the
+character state is durable SQLite:
 
 ```bash
+uv run python -m src.mud.admin seed --db data/mud.db
 ./run_server.sh --host 0.0.0.0 --port 8765
 ```
 
 `0.0.0.0` is safe only with the firewall rule below. On a machine with a stable
 tailnet address, `--host <100.x address>` is stricter; either works.
 
-The world is in memory in v2.0. A restart resets it; there is no state to back
-up until v2.1 persistence lands. Keep the host awake for the session.
+**The world and characters are durable in v2.1.** A restart keeps the same
+database, the same world epoch, and every character's room, inventory, and
+sleep state. Back up the database with `admin backup` while the server is
+stopped; see [`OPERATIONS.md`](OPERATIONS.md). Keep the host awake for the
+session, but a restart is no longer a reset.
 
 ### 2. Open the port on the tailnet interface only
 
@@ -91,7 +97,7 @@ Admin console -> **Machines** -> the host -> **Share**.
 
 The recipient reaches the shared machine by its **fully qualified name**:
 
-```
+```text
 <host>.<host-tailnet>.ts.net
 ```
 
@@ -119,7 +125,7 @@ the host can change without changing the protocol.
 
 4. Connect your client to the URL the host published:
 
-   ```
+   ```text
    ws://<host>.<host-tailnet>.ts.net:8765
    ```
 
@@ -132,8 +138,10 @@ the host can change without changing the protocol.
    websocat ws://<host>.<host-tailnet>.ts.net:8765
    ```
 
-   The first message is `hello` with `protocol: [2]`. The reference client in
-   `examples/reference_client.py` is a worked example.
+   The first message is `hello` with `protocol: [2]`. Send `auth` with
+   `mode: "register"` once to get a key; keep it out of the repository. The
+   reference client in `examples/reference_client.py` is a worked example, and
+   [`CLIENTS.md`](CLIENTS.md) is the onboarding path.
 
 ## Troubleshooting
 
@@ -160,9 +168,10 @@ run the server on a laptop, bind `0.0.0.0`, and give the LAN address. It removes
 accounts, ACLs, and share links from the event, and the protocol is the same.
 Use the tailnet for members who are remote, and for later sessions.
 
-Run one authoritative server. v2.0 keeps the world in memory, so two hosts are
-two worlds, and a restart is a reset. Do not start a second copy on another
-member's machine "just in case."
+Run one authoritative server. v2.1 keeps one world in one database, so two
+hosts are two worlds even when they run the same YAML. Do not start a second
+copy on another member's machine "just in case"; point every client at the one
+host that owns the database.
 
 ## When the club grows
 
@@ -182,5 +191,7 @@ policy has been audited.
 ## What this page does not cover
 
 Public access. Funnel or a public reverse proxy is a different design: it needs
-TLS (`wss://`), application auth (v2.1), rate limiting, and a security review.
-The tailnet is the perimeter for v2.0; keep it that way until auth lands.
+TLS (`wss://`), application auth policy (v2.1 has character keys, not a public
+account system), rate limiting, and a security review. The tailnet is the
+perimeter for the club server; keep it that way. A public deployment must not
+put a bare `ws://` MUD on the internet.

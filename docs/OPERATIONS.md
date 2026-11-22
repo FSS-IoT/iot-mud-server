@@ -48,6 +48,83 @@ Run the admin commands as root against the absolute database path. Restoring as
 root creates a root-owned database file, so give it back to the service user
 before starting (shown under [Restore](#restore)).
 
+## Configuration
+
+One TOML file holds every runtime setting. The server reads `./mud.toml` when
+it exists (or the path given with `--config`), and every admin command that
+touches the database accepts the same flags:
+
+```toml
+[storage]
+path = "data/mud.db"
+
+[auth]
+max_attempts = 20
+window_seconds = 60
+
+[limits]
+commands_per_second = 10
+command_burst = 20
+idle_timeout_seconds = 900
+
+[features]
+effects = false
+```
+
+The defaults are shown. A missing default `mud.toml` is fine; a missing
+`--config` file is an error, and a malformed value is an error naming the file
+and key. The server reads the file at startup, so restart the service after a
+change.
+
+| Section | Key | Meaning |
+|---|---|---|
+| `[storage]` | `path` | SQLite database path. `--db` wins over this; the built-in default is `data/mud.db`. |
+| `[auth]` | `max_attempts` | Failed auth exchanges allowed per connection inside the window. A positive integer. |
+| `[auth]` | `window_seconds` | Length of the auth-failure window. A positive finite number. |
+| `[limits]` | `commands_per_second` | Token-bucket refill rate for `input`, per connection. A positive finite number. |
+| `[limits]` | `command_burst` | Bucket size; the burst a client may spend at once. A positive integer. |
+| `[limits]` | `idle_timeout_seconds` | Silence before an authenticated character sleeps. A positive finite number. |
+| `[features]` | `effects` | `true` sends authored `effect` events to the room; `false` (default) keeps them on the bus and in `event_log`. |
+
+Auth and command limits are **separate budgets**. `[auth]` bounds guessing at
+a key; `[limits]` bounds command traffic from an authenticated session. A
+failed login does not spend a command token, and a command burst does not count
+toward the auth budget. Neither limiter stores state in SQLite, and neither is
+keyed by character name: one connection's budget cannot lock a character out.
+
+`[features].effects` changes delivery only. The engine publishes every authored
+effect and appends the `event_log` row whether the flag is on or off, so
+disabling effects cannot change a reply, location, inventory, lock, or NPC
+position.
+
+Character keys are not configured here. `admin rekey <name>` issues a new key
+and revokes the old one; it prints the new key once and stores only the key id,
+salt, and scrypt hash. See `PROTOCOL.md`, "v2.1 auth".
+
+## Seed and reset
+
+The server does **not** invent a world. Seed the database before the first
+start; an unseeded database is not the supported deployment for players:
+
+```bash
+uv run python -m src.mud.admin seed --db data/mud.db
+```
+
+`admin seed` creates the database and applies the schema if needed, validates
+the YAML world first, and records the world name and epoch. Seeding a database
+that already holds a world is refused; replacing it needs an explicit reset:
+
+```bash
+uv run python -m src.mud.admin seed --db data/mud.db --reset --yes
+```
+
+`--reset` without `--yes` prints the destructive warning and exits 2. A reset
+replaces rooms, exits, objects, and NPCs, clears every character's inventory,
+and moves every character to the new start room. Characters and character keys
+are kept; the epoch changes, so clients drop cached maps. Use
+`--world PATH` to seed a world other than the built-in
+`data/worlds/club_world`, and `content check` first when authoring.
+
 ## Runtime limits
 
 Command rate limits and the idle timeout live in the same `mud.toml` as auth,
@@ -190,7 +267,7 @@ What the numbers mean when it fails:
 ## First start
 
 Install the dependencies in the checkout once. Then seed the world before the
-first start; the unit will not invent one:
+first start (the [seed section](#seed-and-reset) has the semantics):
 
 ```bash
 cd /opt/iot-mud
@@ -250,7 +327,7 @@ What the command does and refuses:
 
 Success prints one line:
 
-```
+```text
 backed up data/mud.db to /var/backups/iot-mud/mud-2026-11-21.db (schema version 1)
 ```
 
@@ -302,7 +379,7 @@ The restore refuses:
 An older backup is allowed: it is migrated to this server's schema before it
 replaces the target. Success names both versions:
 
-```
+```text
 restored <backup> to <target> (migrated schema version <old> -> <current>)
 ```
 
@@ -385,13 +462,13 @@ newer tables or columns, and a downgrade migration does not exist.
 
 The server and `admin restore` refuse with the same message:
 
-```
+```text
 <path> has schema version <new>, newer than this server supports (<supported>); upgrade the server or restore an older backup
 ```
 
 For example:
 
-```
+```text
 /var/lib/iot-mud/mud.db has schema version 2, newer than this server supports (1); upgrade the server or restore an older backup
 ```
 
