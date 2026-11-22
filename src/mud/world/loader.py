@@ -63,6 +63,7 @@ async def _load_yaml_world(engine: Engine, data_path: Path) -> None:
                 locked=obj.locked,
                 required_key=obj.required_key,
                 lit=obj.lit,
+                dropped_on_sleep=obj.dropped_on_sleep,
             )
             entity.instance_id = obj.id
             # Kept for the v2.1.3 read/effects seam. The v2.0 adapter reads
@@ -162,6 +163,7 @@ async def _load_json_world(engine: Engine, data_path: Path) -> None:
             item_id=i_data.get("id"),
             locked=bool(i_data.get("locked", False)),
             required_key=i_data.get("required_key"),
+            dropped_on_sleep=bool(i_data.get("dropped_on_sleep", False)),
         )
         item.instance_id = i_data["id"]
         item_map[i_data["id"]] = item

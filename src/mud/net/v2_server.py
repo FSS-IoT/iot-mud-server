@@ -38,8 +38,12 @@ from src.mud.protocol.v2 import (
     utc_now,
 )
 from src.mud.storage.db import DatabaseError, open_database
-from src.mud.storage.keys import room_key
-from src.mud.storage.store import PlayerStore, WriteThroughStore
+from src.mud.storage.keys import object_key, room_key
+from src.mud.storage.store import (
+    PlayerStore,
+    StorageWriteError,
+    WriteThroughStore,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +120,9 @@ class Session:
     seq: int = 0
     player_name: str | None = None
     joined: bool = False
+    # True for the durable character paths (`auth` register/login). A guest
+    # `join` leaves it False and keeps the v2.0 remove-on-disconnect behavior.
+    authenticated: bool = False
 
 
 class V2Server:
@@ -340,6 +347,7 @@ class V2Server:
         player = self.engine.register_player(registration.name)
         session.player_name = registration.name
         session.joined = True
+        session.authenticated = True
         self._ws_by_name[registration.name] = ws
 
         # The key appears here and nowhere else: not in the session, the room
@@ -380,26 +388,44 @@ class V2Server:
                 ws, session, exc.code, str(exc), msg_id)
             return
 
-        if self.engine.get_player(login.name) is not None:
+        existing = self.engine.get_player(login.name)
+        if existing is not None and not existing.asleep:
             await self._send_auth_error(
                 ws, session, "name_taken",
                 "That character is already in play.", msg_id)
             return
 
         # Login wakes the character where the store left it, carrying what the
-        # store says it owns (#71). The world was loaded from content, so the
-        # engine has to move those objects out of the room or container the
-        # loader authored them into.
-        character = PlayerStore(self.db, login.name).load()
-        player = self.engine.register_player(login.name)
-        self.engine.restore_player(
-            player,
-            room=self._room_by_key(character.room_id),
-            item_keys=character.items,
-        )
+        # store says it owns (#71). The same-process case already has the room
+        # and the remaining inventory in memory because sleep kept them (#72);
+        # after a restart the world was reloaded, so the engine has to move
+        # those objects out of the room or container the loader authored them
+        # into.
+        if existing is not None:
+            player = existing
+        else:
+            character = PlayerStore(self.db, login.name).load()
+            player = self.engine.register_player(login.name)
+            self.engine.restore_player(
+                player,
+                room=self._room_by_key(character.room_id),
+                item_keys=character.items,
+            )
+
+        try:
+            self.engine.wake_player(login.name)
+        except StorageWriteError:
+            logger.exception("could not wake %s", login.name)
+            if existing is None:
+                self.engine.remove_player(login.name)
+            await self._send_auth_error(
+                ws, session, "internal",
+                "The character could not be woken right now.", msg_id)
+            return
 
         session.player_name = login.name
         session.joined = True
+        session.authenticated = True
         self._ws_by_name[login.name] = ws
 
         # No key field: a login response never repeats the credential.
@@ -511,18 +537,48 @@ class V2Server:
         name = session.player_name
         if name is None:
             return
-        player = self.engine.get_player(name)
-        if player is not None:
+        try:
+            player = self.engine.get_player(name)
+            if player is None:
+                return
             room = player.location
-            if room is not None:
-                await self._broadcast_room(room.name, "room.leave", {
-                    "room": {"id": _room_id(room), "name": room.name},
-                    "actor": {"name": name},
-                    "reason": "disconnect",
-                    "text": f"{name} has left.",
-                }, exclude_name=name)
-            self.engine.remove_player(name)
-        self._ws_by_name.pop(name, None)
+            if session.authenticated:
+                # The durable character sleeps in place (#72). Only items
+                # marked `dropped_on_sleep` drop into the room; the rest of
+                # the inventory stays. The store commits each drop before the
+                # engine moves it.
+                dropped = []
+                try:
+                    dropped = self.engine.sleep_player(name)
+                except StorageWriteError:
+                    logger.exception("could not persist sleep for %s", name)
+                    player.asleep = True
+                if room is not None:
+                    await self._broadcast_room(room.name, "room.leave", {
+                        "room": {"id": _room_id(room), "name": room.name},
+                        "actor": {"name": name},
+                        "reason": "disconnect",
+                        "asleep": True,
+                        "stone": True,
+                        "dropped": [
+                            {"id": object_key(item), "name": item.name}
+                            for item in dropped
+                        ],
+                        "text": f"{name} turns to stone.",
+                    }, exclude_name=name)
+            else:
+                # The explicit guest path keeps the v2.0 remove-on-disconnect
+                # behavior: there is no durable character to sleep.
+                if room is not None:
+                    await self._broadcast_room(room.name, "room.leave", {
+                        "room": {"id": _room_id(room), "name": room.name},
+                        "actor": {"name": name},
+                        "reason": "disconnect",
+                        "text": f"{name} has left.",
+                    }, exclude_name=name)
+                self.engine.remove_player(name)
+        finally:
+            self._ws_by_name.pop(name, None)
 
     async def handler(self, websocket) -> None:
         session = Session(ws=websocket)

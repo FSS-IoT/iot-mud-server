@@ -78,8 +78,10 @@ Each criterion maps to exactly one subticket.
       are rate-limited, and names are not locked.
 - [ ] A character's room and inventory survive a server restart; login resumes
       the same room.
-- [ ] Disconnecting puts the character to sleep in the world; `who` shows it
-      asleep; login wakes it in place with its inventory.
+- [ ] Disconnecting puts the character to sleep (stone, invincible) in the
+      world; `who` and room state show it asleep, `dropped_on_sleep` items drop
+      into the room, the rest of its inventory stays, and login wakes it in
+      place with that inventory.
 - [ ] `admin rekey` issues a new key offline, revokes the old one, and keeps the
       character's room and inventory.
 - [ ] A v2 client that sends `join` without authenticating gets
@@ -180,7 +182,7 @@ v2.1 does **not** deliver:
 | 2026-11-21 | Assignee lock + claim guard + `Touches:` warning + branch protection (merge queue when parallel merges begin) | Agents on different machines and models must not duplicate claims or collide on files. |
 | 2026-11-21 | Close the 28 old M1 tickets and cut a fresh set | They assume a different architecture; a stale ticket is a duplicate-work trap. |
 | 2026-11-21 | Clients pin a server commit; changelog + `hello.server_commit` | A client can see what it is missing and whether the protocol moved. |
-| 2026-11-21 | Disconnect sleeps the character; it stays in the world | Persistent world; reconnect resumes in place with inventory. |
+| 2026-11-22 | Disconnect sleeps the character in place as stone (present and invincible); only `dropped_on_sleep` items drop into the room, the rest of the inventory wakes with it | A sleeping character is not removed from the world; the chest key must be recoverable by other players, while ordinary work stays with its owner. |
 
 ## Open questions
 
@@ -212,3 +214,9 @@ Each has a resolution and an owner; none blocks the spec signature.
 - 2026-11-21: the repo-wide required approval was removed. Reviews are
   request-only for risky or cross-cutting changes; the required checks are
   `test` and `claim-guard`. CODEOWNERS and the blanket review signoff are gone.
+- 2026-11-22: owner revision to v2.1.1 criterion 5. A sleeping character turns
+  to stone in place (present and invincible) instead of being removed. Only
+  items authored `dropped_on_sleep: true` drop into the room; the rest of the
+  inventory stays and wakes with the character. The gold key is tagged; the
+  content model, loader, seeder, engine, server, and protocol docs carry the
+  flag.

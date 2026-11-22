@@ -6,7 +6,8 @@ class Entity:
     def __init__(self, name: str, description: str, weight: float = 0.0,
                  readable: bool = False, light_source: bool = False,
                  item_id: str | None = None, locked: bool = False,
-                 required_key: str | None = None, lit: bool = False):
+                 required_key: str | None = None, lit: bool = False,
+                 dropped_on_sleep: bool = False):
         self.name = name
         self.description = description
         self.weight = weight
@@ -41,6 +42,11 @@ class Entity:
         # a player it lights wherever they stand *only while lit*, so the player
         # must strike it before a dark room becomes visible.
         self.lit = lit
+        # An item that leaves the character when it sleeps and turns to stone
+        # (#72). Authored in YAML/JSON as `dropped_on_sleep: true` and
+        # persisted in `objects.state`; the gold chest key uses it. Everything
+        # else stays in the sleeping character's inventory.
+        self.dropped_on_sleep = dropped_on_sleep
         self.contents: List[Entity] = []
 
     def add_content(self, item: Entity) -> bool:
@@ -65,6 +71,11 @@ class Player(Entity):
     def __init__(self, name: str, description: str = "A player."):
         super().__init__(name=name, description=description)
         self.location: Optional[Room] = None
+        # Sleep is the stone state (#72): the character stays in its room while
+        # its session is gone. It is present, invincible, and not a valid
+        # combat target; login clears the flag. The durable copy lives in
+        # `players.asleep`, and the wire exposes it as `asleep`/`stone`.
+        self.asleep = False
 
 
 class Room(Entity):

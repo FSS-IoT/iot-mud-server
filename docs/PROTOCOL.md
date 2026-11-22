@@ -164,6 +164,11 @@ name exists. The character enters its stored room; a character with no stored
 room, or one whose room is not in the loaded world, enters at the world start
 room.
 
+Login also wakes a sleeping character in place: the durable `players.asleep`
+flag clears, the stone state ends, and the character keeps the inventory it
+carried, except items marked `dropped_on_sleep`, which went to its room when it
+slept. No offline queue is created.
+
 The key is an opaque, high-entropy bearer secret: clients store it outside the
 repository, never log it, and never send it to a different server. The server
 stores only a key id and a one-way hash, never the key, and returns it only in
@@ -229,7 +234,12 @@ vs "Ada takes the coin.").
 |---|---|---|
 | `room.state` | `room{...}` | Actor only |
 | `room.enter` | `room{id,name}`, `actor{name}`, `direction?`, `reason` (`move`\|`connect`) | Others in the new room |
-| `room.leave` | `room{id,name}`, `actor{name}`, `direction?`, `reason` (`move`\|`disconnect`) | Others in the old room |
+| `room.leave` | `room{id,name}`, `actor{name}`, `direction?`, `reason` (`move`\|`disconnect`), `asleep?`, `stone?`, `dropped?[]` | Others in the old room |
+
+A `room.leave` with `reason: "disconnect"` from an authenticated session is a
+sleep, not a removal: `asleep` and `stone` are `true`, and `dropped` lists the
+objects that left the character's inventory (`object{id,name}`). The character
+stays in the room and appears in the next `room.state`.
 
 `room.state.data.room`:
 
@@ -259,7 +269,10 @@ vs "Ada takes the coin.").
 - `portable` is always `true` for v2.0 content; the field is reserved for
   future non-portable objects.
 - `players` lists other people in the room, excluding the recipient. The client
-  adds its own name from `session.ok`.
+  adds its own name from `session.ok`. An awake occupant keeps the v2.0 shape
+  `{"name": "Ben"}`. A sleeping occupant adds `asleep: true` and `stone: true`:
+  the character is still in the room, invincible, and not a valid combat
+  target. No combat consumes the flag yet.
 - `npcs` is empty in v2.0; the field is reserved.
 - In a dark room (`dark: true`), `exits`, `objects`, `players`, and `npcs` are
   empty, and `data.text` says it is too dark to see. A carried light source must
@@ -346,11 +359,36 @@ unknown field.
 | `player.said` | `from`, `text`, `self` | Room, including actor |
 | `player.emoted` | `from`, `text`, `self` | Room (v2.1) |
 | `player.told` | `from`, `to`, `text`, `self` | Target and sender (v2.1) |
-| `who.list` | `players[]{name,room_id}` | Actor only (v2.1) |
+| `who.list` | `players[]{name,room_id,asleep,stone}` | Actor only (v2.1) |
+
+`who.list` is the server-wide roster, including the requester and characters
+whose session ended. `room_id` is the durable room id (or `null` for a guest
+with no room). `asleep` and `stone` are the same state `room.state` exposes: a
+sleeping character is present and invincible. The roster reads the durable
+`players` rows, so a character that slept before a restart is still listed
+asleep in its last room.
 
 `player.said.text` is the rendered line (`Ada says, "hello".`), not the raw
 utterance. A structured raw-message field is a v2.1 candidate; v2.0 clients
 should treat `text` as presentation.
+
+### Sleep and stone (v2.1)
+
+An authenticated disconnect does not remove the character. The server commits
+`players.asleep = 1` and `players.last_seen`, keeps the character in its room,
+and broadcasts `room.leave` with `reason: "disconnect"`, `asleep: true`,
+`stone: true`, and `dropped[]`. Items authored `dropped_on_sleep: true` (the
+gold key in the starting village) are committed to the room through the
+write-through store before memory moves, so another player can pick them up.
+Everything else stays in the character's inventory and wakes with it. No
+offline queue is created.
+
+A sleeping character is stone: present, invincible, and not a valid target for
+future combat. `who.list` and `room.state` player entries expose the state.
+Login clears `players.asleep`, sends `room.state`, and restores the remaining
+inventory. `dropped_on_sleep` items that were dropped stay where they landed.
+The v2.0 guest path (`auth_required: false`, no durable character) keeps the
+remove-on-disconnect behavior.
 
 ### Objects
 
@@ -423,6 +461,7 @@ protocol version, `4004` idle timeout, `4005` rate-limit abuse. v2.0 uses
 | `light <source>` | `object.lit` (or `notice` if already lit / not a light) |
 | `read <x>` | `object.read` (private) |
 | `inventory` / `i` | `player.inventory` (private) |
+| `who` | `who.list` (private, server-wide, includes asleep) |
 | `help` / `h` | `notice` (private) |
 | `say <text>` | actor: `player.said` (`self:true`); room: `player.said` (`self:false`) |
 | `hello` | `notice` (private) |
@@ -456,6 +495,12 @@ in-progress release; its entry grows as each documented addition lands.
   against the same database and changes when `admin seed --reset` replaces the
   world.
 - `player.emoted`, `player.told`, `who.list`, and `shutdown`.
+- `who` lists the server-wide durable roster (`who.list`) with `asleep` and
+  `stone`; an authenticated disconnect sleeps the character in place, drops
+  `dropped_on_sleep` items into its room, and login wakes it with the rest of
+  its inventory.
+- `room.state` player entries and `room.leave` carry `asleep`/`stone` (and
+  `dropped[]` on a sleep) for a stone occupant.
 - `room.state.data.room.geometry`: the optional room map, with its validation
   rules.
 - Error codes `invalid_key`, `invalid_name`, `not_authenticated`, and

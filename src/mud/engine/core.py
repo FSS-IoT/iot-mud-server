@@ -5,7 +5,7 @@ import re
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 from src.mud.content import Entity, Room, Player
-from src.mud.storage.keys import object_key
+from src.mud.storage.keys import object_key, room_key
 
 if TYPE_CHECKING:
     from src.mud.storage.store import WriteThroughStore
@@ -140,6 +140,84 @@ class Engine:
                 continue
             holder.remove_content(item)
             player.add_content(item)
+
+    # --- Sleep, stone, and the who roster (#72) -----------------------------
+
+    def sleep_player(self, name: str) -> list[Entity]:
+        """Put an authenticated character to sleep in place (#72).
+
+        The character stays in its room and turns to stone. Items marked
+        `dropped_on_sleep` (the gold chest key) drop into that room so another
+        player can pick them up; the rest of the inventory stays and wakes with
+        the character. Each drop commits through the store before memory moves,
+        and the sleep flag commits last. Returns the dropped objects.
+        """
+        player = self.get_player(name)
+        if player is None:
+            return []
+        room = player.location
+        dropped: list[Entity] = []
+        if room is not None:
+            for item in list(player.contents):
+                if not getattr(item, "dropped_on_sleep", False):
+                    continue
+                if self.store is not None:
+                    self.store.player(name).drop(item, room=room)
+                player.remove_content(item)
+                room.add_content(item)
+                dropped.append(item)
+        if self.store is not None:
+            self.store.player(name).sleep(room=room)
+        player.asleep = True
+        return dropped
+
+    def wake_player(self, name: str) -> Player | None:
+        """Wake a sleeping character in place (#72).
+
+        The durable flag clears before memory, matching the write-through rule.
+        A missing player returns None; login registers a fresh one first.
+        """
+        player = self.get_player(name)
+        if player is None:
+            return None
+        if self.store is not None:
+            self.store.player(name).wake()
+        player.asleep = False
+        return player
+
+    def who_entries(self) -> list[dict[str, Any]]:
+        """Every character server-wide, awake or asleep/stone (#72).
+
+        The durable roster is the base, so a character whose session ended or
+        whose server restarted still appears asleep in its last room. Live
+        engine players overlay their current room and true sleep flag; a guest
+        with no row is added from memory. Sorted by name for deterministic
+        wire output.
+        """
+        live = {name.lower(): player for name, player in self._players.items()}
+        entries: dict[str, dict[str, Any]] = {}
+        if self.store is not None:
+            for row in self.store.roster():
+                asleep = bool(row.asleep) or row.name.lower() not in live
+                entries[row.name.lower()] = {
+                    "name": row.name,
+                    "room_id": row.room_id,
+                    "asleep": asleep,
+                    "stone": asleep,
+                }
+        for key, player in live.items():
+            asleep = bool(player.asleep)
+            entries[key] = {
+                "name": player.name,
+                "room_id": (
+                    room_key(player.location)
+                    if player.location is not None else None
+                ),
+                "asleep": asleep,
+                "stone": asleep,
+            }
+        return sorted(
+            entries.values(), key=lambda entry: entry["name"].lower())
 
     async def move_player(self, name: str, direction: str) -> tuple[bool, str]:
         """Move a *registered* player one step in `direction`, if an exit allows.
@@ -973,10 +1051,29 @@ class Engine:
                 response = "You are not carrying anything."
             matched = True
 
+        # WHO — the server-wide roster, including characters asleep in stone
+        # (#72). This is the minimal v2.1.1 shape; #75 owns the final social
+        # verbs and may refine the presentation.
+        elif resolved_verb == "who":
+            roster = self.who_entries()
+            if not roster:
+                response = "There is no one in the world."
+            else:
+                listed = []
+                for entry in roster:
+                    state = (
+                        "asleep, turned to stone"
+                        if entry["asleep"] else "awake"
+                    )
+                    where = entry["room_id"] or "nowhere"
+                    listed.append(f"{entry['name']} ({where}, {state})")
+                response = "Characters in the world: " + "; ".join(listed) + "."
+            matched = True
+
         elif resolved_verb == "help":
             response = (
                 "Commands: look (l), go <direction>, exits, take <item>, drop <item>, put <item> in <container>, "
-                "examine <thing> (exam), read <thing> (signs, books), look in <chest>, light <torch/lantern>, inventory (i), say <text>, hello. Try `look` first."
+                "examine <thing> (exam), read <thing> (signs, books), look in <chest>, light <torch/lantern>, inventory (i), who, say <text>, hello. Try `look` first."
             )
             matched = True
 

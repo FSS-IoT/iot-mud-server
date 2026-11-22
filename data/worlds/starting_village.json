@@ -174,7 +174,8 @@
       "id": "key_gold_1",
       "name": "Gold Key",
       "description": "A small gold key, warm to the touch.",
-      "weight": 0.1
+      "weight": 0.1,
+      "dropped_on_sleep": true
     },
     {
       "id": "chest_forest",

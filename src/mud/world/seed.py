@@ -140,6 +140,7 @@ def _object_state(obj: GameObject) -> str:
             "lit": obj.lit,
             "locked": obj.locked,
             "required_key": obj.required_key,
+            "dropped_on_sleep": obj.dropped_on_sleep,
         }
     )
     return json.dumps(state, sort_keys=True)
