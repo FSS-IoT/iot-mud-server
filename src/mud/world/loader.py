@@ -8,6 +8,7 @@ from src.mud.content.models import load_world as load_content_world
 from src.mud.content.validator import validate_world
 from src.mud.engine.core import Engine
 from src.mud.world.geometry import WorldDataError, validate_geometry
+from src.mud.world.wander import NpcWanderer
 
 YAML_SUFFIXES = frozenset({".yaml", ".yml"})
 
@@ -165,6 +166,12 @@ async def _load_yaml_world(engine: Engine, data_path: Path) -> None:
     for room in room_map.values():
         engine._rooms[room.name] = room
     engine._player_location = room_map[world.start_room]
+
+    # 7. Deterministic world motion (#82). The seed is authored content, not a
+    # clock: a reload replays the same NPC paths. The wanderer is built after
+    # every room and NPC exists, and moves only `Room.npcs` from here on.
+    engine.rng_seed = world.rng_seed
+    engine.wanderer = NpcWanderer(engine.rooms, world.rng_seed)
 
     # Keep the legacy single-player placeholder for backward compatibility;
     # it is not a real item and must not be added to a room's contents.

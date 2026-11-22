@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 from src.mud.content import DEFAULT_CARRY_CAPACITY, NPC, Entity, Player, Room
 from src.mud.content.validator import container_cycles
 from src.mud.storage.keys import object_key, room_key
+from src.mud.world.wander import NpcMove, NpcWanderer
 
 if TYPE_CHECKING:
     from src.mud.storage.store import WriteThroughStore
@@ -29,6 +30,12 @@ class Engine:
         # (self.player / self._player_location) remain for backward compatibility.
         self._players: Dict[str, Player] = {}
         self.store: WriteThroughStore | None = store
+        # Deterministic world motion (#82). The loader sets `rng_seed` from the
+        # world file and builds the wanderer once every room and NPC exists;
+        # `tick_world` advances it. `rng_seed` defaults to 0 for the legacy
+        # JSON world and in-memory tests, which still get a reproducible path.
+        self.rng_seed: int = 0
+        self.wanderer: NpcWanderer | None = None
 
     def attach_store(self, store: WriteThroughStore | None) -> None:
         """Persist each mutation to `store` before applying it in memory."""
@@ -47,6 +54,25 @@ class Engine:
     def get_room(self, name: str) -> Optional[Room]:
         """Return the room with this name, or None."""
         return self._rooms.get(name)
+
+    # --- NPC wandering (#82) -------------------------------------------------
+
+    async def tick_world(self) -> list[NpcMove]:
+        """Advance NPC wandering by one 1 Hz world tick.
+
+        The engine owns the seed and the schedule; the server only decides
+        when a second has passed. A world loaded before this method is first
+        called gets its wanderer here, so a caller that never runs a clock
+        (the unit tests) can still drive the same path explicitly. Each move
+        emits `npc_moved` with the NPC's stable id and both room ids, which
+        the network layer turns into room-local `npc.leave`/`npc.enter`.
+        """
+        if self.wanderer is None:
+            self.wanderer = NpcWanderer(self._rooms, self.rng_seed)
+        moves = self.wanderer.step()
+        for move in moves:
+            await self.emit("npc_moved", move.event_data())
+        return moves
 
     # --- Player registry -----------------------------------------------------
 
