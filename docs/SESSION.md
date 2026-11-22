@@ -52,8 +52,9 @@ Use two characters, **Ada** and **Ben**.
    Marketplace. Ada, already there, receives `room.enter` with
    `actor.name: "Ben"` and `reason: "move"`.
 6. **Take.** Ada sends `take gold coin`. Ada receives `object.taken` with
-   `self: true` and the object, then `player.inventory` with the coin. Ben
-   receives `object.taken` with `self: false` and a third-person line.
+   `self: true` and the object; `take` sends no `player.inventory` follow-up.
+   An explicit `inventory` still returns `player.inventory` with the coin.
+   Ben receives `object.taken` with `self: false` and a third-person line.
    Commands resolve **display names**; `object.id` is `gold_coin`, but the
    command is `take gold coin`, not `take gold_coin`.
 7. **Drop.** Ada sends `drop gold coin`. Both receive `object.dropped`; Ada
@@ -153,9 +154,9 @@ and the door stays unlocked for the rest of the running world. A restart
 rebuilds the authored lock (`PROTOCOL.md`, "Exit locks").
 
 1. From the gate: `go north` (Marketplace), `go west` (Alchemist Shop).
-   `take gold key` → `object.taken` with `object.id: "key_gold_1"`, then
-   `player.inventory` listing the key. If the container flow already ran, the
-   same key is already in the inventory; skip the take.
+   `take gold key` → `object.taken` with `object.id: "key_gold_1"`. If the
+   container flow already ran, the same key is already in the inventory; skip
+   the take.
 2. `go east` back to the Marketplace. Its east exit is the tavern door:
    `room.state.exits` lists `"direction": "east"`, `"to": "tavern"`,
    `"locked": true`, and `"label": "tavern door"`.

@@ -55,7 +55,7 @@ async def test_look_emits_structured_room_state(vault):
 
 
 @pytest.mark.asyncio
-async def test_take_emits_object_event_and_inventory(vault):
+async def test_take_emits_object_event_without_inventory_relist(vault):
     engine, player, room, chest, coin, _key = vault
     chest.remove_content(coin)
     room.add_content(coin)
@@ -66,13 +66,30 @@ async def test_take_emits_object_event_and_inventory(vault):
     broadcast = _events(result, "object.taken", "room")
     inventory = _events(result, "player.inventory", "actor")
 
-    assert len(actor) == 1 and len(broadcast) == 1 and len(inventory) == 1
+    assert len(actor) == 1 and len(broadcast) == 1
+    assert inventory == []
     assert actor[0].data["object"]["id"] == "coin"
     assert actor[0].data["self"] is True
     assert broadcast[0].data["self"] is False
     assert "Ada picks up" in broadcast[0].data["text"]
     assert coin in player.contents
     assert coin not in room.contents
+
+
+@pytest.mark.asyncio
+async def test_explicit_inventory_still_emits_player_inventory(vault):
+    engine, player, _room, chest, coin, key = vault
+    chest.remove_content(coin)
+    player.add_content(coin)
+
+    result = await execute(engine, "Ada", "inventory")
+
+    inventory = _events(result, "player.inventory", "actor")
+    assert len(inventory) == 1
+    ids = [item["id"] for item in inventory[0].data["items"]]
+    assert "coin" in ids
+    assert inventory[0].data["capacity"] > 0
+    assert inventory[0].data["used"] == coin.weight + key.weight
 
 
 @pytest.mark.asyncio

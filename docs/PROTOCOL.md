@@ -699,7 +699,8 @@ container is `error{already_closed}`; a plain item is `error{bad_args}`.
 
 `get <item> from <container>` moves one item out of an **open** container into
 the actor's inventory and emits `object.got` to the actor and the room, then a
-`player.inventory` state push to the actor (the same follow-up as `take`). A
+`player.inventory` state push to the actor. A plain `take` has no such
+follow-up: it emits only the actor's `object.taken` and the room broadcast. A
 closed container is `error{container_closed}`, an item that is not inside is
 `error{not_here}`, a fixed (`portable: false`) object is
 `error{not_portable}`, and a missing container is `error{not_found}`. The item
@@ -770,8 +771,9 @@ and exits add the declarative lock the design calls for, with one command
   actor's copy of the event is the direct reply: it has the `id`, `self: true`,
   and the actor's text. Other recipients get `self: false`, no `id`, and the
   third-person text.
-- Follow-up state pushes (`player.inventory` after `take`, `room.state` after
-  `session.ok`) have no `id`; they are state, not the reply.
+- Follow-up state pushes (`player.inventory` after `drop`, `put`, and `get
+  from`; `room.state` after `session.ok`) have no `id`; they are state, not the
+  reply. `take` sends no inventory follow-up.
 - `notice` and `error` are private and echo the request `id`.
 - A command that changes nothing shared (look, examine, read, inventory, help,
   exits) produces a private event only.
@@ -818,7 +820,7 @@ idle close is `4004` after the character is already asleep.
 | `look in <container>` | `notice` (private; container contents); unknown `error{not_found}`, ambiguous `error{ambiguous}` with `candidates` |
 | `exits` | `notice` (private) |
 | `go <dir>` / `n`/`s`/`e`/`w`/`u`/`d` | actor: `room.state`; others: `room.leave` then `room.enter`; a locked exit: `error{locked}` to the actor and `exit.locked` to the room |
-| `take <x>` / `get <x>` | `object.taken` (actor `self:true` + room `self:false`) + `player.inventory`; over capacity `error{too_heavy}`, unknown `error{not_found}`, ambiguous `error{ambiguous}` with `candidates` |
+| `take <x>` / `get <x>` | `object.taken` (actor `self:true` + room `self:false`), no inventory follow-up; over capacity `error{too_heavy}`, unknown `error{not_found}`, ambiguous `error{ambiguous}` with `candidates` |
 | `drop <x>` | `object.dropped` + `player.inventory`; unknown `error{not_found}`, ambiguous `error{ambiguous}` with `candidates` |
 | `put <x> in <y>` | `object.put` + `player.inventory`; a self or descendant insertion is `error{container_cycle}` and changes nothing |
 | `open <x>` | `object.opened` (contents listed in text and kept inside; an empty unlocked container also emits it; an open one is `error{already_open}`) |
@@ -901,6 +903,12 @@ in-progress release; its entry grows as each documented addition lands.
   `weight` units. A `take`/`get from` that would exceed `capacity` is
   `error{too_heavy}` with the refused `object`, its `weight`, and the
   actor's `capacity`/`used`; nothing moves. Same-limit takes are allowed.
+- `take` no longer sends a `player.inventory` follow-up. The actor still gets
+  `object.taken` with `self: true`, and the room still gets the `object.taken`
+  broadcast with `self: false`. The `player.inventory` event itself is
+  unchanged: an explicit `inventory`, `put`, or `get <item> from <container>`
+  still sends it, and `drop` keeps its follow-up for now (#56 owns the
+  matching drop change).
 - Target resolution is documented and deterministic: exact display name,
   then a case-insensitive prefix, then the v2.0 substring match; leading
   `the`/`a`/`an` is filler, and `<name> <n>` still selects the 1-based sorted
