@@ -571,6 +571,13 @@ is resolved by display name inside the named container, so two coins can be
 disambiguated with the usual `coin 1` form. A bare `get <item>` remains the
 v2.0 alias for `take`.
 
+`put <item> in <container>` refuses an insertion that would make a container
+contain itself, directly or transitively: the refusal is
+`error{container_cycle}`, the item stays in the actor's inventory, the
+container's contents are unchanged, and no `object.put` or `player.inventory`
+event is sent. `content check` rejects the same authored cycle, so a world
+cannot load one.
+
 ### Exit locks (v2.1)
 
 A room exit may be locked in content. The world file declares the lock once,
@@ -639,8 +646,9 @@ and exits add the declarative lock the design calls for, with one command
 ## Error codes
 
 `unknown_command`, `bad_args`, `ambiguous`, `not_found`, `not_here`,
-`not_portable`, `container_closed`, `no_exit`, `locked`, `already_open`,
-`already_closed`, `too_heavy`, `malformed_message`, `unknown_message`,
+`not_portable`, `container_closed`, `container_cycle`, `no_exit`, `locked`,
+`already_open`, `already_closed`, `too_heavy`, `malformed_message`,
+`unknown_message`,
 `not_joined`, `already_joined`, `name_taken`, `not_authenticated`,
 `invalid_key`, `invalid_name`, `not_awake`, `rate_limited`, `internal`,
 `unsupported_version`.
@@ -675,7 +683,7 @@ idle close is `4004` after the character is already asleep.
 | `go <dir>` / `n`/`s`/`e`/`w`/`u`/`d` | actor: `room.state`; others: `room.leave` then `room.enter`; a locked exit: `error{locked}` to the actor and `exit.locked` to the room |
 | `take <x>` / `get <x>` | `object.taken` (actor `self:true` + room `self:false`) + `player.inventory`; over capacity `error{too_heavy}`, unknown `error{not_found}`, ambiguous `error{ambiguous}` with `candidates` |
 | `drop <x>` | `object.dropped` + `player.inventory`; unknown `error{not_found}`, ambiguous `error{ambiguous}` with `candidates` |
-| `put <x> in <y>` | `object.put` + `player.inventory` |
+| `put <x> in <y>` | `object.put` + `player.inventory`; a self or descendant insertion is `error{container_cycle}` and changes nothing |
 | `open <x>` | `object.opened` (contents listed in text and kept inside; an empty unlocked container also emits it; an open one is `error{already_open}`) |
 | `close <x>` | `object.closed` (or `error{already_closed}` / `error{bad_args}` for a non-container) |
 | `get <x> from <y>` | `object.got` (actor `self:true` + room `self:false`) + `player.inventory`; closed container `error{container_closed}`, item not inside `error{not_here}`, fixed item `error{not_portable}`, over capacity `error{too_heavy}`, ambiguous `error{ambiguous}` with `candidates` |
@@ -741,6 +749,9 @@ in-progress release; its entry grows as each documented addition lands.
   `not_portable`, `not_here` (item not inside), `already_closed`, and
   `already_open` for `open`. Opening an already open container no longer
   repeats the open.
+- `put <item> in <container>` refuses a self or descendant insertion with
+  `error{container_cycle}` and leaves the item and the container unchanged;
+  `content check` rejects the same direct or transitive cycle in content.
 - Locked exits are declared in content (`locked`, `key`, optional `label`,
   `one_way`) and carried into the engine. `room.state.exits[]` reports
   `locked` and the authored `label`; `go` through a locked exit is

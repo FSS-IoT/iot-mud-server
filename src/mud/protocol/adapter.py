@@ -254,6 +254,25 @@ def _too_heavy(engine: Engine, player: Player, collection: list[Entity],
     return CommandResult([Outbound("error", data)])
 
 
+def _container_cycle(engine: Engine, inventory: list[Entity],
+                     room_contents: list[Entity], item_arg: str | None,
+                     container_arg: str | None,
+                     reply: str) -> CommandResult:
+    """The typed refusal for a put that would close a containment cycle (#79).
+
+    The engine refused before moving anything, so no `object.put` and no
+    inventory push: one error naming the object and the container it refused.
+    """
+    data: dict[str, Any] = {"code": "container_cycle", "message": reply}
+    item = _find(engine, inventory, item_arg)
+    container = _find(engine, room_contents, container_arg)
+    if item is not None:
+        data["object"] = _object_data(item, inventory)
+    if container is not None:
+        data["container"] = _object_data(container, room_contents)
+    return CommandResult([Outbound("error", data)])
+
+
 def _find(engine: Engine, collection: list[Entity], name: str | None) -> Entity | None:
     if not collection or not name:
         return None
@@ -286,6 +305,10 @@ def _classify(reply: str) -> str:
     # refusal, not the words in an object description.
     if lowered.startswith("you cannot carry ") and "too heavy" in lowered:
         return "too_heavy"
+    # The container guard refuses before moving anything (#79).
+    if (lowered.startswith("you cannot put the ")
+            and "cannot contain itself" in lowered):
+        return "container_cycle"
     if lowered.startswith("there is nothing readable"):
         return "not_found"
     if lowered.startswith(("you see no ", "you can't read")):
@@ -568,6 +591,10 @@ async def execute(engine: Engine, player_name: str,
                              f"{container.name}."),
                 }),
             ])
+        if _classify(reply) == "container_cycle":
+            return _container_cycle(
+                engine, before_inventory, before_room_contents,
+                item_arg.strip(), container_arg.strip(), reply)
         return _failure(
             reply,
             _candidates(engine, before_inventory, item_arg)

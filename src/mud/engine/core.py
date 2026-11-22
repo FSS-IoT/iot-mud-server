@@ -5,6 +5,7 @@ import re
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 from src.mud.content import DEFAULT_CARRY_CAPACITY, Entity, Room, Player
+from src.mud.content.validator import container_cycles
 from src.mud.storage.keys import object_key, room_key
 
 if TYPE_CHECKING:
@@ -642,6 +643,30 @@ class Engine:
             return f"You dropped the {target_item.name}."
         return f"You aren't carrying any {arg}."
 
+    @staticmethod
+    def _containment_cycle(container: Entity, item: Entity) -> bool:
+        """Whether putting `item` in `container` would close a cycle.
+
+        A container may not contain itself, directly or transitively (#79).
+        The rule is the validator's `container_cycles`; only the two subtrees
+        that can close the proposed `container -> item` edge are walked, then
+        the shared graph check decides.
+        """
+        graph: dict[str, list[str]] = {}
+
+        def walk(node: Entity) -> None:
+            key = str(id(node))
+            if key in graph:
+                return
+            graph[key] = [str(id(child)) for child in node.contents]
+            for child in node.contents:
+                walk(child)
+
+        walk(container)
+        walk(item)
+        graph.setdefault(str(id(container)), []).append(str(id(item)))
+        return bool(container_cycles(graph))
+
     async def _handle_put(self, arg: str, player_name: str | None) -> str:
         """Put an item inside a container: `put <item> in <container>`.
 
@@ -691,6 +716,13 @@ class Engine:
             return f"There is no {container_arg} here to put it in."
         if getattr(container, "locked", False):
             return f"The {container.name} is locked. Find a key and `use <key> on {container.name.lower()}`."
+        if self._containment_cycle(container, held):
+            # Refuse before either collection changes: the item stays in the
+            # pack and the container's contents are untouched (#79).
+            return (
+                f"You cannot put the {held.name} in the {container.name}; "
+                "a container cannot contain itself, directly or transitively."
+            )
 
         target_player.remove_content(held)
         container.add_content(held)
