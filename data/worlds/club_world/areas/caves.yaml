@@ -1,0 +1,101 @@
+# Beneath the crypt. The caves loop back on themselves, so a player who takes
+# a wrong turn always has a way out; the pool deposit is the only dead end and
+# it is a container, not a room.
+area: caves
+
+rooms:
+  - id: cave_mouth
+    name: Cave Mouth
+    description: Daylight narrows to a point behind you. A tunnel runs east; the crypt stair climbs back up.
+    exits:
+      east: cave_tunnel
+    objects:
+      - id: cave_warning
+        name: Cave Warning
+        description: A board wedged into the rock at the entrance.
+        kind: readable
+        readable_text: |
+          The cave goes down to the water and comes back up. Keep to the walls.
+          The green light is moss, not fire.
+        weight: 0.1
+    effects:
+      on_enter:
+        - type: sound.play
+          params:
+            clip: cave_drip
+
+  - id: cave_tunnel
+    name: Cave Tunnel
+    description: The tunnel bends and widens, worn smooth by old water. A green glow seeps up from a crack south.
+    exits:
+      south: crystal_grotto
+    objects:
+      - id: glow_moss
+        name: Glow Moss
+        description: A patch of pale green moss, faintly luminous.
+        weight: 0.05
+        light_source: true
+        lit: true
+    npcs:
+      - id: npc_miner
+        name: Greta the Prospector
+        description: A wiry woman with a lamp on her belt and chalk dust to the elbow.
+        dialogue:
+          greeting: "You are not a rockfall. Good."
+          default: "Ask about the grotto, the pool, or the old mine."
+          topics:
+            grotto: "South. The crystals sing when the water moves. Do not chip them."
+            pool: "West of the grotto. Something shines under the water."
+            mine: "The old mine is sealed. I am not the one who sealed it."
+        wander: true
+        wander_every: 15
+
+  - id: crystal_grotto
+    name: Crystal Grotto
+    description: Crystals crowd the ceiling and throw the light back in green and white. A low passage leads west.
+    exits:
+      west: underground_pool
+    objects:
+      - id: crystal_shard
+        name: Crystal Shard
+        description: A loose shard of crystal, cold and clear.
+        weight: 0.2
+        light_source: true
+        lit: true
+      - id: grotto_carving
+        name: Grotto Carving
+        description: A spiral cut into the crystal wall, matched to the ruins above.
+        kind: readable
+        readable_text: The water rose. We carried the bones down. The ring stayed behind.
+        weight: 0.0
+        portable: false
+    effects:
+      on_enter:
+        - type: light.glow
+          params:
+            color: "#66ffcc"
+            intensity: 0.5
+
+  - id: underground_pool
+    name: Underground Pool
+    description: Black water fills the floor of the cave. Something pale glitters on a ledge just out of reach.
+    objects:
+      - id: pool_deposit
+        name: Pool Deposit
+        description: A crust of pale mineral on the ledge above the water.
+        kind: container
+        weight: 0.0
+        portable: false
+        contains:
+          - cave_pearl
+      - id: cave_pearl
+        name: Cave Pearl
+        description: A smooth white pearl, faintly warm.
+        weight: 0.05
+      - id: pool_mirror
+        name: Still Pool
+        description: The water holds a reflection that seems a moment slow.
+        kind: readable
+        readable_text: The reflection shows the crypt stair, the chapel, and a door that is not there.
+        weight: 0.0
+        portable: false

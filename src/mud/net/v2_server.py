@@ -112,6 +112,17 @@ def resolve_server_commit(explicit: str | None = None) -> str:
     return _git_commit()
 
 
+def _read_world_meta(conn: sqlite3.Connection, key: str) -> str | None:
+    """One non-empty `world_meta` value, or None when it is absent."""
+    row = conn.execute(
+        "SELECT value FROM world_meta WHERE key = ?", (key,)
+    ).fetchone()
+    if row is None:
+        return None
+    value = row[0]
+    return value if isinstance(value, str) and value.strip() else None
+
+
 def read_world_epoch(conn: sqlite3.Connection) -> str | None:
     """The seeded world's epoch, or None when the database has no world yet.
 
@@ -119,13 +130,17 @@ def read_world_epoch(conn: sqlite3.Connection) -> str | None:
     `hello.data.world.epoch` across connections to notice a world reset and
     drop cached maps (docs/PROTOCOL.md).
     """
-    row = conn.execute(
-        "SELECT value FROM world_meta WHERE key = 'epoch'"
-    ).fetchone()
-    if row is None:
-        return None
-    value = row[0]
-    return value if isinstance(value, str) and value.strip() else None
+    return _read_world_meta(conn, "epoch")
+
+
+def read_world_name(conn: sqlite3.Connection) -> str | None:
+    """The seeded world's name, or None when the database has no world yet.
+
+    `admin seed` writes `world_meta.name`; `hello`, `session.ok`, and `auth.ok`
+    report it beside the epoch. A character-only database has no name row, so
+    the server keeps its constructor default for legacy and no-DB tests.
+    """
+    return _read_world_meta(conn, "name")
 
 
 @dataclass
@@ -840,9 +855,13 @@ class V2Server:
     async def run(self) -> None:
         if self.db_path is not None:
             self.db = open_database(self.db_path)
-            # The seeded world owns the epoch; a database without a seed keeps
-            # the constructor value (utc_now by default). `hello`, `session.ok`,
-            # and `auth.ok` all read `self.epoch`.
+            # The seeded world owns its name and epoch; a database without a
+            # seed keeps the constructor values (the world-name default and
+            # utc_now for the epoch). `hello`, `session.ok`, and `auth.ok` all
+            # read both fields.
+            stored_name = read_world_name(self.db)
+            if stored_name is not None:
+                self.world_name = stored_name
             stored_epoch = read_world_epoch(self.db)
             if stored_epoch is not None:
                 self.epoch = stored_epoch

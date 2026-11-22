@@ -1,0 +1,6 @@
+# The v2.1.3 product world. One metadata file plus one file per area under
+# areas/. The starting village is the first area and the gate is still the
+# start room, so a player who knows the old world lands somewhere familiar.
+name: The Commons
+start_room: gate
+rng_seed: 20261121

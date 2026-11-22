@@ -254,7 +254,7 @@ async def test_loader_rejects_prop_on_spawn(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_gate_room_state_has_one_north_door():
+async def test_gate_room_state_has_north_and_south_doors():
     engine = Engine()
     await load_demo_village(engine)
     player = engine.register_player("Ada")
@@ -265,7 +265,11 @@ async def test_gate_room_state_has_one_north_door():
     assert room["id"] == "gate"
     geometry = room["geometry"]
     doors = _door_cells(geometry["cells"])
-    assert list(doors.values()) == ["north"]
+    # The product world adds the south road through the gate (#80); the
+    # original north door to the marketplace is unchanged.
+    assert geometry["cells"][0] == "###+###"
+    assert geometry["cells"][-1] == "###+###"
+    assert sorted(doors.values()) == ["north", "south"]
     assert len(geometry["cells"]) >= 3
     assert all(len(row) == len(geometry["cells"][0]) for row in geometry["cells"])
 
@@ -307,7 +311,7 @@ async def test_starting_village_geometry_matches_every_exit():
     await load_demo_village(engine)
 
     expected = {
-        "gate": {"north"},
+        "gate": {"north", "south"},
         "market": {"north", "south", "east", "west"},
         "tavern": {"west"},
         "shop": {"east"},

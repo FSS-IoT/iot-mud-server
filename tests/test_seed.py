@@ -6,8 +6,9 @@ caller explicitly asks for a reset. A reset replaces the world, keeps every
 character and every character key, puts all characters back at the new
 `start_room`, clears their inventory, and changes `world_meta.epoch`.
 
-The v2 server reports that stored epoch in `hello`, `session.ok`, and `auth.ok`
-so a client can detect a world reset and drop cached maps.
+The v2 server reports that stored name and epoch in `hello`, `session.ok`, and
+`auth.ok` so a client knows which world it is playing and can detect a reset
+and drop cached maps.
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ import websockets
 from src.mud.admin import main
 from src.mud.auth import register_character
 from src.mud.engine.core import Engine
-from src.mud.net.v2_server import V2Server, read_world_epoch
+from src.mud.net.v2_server import V2Server, read_world_epoch, read_world_name
 from src.mud.storage.db import SCHEMA_VERSION, open_database
 from src.mud.world.loader import load_demo_village
 
@@ -141,14 +142,14 @@ def test_seed_fills_a_clean_database_with_the_yaml_world(tmp_path):
 
     assert main(["seed", "--db", str(path)]) == 0
 
-    assert _count(path, "rooms") == 5
-    assert _count(path, "objects") == 7
-    assert _count(path, "exits") == 8  # four declared, four reciprocals
-    assert _count(path, "npcs") == 0
+    assert _count(path, "rooms") == 34
+    assert _count(path, "objects") == 75
+    assert _count(path, "exits") == 70  # 35 declared, 35 reciprocals
+    assert _count(path, "npcs") == 11
 
     meta = _meta(path)
     assert set(meta) == {"name", "start_room", "rng_seed", "epoch"}
-    assert meta["name"] == "Starting Village"
+    assert meta["name"] == "The Commons"
     assert meta["start_room"] == "gate"
     assert meta["rng_seed"] == "20261121"
     assert meta["epoch"]
@@ -247,7 +248,7 @@ def test_seed_uses_the_config_storage_path(tmp_path):
     assert main(["seed", "--config", str(config)]) == 0
 
     assert db.exists()
-    assert _meta(db)["name"] == "Starting Village"
+    assert _meta(db)["name"] == "The Commons"
     assert _one(db, "PRAGMA user_version")[0] == SCHEMA_VERSION
 
 
@@ -267,7 +268,7 @@ def test_seed_refuses_a_second_seed_without_reset(tmp_path, capsys):
     captured = capsys.readouterr()
     assert "--reset --yes" in captured.err
     assert _meta(path)["epoch"] == epoch
-    assert _count(path, "rooms") == 5
+    assert _count(path, "rooms") == 34
 
 
 def test_seed_reset_requires_yes(tmp_path, capsys):
@@ -484,7 +485,7 @@ def test_seed_persists_locked_exits_npcs_and_author_state(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# The v2 server reports the seeded epoch
+# The v2 server reports the seeded world name and epoch
 # ---------------------------------------------------------------------------
 
 
@@ -492,6 +493,14 @@ def test_read_world_epoch_is_none_before_a_seed(tmp_path):
     conn = open_database(tmp_path / "empty.db")
     try:
         assert read_world_epoch(conn) is None
+    finally:
+        conn.close()
+
+
+def test_read_world_name_is_none_before_a_seed(tmp_path):
+    conn = open_database(tmp_path / "empty.db")
+    try:
+        assert read_world_name(conn) is None
     finally:
         conn.close()
 
@@ -534,10 +543,58 @@ async def test_v2_hello_and_session_ok_carry_the_seeded_epoch(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_v2_hello_and_session_ok_carry_the_seeded_world_name(tmp_path):
+    path = tmp_path / "mud.db"
+    assert main(["seed", "--db", str(path)]) == 0
+    meta = _meta(path)
+    epoch = meta["epoch"]
+    assert meta["name"] == "The Commons"
+
+    engine = Engine()
+    await load_demo_village(engine)
+    server = V2Server(engine, port=0, db_path=path, auth_required=False)
+    task = asyncio.create_task(server.run())
+    await _wait_for_bind(server)
+    try:
+        async with websockets.connect(
+            f"ws://localhost:{server.port}"
+        ) as ws:
+            hello = json.loads(await ws.recv())
+            assert hello["type"] == "hello"
+            # The seeded name and epoch move together: a client that caches
+            # the world must not see the constructor default.
+            assert hello["data"]["world"] == {
+                "name": meta["name"],
+                "epoch": epoch,
+            }
+
+            await ws.send(json.dumps({
+                "v": 2,
+                "type": "join",
+                "id": "join",
+                "data": {"name": "Ada"},
+            }))
+            while True:
+                message = json.loads(
+                    await asyncio.wait_for(ws.recv(), timeout=3.0)
+                )
+                if message["type"] == "session.ok":
+                    assert message["data"]["world"] == {
+                        "name": meta["name"],
+                        "epoch": epoch,
+                    }
+                    break
+    finally:
+        server.stop()
+        await asyncio.wait_for(task, timeout=3.0)
+
+
+@pytest.mark.asyncio
 async def test_v2_auth_ok_carries_the_seeded_epoch(tmp_path):
     path = tmp_path / "mud.db"
     assert main(["seed", "--db", str(path)]) == 0
-    epoch = _meta(path)["epoch"]
+    meta = _meta(path)
+    epoch = meta["epoch"]
 
     engine = Engine()
     await load_demo_village(engine)
@@ -550,6 +607,7 @@ async def test_v2_auth_ok_carries_the_seeded_epoch(tmp_path):
             f"ws://localhost:{server.port}"
         ) as ws:
             hello = json.loads(await ws.recv())
+            assert hello["data"]["world"]["name"] == meta["name"]
             assert hello["data"]["world"]["epoch"] == epoch
 
             await ws.send(json.dumps({
@@ -563,6 +621,7 @@ async def test_v2_auth_ok_carries_the_seeded_epoch(tmp_path):
                     await asyncio.wait_for(ws.recv(), timeout=3.0)
                 )
                 if message["type"] == "auth.ok":
+                    assert message["data"]["world"]["name"] == meta["name"]
                     assert message["data"]["world"]["epoch"] == epoch
                     break
     finally:
@@ -574,3 +633,4 @@ def test_v2_server_without_a_database_uses_utc_now():
     server = V2Server(Engine(), port=0)
 
     assert datetime.fromisoformat(server.epoch)
+    assert server.world_name == "Starting Village"
