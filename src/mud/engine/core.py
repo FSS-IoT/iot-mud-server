@@ -4,7 +4,7 @@ import asyncio
 import re
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
-from src.mud.content import DEFAULT_CARRY_CAPACITY, Entity, Room, Player
+from src.mud.content import DEFAULT_CARRY_CAPACITY, NPC, Entity, Player, Room
 from src.mud.content.validator import container_cycles
 from src.mud.storage.keys import object_key, room_key
 
@@ -426,6 +426,103 @@ class Engine:
             f"Specify which, e.g. `{key} 1`."
         )
         return None, message
+
+    # --- NPC dialogue (#81) --------------------------------------------------
+
+    @staticmethod
+    def npc_matches(room, arg: str) -> list[NPC]:
+        """Every NPC in `room` that `arg` names, in deterministic order.
+
+        The same tiered resolution as `target_matches`: exact display name,
+        then a case-insensitive prefix, then the v2.0 substring match, sorted
+        by display name. NPCs are resolved separately from objects precisely
+        because they do not live in `room.contents`.
+        """
+        key, _index = Engine._split_target(arg)
+        if room is None or not key:
+            return []
+        exact = [npc for npc in room.npcs if npc.name.lower() == key]
+        if exact:
+            matches = exact
+        else:
+            prefixed = [
+                npc for npc in room.npcs if npc.name.lower().startswith(key)
+            ]
+            matches = prefixed or [
+                npc for npc in room.npcs if key in npc.name.lower()
+            ]
+        return sorted(matches, key=lambda npc: npc.name.lower())
+
+    @classmethod
+    def find_npc(cls, room, arg: str) -> tuple[NPC | None, str | None]:
+        """Resolve `arg` to one NPC in `room`, with `<name> <n>` support.
+
+        Returns `(npc, message)`: exactly one is non-None. A miss is
+        `(None, None)` and lets the caller phrase "you see no ...", which the
+        adapter maps to `error{not_found}`.
+        """
+        key, index = cls._split_target(arg)
+        if not key:
+            return None, None
+        matches = cls.npc_matches(room, arg)
+        if not matches:
+            return None, None
+        if index is not None:
+            if 1 <= index <= len(matches):
+                return matches[index - 1], None
+            return None, None
+        if len(matches) == 1:
+            return matches[0], None
+        message = (
+            f"There are several {key} here: "
+            f"{', '.join(f'{i} {n.name}' for i, n in enumerate(matches, 1))}. "
+            f"Specify which, e.g. `{key} 1`."
+        )
+        return None, message
+
+    def _speaker_room(self, player_name: str | None):
+        """The room whose NPCs a command acts in, for either engine path."""
+        player = self._resolve_player(player_name)
+        return player.location if player is not None else self._player_location
+
+    def _handle_talk(self, arg: str, player_name: str | None = None) -> str:
+        """`talk <npc>`: the authored greeting, or the NPC's default line.
+
+        Dialogue is scripted content, never generated. An unknown name is
+        phrased for the adapter's `not_found`; an ambiguous one reuses the
+        item resolver's wording (`ambiguous`).
+        """
+        room = self._speaker_room(player_name)
+        npc, ambiguity = self.find_npc(room, arg)
+        if ambiguity:
+            return ambiguity
+        if npc is None:
+            return f"You see no {arg.strip()} here."
+        line = npc.greeting or npc.default
+        if not line:
+            return f"{npc.name} has nothing to say."
+        return f'{npc.name} says, "{line}"'
+
+    def _handle_ask(self, arg: str, player_name: str | None = None) -> str:
+        """`ask <npc> about <topic>`: the topic line, or the default fallback.
+
+        Topics are matched case-insensitively against the authored map. An
+        unknown topic is not an error: the NPC answers with its `default`
+        line, so a client never has to know the script in advance.
+        """
+        npc_arg, separator, topic = arg.partition(" about ")
+        if not separator:
+            return "Ask whom about what? Try `ask <npc> about <topic>`."
+        room = self._speaker_room(player_name)
+        npc, ambiguity = self.find_npc(room, npc_arg)
+        if ambiguity:
+            return ambiguity
+        if npc is None:
+            return f"You see no {npc_arg.strip()} here."
+        line = npc.topics.get(topic.strip().lower()) or npc.default
+        if not line:
+            return f"{npc.name} has nothing to say."
+        return f'{npc.name} says, "{line}"'
 
     @staticmethod
     def _held_items(entity) -> List[str]:
@@ -1218,6 +1315,11 @@ class Engine:
                         response += f"\n\nHere you see: {listed}."
                     occupants = [p for p in self._players.values()
                                  if p.location is room and p.name != player_name]
+                    if room.npcs:
+                        listed = ", ".join(
+                            npc.name for npc in sorted(
+                                room.npcs, key=lambda npc: npc.name.lower()))
+                        response += f"\n\nAlso here: {listed}."
                     if occupants:
                         listed = ", ".join(
                             p.name for p in sorted(occupants,
@@ -1437,12 +1539,28 @@ class Engine:
                         response = "There is nothing readable here."
                 matched = True
 
-        # INVENTORY / HELP (UTILITY)
+        # NPC DIALOGUE — scripted replies authored in the world YAML (#81).
+        # No LLM or generated text is involved.
+        elif resolved_verb == "talk":
+            if not resolved_arg:
+                response = "Talk to whom? Try `talk <npc>`."
+            else:
+                response = self._handle_talk(resolved_arg, player_name)
+            matched = True
+
+        elif resolved_verb == "ask":
+            if not resolved_arg:
+                response = "Ask whom about what? Try `ask <npc> about <topic>`."
+            else:
+                response = self._handle_ask(resolved_arg, player_name)
+            matched = True
+
         # LIGHT — ignite a carried light source: `light <torch/lantern>`.
         elif resolved_verb == "light" and resolved_arg:
             response = await self._handle_light(resolved_arg, player_name)
             matched = True
 
+        # INVENTORY / HELP (UTILITY)
         elif resolved_verb == "inventory":
             held = self._held_items(self._resolve_player(player_name))
             if held:
@@ -1475,7 +1593,8 @@ class Engine:
                 "Commands: look (l), go <direction>, exits, take <item>, get <item> from <container>, drop <item>, put <item> in <container>, "
                 "open <container>, close <container>, use <key> on <container|exit>, "
                 "examine <thing> (exam), read <thing> (signs, books), look in <chest>, light <torch/lantern>, inventory (i), who, "
-                "say <text>, emote <action> (me), tell <player> <text>, hello. Try `look` first."
+                "say <text>, emote <action> (me), tell <player> <text>, "
+                "talk <npc>, ask <npc> about <topic>, hello. Try `look` first."
             )
             matched = True
 

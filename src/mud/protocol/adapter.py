@@ -136,6 +136,13 @@ def build_room_state(engine: Engine, player: Player) -> dict[str, Any]:
             person["stone"] = True
         players.append(person)
     players.sort(key=lambda person: person["name"].lower())
+    npcs = [
+        {
+            "id": getattr(npc, "item_id", None) or slug(npc.name),
+            "name": npc.name,
+        }
+        for npc in sorted(room.npcs, key=lambda npc: npc.name.lower())
+    ]
     exits = []
     for direction, target in sorted(room.exits.items()):
         lock = room.exit_locks.get(direction)
@@ -160,6 +167,9 @@ def build_room_state(engine: Engine, player: Player) -> dict[str, Any]:
             for person in players
         ]
         text += "\n\nOthers in the room: " + ", ".join(names) + "."
+    if npcs:
+        text += "\n\nAlso here: " + ", ".join(
+            npc["name"] for npc in npcs) + "."
 
     payload = {
         "id": _room_id(room),
@@ -169,7 +179,7 @@ def build_room_state(engine: Engine, player: Player) -> dict[str, Any]:
         "exits": exits,
         "objects": objects,
         "players": players,
-        "npcs": [],
+        "npcs": npcs,
     }
     # Additive: only rooms with authored geometry carry the field, and the
     # dark branch above omits it so a map is never leaked to an observer who
@@ -348,7 +358,8 @@ def _classify(reply: str) -> str:
     if lowered.startswith("you cannot go"):
         return "no_exit"
     if ("what? try" in lowered or "use a key on something" in lowered
-            or "put what where" in lowered):
+            or "put what where" in lowered
+            or lowered.startswith(("talk to whom", "ask whom about what"))):
         return "bad_args"
     return "internal"
 
@@ -765,6 +776,42 @@ async def execute(engine: Engine, player_name: str,
             reply,
             _candidates(engine, before_inventory, arg)
             or _candidates(engine, before_room_contents, arg))
+
+    if verb in ("talk", "ask"):
+        # Scripted NPC dialogue (#81). The engine resolved the room NPC and
+        # authored the line; the adapter only shapes it. Success is the one
+        # reply shape the handlers produce, so a miss (unknown NPC, missing
+        # `about`, ambiguity) stays a typed failure and emits no speech.
+        npc_arg = arg or ""
+        topic_arg = None
+        if verb == "ask":
+            npc_name, separator, topic_arg = npc_arg.partition(" about ")
+            npc_arg = npc_name if separator else ""
+        npc, _ambiguity = (
+            engine.find_npc(before_room, npc_arg) if npc_arg else (None, None)
+        )
+        if npc is None or not reply.startswith(f"{npc.name} says,"):
+            return _failure(
+                reply,
+                _candidates(engine, before_room_contents, npc_arg)
+                if npc_arg else None,
+            )
+        data: dict[str, Any] = {
+            "npc": {
+                "id": getattr(npc, "item_id", None) or slug(npc.name),
+                "name": npc.name,
+            },
+            "self": True,
+            "text": reply,
+        }
+        if topic_arg is not None and topic_arg.strip().lower() in npc.topics:
+            # Additive: present only when the asked topic matched the script.
+            data["topic"] = topic_arg.strip().lower()
+        room_data = {**data, "self": False}
+        return CommandResult([
+            _actor("npc.say", data),
+            _room("npc.say", room_data, room_name=before_room.name),
+        ])
 
     if verb == "inventory":
         return CommandResult([
