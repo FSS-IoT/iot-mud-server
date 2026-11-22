@@ -12,12 +12,16 @@ websocket server stays a transport.
 
 from __future__ import annotations
 
-import re
+import logging
 from typing import Any
 
 from src.mud.content import Entity, Player, Room
 from src.mud.engine.core import Engine
 from src.mud.protocol.v2 import CommandResult, Outbound
+from src.mud.storage.keys import room_key, slug
+from src.mud.storage.store import StorageWriteError
+
+logger = logging.getLogger(__name__)
 
 # Mirrors Engine.process_command's alias table. The engine's reply remains the
 # source of truth; this only decides which typed event to emit.
@@ -37,12 +41,8 @@ _ALIASES = {
 }
 
 
-def _slug(value: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "_", value.lower()).strip("_") or "object"
-
-
 def _room_id(room: Room) -> str:
-    return getattr(room, "item_id", None) or _slug(room.name)
+    return room_key(room)
 
 
 def _object_data(entity: Entity, collection: list[Entity]) -> dict[str, Any]:
@@ -52,13 +52,13 @@ def _object_data(entity: Entity, collection: list[Entity]) -> dict[str, Any]:
     of the same prototype, the instance id gets a numeric suffix so a client can
     tell two coins apart.
     """
-    base = getattr(entity, "item_id", None) or _slug(entity.name)
+    base = getattr(entity, "item_id", None) or slug(entity.name)
     ident = getattr(entity, "instance_id", None)
     if not ident:
         siblings = [
             candidate for candidate in collection
             if (getattr(candidate, "item_id", None)
-                or _slug(candidate.name)) == base
+                or slug(candidate.name)) == base
         ]
         if len(siblings) > 1:
             try:
@@ -301,7 +301,16 @@ async def execute(engine: Engine, player_name: str,
         for entity in before_inventory
     }
 
-    reply = await engine.process_command(command_text, player_name)
+    try:
+        reply = await engine.process_command(command_text, player_name)
+    except StorageWriteError:
+        # Commit failed, so the engine changed nothing: one typed error, no
+        # event for any other client (SPEC v2.1.0 criterion 2).
+        logger.exception("write-through failed on %r", command_text)
+        return _error(
+            "internal",
+            "The world could not save that command; nothing changed.",
+        )
     after_room = player.location
 
     if verb == "look":

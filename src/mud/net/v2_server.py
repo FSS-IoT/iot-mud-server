@@ -22,6 +22,7 @@ from src.mud.engine.core import Engine
 from src.mud.protocol.adapter import _room_id, build_room_state, execute
 from src.mud.protocol.v2 import PROTOCOL_VERSION, envelope, utc_now
 from src.mud.storage.db import DatabaseError, open_database
+from src.mud.storage.store import WriteThroughStore
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,7 @@ class V2Server:
         self.epoch = epoch or utc_now()
         self.db_path = Path(db_path) if db_path is not None else None
         self.db: sqlite3.Connection | None = None
+        self.store: WriteThroughStore | None = None
         self._stop_event = asyncio.Event()
         self._server = None
         self._sessions: dict[Any, Session] = {}
@@ -301,6 +303,10 @@ class V2Server:
     async def run(self) -> None:
         if self.db_path is not None:
             self.db = open_database(self.db_path)
+            # Every mutation goes through the database before it reaches
+            # memory or another client (SPEC v2.1.0 criterion 2).
+            self.store = WriteThroughStore(self.db)
+            self.engine.attach_store(self.store)
         try:
             self._server = await websockets.serve(
                 self.handler, self.host, self.port, max_size=65536)
@@ -309,6 +315,9 @@ class V2Server:
             self._server.close()
             await self._server.wait_closed()
         finally:
+            if self.store is not None:
+                self.engine.attach_store(None)
+                self.store = None
             if self.db is not None:
                 self.db.close()
                 self.db = None
