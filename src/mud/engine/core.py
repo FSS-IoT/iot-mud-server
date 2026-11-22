@@ -67,6 +67,33 @@ class Engine:
         """Return the player with this name, or None."""
         return self._players.get(name)
 
+    def find_character(self, name: str) -> Player | None:
+        """Return the live player named `name`, ignoring case.
+
+        Commands type names, not registry keys: `tell ben ...` must reach the
+        character registered as `Ben`. The registry itself stays keyed by the
+        canonical name so `_ws_by_name` can route a private event.
+        """
+        key = name.strip().lower()
+        return next(
+            (player for player in self._players.values()
+             if player.name.lower() == key),
+            None,
+        )
+
+    def character_entry(self, name: str) -> dict[str, Any] | None:
+        """The `who` roster entry for `name`, ignoring case (#75).
+
+        `tell` uses this to tell an unknown name (`not_found`) apart from a
+        character that exists but is asleep/stone (`not_awake`).
+        """
+        key = name.strip().lower()
+        return next(
+            (entry for entry in self.who_entries()
+             if entry["name"].lower() == key),
+            None,
+        )
+
     def remove_player(self, name: str) -> bool:
         """Remove a player from the registry and clear their location.
 
@@ -737,6 +764,46 @@ class Engine:
         await self.emit("light_ignited", {"item_name": held_item.name.lower()})
         return f"You light the {held_item.name}. Its flame casts a warm glow."
 
+    async def _handle_tell(
+        self, raw_text: str, player_name: str | None = None,
+    ) -> str:
+        """One private line to an awake character anywhere in the world.
+
+        `tell <player> <text>` resolves the target server-wide, by display
+        name and ignoring case. A live target must be awake; a durable roster
+        row with no live session is asleep/stone by definition (#72). Both
+        failures are typed by the adapter (`not_awake` and `not_found`), and
+        nothing is stored: this is not offline mail, so a tell to a sleeping
+        character is refused rather than replayed on wake.
+        """
+        pieces = raw_text.split(maxsplit=2)
+        if len(pieces) < 3 or not pieces[2].strip():
+            return "Tell whom what? Try `tell <player> <text>`."
+        target_arg = pieces[1]
+        message = pieces[2].strip()
+
+        target = self.find_character(target_arg)
+        if target is not None:
+            if target.asleep:
+                return (
+                    f"{target.name} is asleep, turned to stone; a tell cannot "
+                    "reach them."
+                )
+            sender = player_name or (
+                self.player.name if self.player is not None else "someone")
+            await self.emit("player_told", {
+                "from": sender, "to": target.name, "text": message,
+            })
+            return f'You tell {target.name}, "{message}".'
+
+        entry = self.character_entry(target_arg)
+        if entry is not None:
+            return (
+                f"{entry['name']} is asleep, turned to stone; a tell cannot "
+                "reach them."
+            )
+        return f"There is no one named {target_arg} in the world."
+
     def _resolve_player(self, player_name):
         """Return the registered player to act as, falling back to the legacy slot."""
         if player_name:
@@ -801,6 +868,8 @@ class Engine:
             "i": "inventory", "inv": "inventory",
             "h": "help",
             "exam": "examine",
+            # `me` is the design-doc alias for a room-local action (#75).
+            "me": "emote",
         }
         
         # `look at X` focuses on something; treat it as `examine X`.
@@ -1073,7 +1142,8 @@ class Engine:
         elif resolved_verb == "help":
             response = (
                 "Commands: look (l), go <direction>, exits, take <item>, drop <item>, put <item> in <container>, "
-                "examine <thing> (exam), read <thing> (signs, books), look in <chest>, light <torch/lantern>, inventory (i), who, say <text>, hello. Try `look` first."
+                "examine <thing> (exam), read <thing> (signs, books), look in <chest>, light <torch/lantern>, inventory (i), who, "
+                "say <text>, emote <action> (me), tell <player> <text>, hello. Try `look` first."
             )
             matched = True
 
@@ -1092,6 +1162,39 @@ class Engine:
                 "text": spoken,
                 "location": location.name if location else None,
             })
+            matched = True
+        elif resolved_verb == "emote":
+            # A room-local third-person action (#75). The actor and everyone in
+            # the room see the same rendered line; `self` on the wire says who
+            # did it, so the text does not need a second-person rewrite. The
+            # adapter routes it to the room only, exactly like `say`.
+            if not resolved_arg:
+                response = "Emote what? Try `emote <action>`."
+                matched = True
+            else:
+                action = raw_text.split(maxsplit=1)[1].strip()
+                acting_player = self.get_player(player_name) if player_name else None
+                speaker = (
+                    acting_player.name if acting_player is not None
+                    else self.player.name if self.player is not None
+                    else "You"
+                )
+                line = f"{speaker} {action}"
+                if not line.endswith((".", "!", "?")):
+                    line += "."
+                response = line
+                location = (acting_player.location if acting_player is not None
+                            else self._player_location)
+                await self.emit("player_emoted", {
+                    "name": player_name,
+                    "text": action,
+                    "location": location.name if location else None,
+                })
+                matched = True
+        elif resolved_verb == "tell":
+            # Private, server-wide, awake target only (#75). The reply carries
+            # the sender's presentation; the adapter adds the target's copy.
+            response = await self._handle_tell(raw_text, player_name)
             matched = True
         elif resolved_verb == "hello":
             response = "The world listens..."

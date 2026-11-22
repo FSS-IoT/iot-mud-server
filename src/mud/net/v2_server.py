@@ -533,6 +533,29 @@ class V2Server:
                     direct=outbound.direct,
                     msg_id=msg_id if outbound.direct else None,
                 )
+            elif outbound.target == "player":
+                # A private push to one named character (#75). It is not a
+                # reply to the actor's request id and it never reaches the
+                # room. A target that left between resolution and delivery
+                # gets nothing; there is no offline queue.
+                target_name = outbound.player_name
+                target_ws = (
+                    self._ws_by_name.get(target_name)
+                    if target_name is not None else None
+                )
+                target_session = (
+                    self._sessions.get(target_ws)
+                    if target_ws is not None else None
+                )
+                if target_ws is None or target_session is None:
+                    continue
+                try:
+                    await self._send(
+                        target_ws, target_session, outbound.type,
+                        outbound.data, direct=outbound.direct,
+                    )
+                except websockets.exceptions.ConnectionClosed:
+                    continue
             else:
                 room_name = outbound.room_name or (
                     current_room.name if current_room is not None else None)

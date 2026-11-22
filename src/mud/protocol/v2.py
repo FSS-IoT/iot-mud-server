@@ -46,8 +46,8 @@ ERROR_CODES = {
     "not_here", "not_portable", "container_closed", "no_exit", "locked",
     "already_open", "already_closed", "malformed_message", "unknown_message",
     "not_joined", "already_joined", "name_taken", "invalid_name",
-    "invalid_key", "not_authenticated", "rate_limited", "internal",
-    "unsupported_version",
+    "invalid_key", "not_authenticated", "not_awake", "rate_limited",
+    "internal", "unsupported_version",
 }
 
 # The auth methods `hello.data.auth_modes` may advertise.
@@ -58,16 +58,20 @@ AUTH_MODES = ("key",)
 class Outbound:
     """One event the server should send.
 
-    `target` is "actor" (the command's sender) or "room" (everyone else in the
-    room). `room_name` chooses the room for a broadcast; None means the actor's
-    current room. `direct` controls whether the request id is echoed.
+    `target` is "actor" (the command's sender), "room" (everyone else in the
+    room), or "player" (one named character, for private social traffic).
+    `room_name` chooses the room for a broadcast; None means the actor's
+    current room. `player_name` chooses the character for a "player" push and
+    is ignored by the other targets. `direct` controls whether the request id
+    is echoed; a private push to someone else never is.
     """
 
     type: str
     data: dict[str, Any]
-    target: Literal["actor", "room"] = "actor"
+    target: Literal["actor", "room", "player"] = "actor"
     room_name: str | None = None
     direct: bool = True
+    player_name: str | None = None
 
 
 @dataclass

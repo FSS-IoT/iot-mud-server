@@ -76,6 +76,34 @@ Use two characters, **Ada** and **Ben**.
     waits for a reply, use the `quit` message. A bare socket close also produces
     `room.leave`; the close code is then the client's.
 
+## Social (v2.1.2)
+
+Use a third character, **Cara**, alongside Ada and Ben. `tests/test_social.py`
+runs this sequence against the server.
+
+1. **Who.** Ada sends `who`. She receives `who.list` with every character,
+   including herself, as `{name, room_id, asleep, stone}`. The roster is
+   server-wide, so it includes characters in other rooms and characters whose
+   session ended.
+2. **Emote.** Ada sends `emote waves at the sky` (or the alias
+   `me waves at the sky`). Ada receives `player.emoted` with `self: true`; Ben
+   and Cara, in the same room, receive it with `self: false` and the same
+   `text: "Ada waves at the sky."`. A player in another room receives nothing:
+   `emote` is room-local.
+3. **Tell.** Ada sends `tell Ben meet me at the gate`. Ada receives
+   `player.told` with `self: true` and `You tell Ben, "meet me at the gate".`;
+   Ben receives `self: false` and `Ada tells you, "meet me at the gate".`;
+   Cara receives nothing, even in the same room. `tell` is private and
+   server-wide.
+4. **Asleep target.** Cara sends `quit`; Ada and Ben receive `room.leave` with
+   `reason: "disconnect"`, `asleep: true`, and `stone: true`. Ada's `who` still
+   lists Cara, asleep and stone. Ada sends `tell Cara hello`; she receives
+   `error` with `code: "not_awake"` and no `player.told`. Ben receives
+   nothing. There is no offline queue.
+5. **Wake.** Cara reconnects and logs in with her saved key. She receives
+   `auth.ok` and `room.state`, and no old tell is replayed. `who` lists her
+   awake again in the same room.
+
 ## Containers and locks (v2.0)
 
 These are part of v2.0 and covered by the adapter tests; a client should render
@@ -100,8 +128,9 @@ Your client is compatible when it can:
 - register (show the key once) or log in with a saved key, then render
   `room.state`;
 - send `input` and pair the direct reply by `id`;
-- render `room.enter` / `room.leave`, `player.said`, `object.*`,
-  `player.inventory`, `notice`, and `error`;
+- render `room.enter` / `room.leave`, `player.said`, `player.emoted`,
+  `player.told`, `who.list`, `object.*`, `player.inventory`, `notice`, and
+  `error`;
 - keep running after an error or a malformed frame;
 - quit cleanly.
 

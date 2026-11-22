@@ -38,6 +38,7 @@ _ALIASES = {
     "i": "inventory", "inv": "inventory",
     "h": "help",
     "exam": "examine",
+    "me": "emote",
 }
 
 
@@ -214,6 +215,10 @@ def _classify(reply: str) -> str:
         return "not_found"
     if lowered.startswith("there is nowhere"):
         return "not_here"
+    # A name on the durable roster whose session is gone (#72) is asleep and
+    # stone. `tell` refuses rather than queueing; the code is additive (#75).
+    if " is asleep, turned to stone" in lowered:
+        return "not_awake"
     if " is locked" in lowered:
         return "locked"
     if " does not fit" in lowered:
@@ -253,6 +258,12 @@ def _actor(type_: str, data: dict[str, Any]) -> Outbound:
 def _room(type_: str, data: dict[str, Any],
           room_name: str | None = None) -> Outbound:
     return Outbound(type_, data, "room", room_name=room_name, direct=False)
+
+
+def _player(type_: str, data: dict[str, Any], player_name: str) -> Outbound:
+    """A private push to one named character, not a request reply (#75)."""
+    return Outbound(type_, data, "player", player_name=player_name,
+                    direct=False)
 
 
 def _parse(text: str) -> tuple[str, str | None, str]:
@@ -522,6 +533,47 @@ async def execute(engine: Engine, player_name: str,
                 "text": f'{player.name} says, "{spoken}".',
                 "self": False,
             }),
+        ])
+
+    if verb == "emote":
+        # Room-local only (#75): the actor and its room see the same rendered
+        # line; `self` marks the actor. The engine's reply is that line.
+        if not arg:
+            return _failure(reply)
+        return CommandResult([
+            _actor("player.emoted", {
+                "from": player.name, "text": reply, "self": True,
+            }),
+            _room("player.emoted", {
+                "from": player.name, "text": reply, "self": False,
+            }),
+        ])
+
+    if verb == "tell":
+        # Private to the sender and an awake target, never the room (#75).
+        # The engine resolved the target and refused a sleeping one; a typed
+        # failure carries no target event and creates no offline queue.
+        pieces = raw.split(maxsplit=2)
+        if len(pieces) < 3 or not pieces[2].strip():
+            return _error("bad_args", reply)
+        target_name = pieces[1]
+        spoken = pieces[2].strip()
+        if not reply.lower().startswith("you tell "):
+            return _failure(reply)
+        target = engine.find_character(target_name)
+        if target is None:
+            # The target vanished between the engine call and this lookup.
+            return _notice(reply)
+        return CommandResult([
+            _actor("player.told", {
+                "from": player.name, "to": target.name,
+                "text": reply, "self": True,
+            }),
+            _player("player.told", {
+                "from": player.name, "to": target.name,
+                "text": f'{player.name} tells you, "{spoken}".',
+                "self": False,
+            }, target.name),
         ])
 
     if verb == "examine":
