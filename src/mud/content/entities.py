@@ -67,6 +67,11 @@ class Entity:
         self.container = container
         self.open = open
         self.contents: List[Entity] = []
+        # Authored effects, keyed by trigger (`on_enter`, `on_talk`, ...).
+        # The loader copies the validated content model here; the engine is the
+        # only reader and publishes an `effect` event per triggered entry
+        # (#84). Empty means the object, NPC, or room reacts to nothing.
+        self.effects: dict = {}
 
     @property
     def is_container(self) -> bool:

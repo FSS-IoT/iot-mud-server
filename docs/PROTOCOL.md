@@ -552,6 +552,56 @@ Two additive room events announce the move:
 - The events are room-local. The mover sends no message; an NPC never
   initiates dialogue or a command.
 
+### Effects (v2.1, bus/log-only by default)
+
+World YAML may attach `effects` to a room, an object, or an NPC. The validator
+owns the schema: a trigger from `on_enter`, `on_exit`, `on_take`, `on_drop`,
+`on_use`, `on_open`, `on_close`, `on_talk`, or `on_device`, a dotted effect
+type (`light.dim`, `sound.play`, ...), and JSON-safe params. `content check`
+rejects anything else; the server does not define a second effect vocabulary.
+
+A successful trigger publishes one `effect` event on the engine bus per
+authored entry. The same payload is appended as one `event_log` row
+(`type: "effect"`, with `actor`, `room_id`, and canonical JSON `payload`).
+v2.1 drives three triggers today: `on_talk` from a successful `talk`/`ask`,
+`on_enter` from a player moving into a room, and `on_open` from opening a
+container. Other authored triggers are parsed and validated but not fired yet.
+
+```json
+{
+  "effect": {"type": "sound.play", "params": {"clip": "coins_clink"}},
+  "trigger": "on_talk",
+  "source": {"kind": "npc", "id": "npc_merchant", "name": "Mira the Merchant"},
+  "room": {"id": "market", "name": "Marketplace"},
+  "actor": {"name": "Ada"}
+}
+```
+
+`source.kind` is `room`, `object`, or `npc`; `source.id` is the stable authored
+world id, the same id `room.state` and `npc.say` publish. `room` and `actor`
+are present but may be `null` when the trigger has no room or no character.
+The payload carries no timestamp or random id, so the bus and the log compare
+exactly.
+
+**Default: not on the wire.** `[features].effects` is `false` in v2.1. With
+the flag off, the engine still publishes the bus event and still appends the
+`event_log` row, but no client receives an `effect` event. Setting
+`features.effects = true` also sends the same payload to everyone in `room`,
+including the actor:
+
+| Type | Data | Recipients |
+|---|---|---|
+| `effect` | `effect{type,params}`, `trigger`, `source{kind,id,name}`, `room{id,name}`, `actor{name}` | Everyone in the room when `[features].effects=true` |
+
+```toml
+[features]
+effects = false   # v2.1 default; bus and event_log only
+```
+
+The flag changes delivery only. The engine never reads it, so turning effects
+off or removing every authored block changes no reply, location, inventory,
+lock, or NPC position.
+
 ### Carry limit and target resolution (v2.1)
 
 `take <item>` (and `get <item> from <container>`) refuses a move that would
@@ -703,8 +753,9 @@ container (`object.unlocked`), and `use <key> on <exit>` opens a locked way
 (`exit.unlocked`). The key test is the same in both cases: the key object's
 `id`, not its display name.
 
-Reserved for later, never emitted in v2.0: `object.locked`,
-`npc.enter`, `npc.leave`, `effect`, `device.event`,
+Reserved in v2.0 and delivered additively in v2.1: `npc.enter`, `npc.leave`
+(NPC wandering), and `effect` (only when `[features].effects` is true; bus and
+log only otherwise). Still reserved: `object.locked`, `device.event`,
 `narration.append`, `room.generated`.
 
 **Why container locks and exit locks:** the reference engine has keys and locks
@@ -889,6 +940,14 @@ in-progress release; its entry grows as each documented addition lands.
   `npc{id,name}`, `from{id,name}`, `to{id,name}`, `direction`, and `text`.
   `room.state.npcs[]` remains the resynchronization path; `wander: false`
   never moves.
+- Effects (#84): a room, object, or NPC `effects` block is parsed and
+  validated; a successful `on_talk`, `on_enter`, or `on_open` trigger emits one
+  `effect` event per authored entry on the engine bus and appends one
+  `event_log` row. `[features].effects` defaults to `false`: the bus and the
+  log always see the event, no client does. With `true`, the room also receives
+  `effect{effect{type,params}, trigger, source{kind,id,name}, room{id,name},
+  actor{name}}`. The flag changes delivery only, so disabling effects changes
+  no gameplay. Malformed effects remain `content check` failures.
 
 ### v2.0 — protocol 2
 

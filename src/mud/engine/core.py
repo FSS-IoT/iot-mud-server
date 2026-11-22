@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 from src.mud.content import DEFAULT_CARRY_CAPACITY, NPC, Entity, Player, Room
+from src.mud.content.effects import effect_entries, effect_payload
 from src.mud.content.validator import container_cycles
 from src.mud.storage.keys import object_key, room_key
-from src.mud.world.wander import NpcMove, NpcWanderer
+from src.mud.world.wander import NpcMove, NpcWanderer, npc_key
 
 if TYPE_CHECKING:
     from src.mud.storage.store import WriteThroughStore
+
+logger = logging.getLogger(__name__)
 
 class Engine:
     def __init__(self, store: WriteThroughStore | None = None):
@@ -24,7 +28,12 @@ class Engine:
         self._rooms: Dict[str, Room] = {}
         self._player_location: Optional[Room] = None
         self.player: Optional[Entity] = None
-        self._subscribers: Dict[str, List[Callable]] = {}
+        # The effect log sink is a bus subscriber (#84): every triggered
+        # effect is appended to `event_log` when a store is attached, whether
+        # or not any client is allowed to see it.
+        self._subscribers: Dict[str, List[Callable]] = {
+            "effect": [self._record_effect],
+        }
         # Multiplayer registry. Each named player owns its location; the engine
         # is authoritative over who is where. Legacy single-player accessors
         # (self.player / self._player_location) remain for backward compatibility.
@@ -309,6 +318,8 @@ class Engine:
         await self.emit("player_moved", {
             "name": name, "from": old_name, "to": destination.name,
         })
+        await self.fire_effects(
+            destination, "on_enter", actor=name, room=destination)
         return True, destination.name
 
     @staticmethod
@@ -511,12 +522,13 @@ class Engine:
         player = self._resolve_player(player_name)
         return player.location if player is not None else self._player_location
 
-    def _handle_talk(self, arg: str, player_name: str | None = None) -> str:
+    async def _handle_talk(self, arg: str, player_name: str | None = None) -> str:
         """`talk <npc>`: the authored greeting, or the NPC's default line.
 
         Dialogue is scripted content, never generated. An unknown name is
         phrased for the adapter's `not_found`; an ambiguous one reuses the
-        item resolver's wording (`ambiguous`).
+        item resolver's wording (`ambiguous`). A spoken answer fires the NPC's
+        `on_talk` effects (#84).
         """
         room = self._speaker_room(player_name)
         npc, ambiguity = self.find_npc(room, arg)
@@ -527,14 +539,22 @@ class Engine:
         line = npc.greeting or npc.default
         if not line:
             return f"{npc.name} has nothing to say."
+        player = self._resolve_player(player_name)
+        await self.fire_effects(
+            npc, "on_talk",
+            actor=player.name if player is not None else None,
+            room=room,
+        )
         return f'{npc.name} says, "{line}"'
 
-    def _handle_ask(self, arg: str, player_name: str | None = None) -> str:
+    async def _handle_ask(self, arg: str, player_name: str | None = None) -> str:
         """`ask <npc> about <topic>`: the topic line, or the default fallback.
 
         Topics are matched case-insensitively against the authored map. An
         unknown topic is not an error: the NPC answers with its `default`
-        line, so a client never has to know the script in advance.
+        line, so a client never has to know the script in advance. A spoken
+        answer, including the fallback, fires the NPC's `on_talk` effects
+        (#84): the trigger vocabulary has no separate `on_ask`.
         """
         npc_arg, separator, topic = arg.partition(" about ")
         if not separator:
@@ -548,6 +568,12 @@ class Engine:
         line = npc.topics.get(topic.strip().lower()) or npc.default
         if not line:
             return f"{npc.name} has nothing to say."
+        player = self._resolve_player(player_name)
+        await self.fire_effects(
+            npc, "on_talk",
+            actor=player.name if player is not None else None,
+            room=room,
+        )
         return f'{npc.name} says, "{line}"'
 
     @staticmethod
@@ -992,6 +1018,11 @@ class Engine:
             if container.open:
                 return f"The {container.name} is already open."
             container.open = True
+            await self.fire_effects(
+                container, "on_open",
+                actor=getattr(target_player, "name", None),
+                room=room,
+            )
 
         loot = list(container.contents)
         if not loot:
@@ -1220,11 +1251,98 @@ class Engine:
             return self.get_player(player_name)
         return None
 
+    # --- Effects (#84) -------------------------------------------------------
+
+    @staticmethod
+    def _effect_source(owner: Any) -> dict[str, str]:
+        """The stable identity of the room, object, or NPC owning an effect."""
+        if isinstance(owner, Room):
+            return {"kind": "room", "id": room_key(owner), "name": owner.name}
+        if isinstance(owner, NPC):
+            return {"kind": "npc", "id": npc_key(owner), "name": owner.name}
+        return {"kind": "object", "id": object_key(owner), "name": owner.name}
+
+    async def fire_effects(
+        self,
+        owner: Any,
+        trigger: str,
+        *,
+        actor: str | None = None,
+        room: Room | None = None,
+    ) -> list[dict[str, Any]]:
+        """Publish every effect `owner` authors for `trigger` on the bus.
+
+        This is the only trigger seam: an `effect` event per authored entry,
+        carrying the stable payload from `content.effects`. Storage appends a
+        row through the sink installed in `__init__`; a client sees the event
+        only when the server enables `features.effects`. The engine never
+        consults that flag, so effects cannot change a reply, a location, or
+        an inventory (#84).
+
+        `room` is where the effect happens; a room-owned effect defaults to
+        itself. `actor` is the display name of the character whose command
+        caused it, when there is one. Returns the payloads it published.
+        """
+        if room is None and isinstance(owner, Room):
+            room = owner
+        room_data = (
+            {"id": room_key(room), "name": room.name}
+            if room is not None else None
+        )
+        source = self._effect_source(owner)
+        published: list[dict[str, Any]] = []
+        for effect in effect_entries(owner, trigger):
+            payload = effect_payload(
+                effect,
+                trigger=trigger,
+                source=source,
+                actor=actor,
+                room=room_data,
+            )
+            if payload is None:
+                continue
+            published.append(payload)
+            await self.emit("effect", payload)
+        return published
+
+    async def _record_effect(self, event_type: str, data: Any) -> None:
+        """Append one triggered effect to `event_log` (#84).
+
+        The log is part of the bus seam, not a second write-through rule: an
+        effect is presentation/hardware intent, so a logging failure is
+        reported and dropped rather than turning a valid command into
+        `internal`. Without a store (the v1 server, unit tests) this is a
+        no-op and the bus still carries the event.
+        """
+        if self.store is None or not isinstance(data, dict):
+            return
+        actor = data.get("actor")
+        room = data.get("room")
+        try:
+            self.store.record_event(
+                event_type,
+                data,
+                actor=actor.get("name") if isinstance(actor, dict) else None,
+                room_id=room.get("id") if isinstance(room, dict) else None,
+            )
+        except Exception:
+            logger.exception("could not append an effect to event_log")
+
     async def subscribe(self, event_type: str, callback: Callable) -> None:
         """Registers a listener for semantic events."""
         if event_type not in self._subscribers:
             self._subscribers[event_type] = []
         self._subscribers[event_type].append(callback)
+
+    async def unsubscribe(self, event_type: str, callback: Callable) -> None:
+        """Remove one listener; a missing listener is a no-op."""
+        callbacks = self._subscribers.get(event_type)
+        if callbacks is None:
+            return
+        try:
+            callbacks.remove(callback)
+        except ValueError:
+            pass
 
     async def emit(self, event_type: str, data: Any) -> None:
         """Broadcasts internal game changes."""
@@ -1419,6 +1537,14 @@ class Engine:
                     matched = True
                     # Signal World Change
                     await self.emit("room_change", {"from": prev_location.name, "to": destination.name, "desc": destination.description})
+                    await self.fire_effects(
+                        destination, "on_enter",
+                        actor=(
+                            self.player.name
+                            if self.player is not None else None
+                        ),
+                        room=destination,
+                    )
                 else:
                     response = f"You cannot go {direction}."
                     matched = True
@@ -1571,14 +1697,14 @@ class Engine:
             if not resolved_arg:
                 response = "Talk to whom? Try `talk <npc>`."
             else:
-                response = self._handle_talk(resolved_arg, player_name)
+                response = await self._handle_talk(resolved_arg, player_name)
             matched = True
 
         elif resolved_verb == "ask":
             if not resolved_arg:
                 response = "Ask whom about what? Try `ask <npc> about <topic>`."
             else:
-                response = self._handle_ask(resolved_arg, player_name)
+                response = await self._handle_ask(resolved_arg, player_name)
             matched = True
 
         # LIGHT — ignite a carried light source: `light <torch/lantern>`.
