@@ -111,7 +111,7 @@ Run just the load smoke locally:
 uv run pytest tests/test_load.py -m load -q
 ```
 
-Run every load-marked test (there is one today):
+Run every load-marked test (the load smoke and its p95 guard):
 
 ```bash
 uv run pytest -m load -q
