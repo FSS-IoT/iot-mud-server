@@ -189,7 +189,30 @@ Failure is `auth.error` (direct, echoes `id`) with a code (`invalid_key`,
 `name_taken`, `invalid_name`). `invalid_key` covers a malformed key, an unknown
 key id, a revoked key, and a wrong secret, deliberately: the code and message
 are identical in every case. Logging in while that character already has a live
-session is `name_taken`. Auth attempts are rate-limited; names are not locked.
+session is `name_taken`.
+
+Auth attempts are rate-limited **per connection, never per name**. Each failed
+auth exchange (`invalid_key`, `invalid_name`, `name_taken`, or `bad_args`)
+counts against a budget. After `[auth].max_attempts` failures (default `20`)
+inside `[auth].window_seconds` (default `60`), further `auth` messages on that
+connection get `auth.error{rate_limited}` without reaching the database. The
+socket stays open, and the budget is empty again once the oldest counted
+failure is a window old. A different connection is unaffected: a throttled
+client can neither lock a character name nor stop its owner from logging in.
+No name, lock, or attempt state is stored in SQLite.
+
+The limits are set in `mud.toml`:
+
+```toml
+[auth]
+max_attempts = 20
+window_seconds = 60
+```
+
+`max_attempts` must be a positive integer and `window_seconds` a positive
+finite number. `rate_limited` is non-fatal: the server does not close the
+socket for a bad key or for reaching the limit. Close code `4005` is reserved
+for deliberate policy abuse and is not used for a normal failed attempt.
 
 The v2.0 guest path remains available only when `auth_required` is `false`. A
 `join` on a server that requires auth gets `not_authenticated`, and the socket
@@ -488,6 +511,10 @@ in-progress release; its entry grows as each documented addition lands.
 - Registration names are 2-24 characters, starting with a letter; uniqueness
   is case-insensitive. Bad names are `auth.error{invalid_name}` and duplicate
   names `auth.error{name_taken}`.
+- Auth attempts are limited per connection, never by name: after
+  `[auth].max_attempts` failures (default 20) in `[auth].window_seconds`
+  (default 60), the connection gets `auth.error{rate_limited}` and stays open;
+  another connection can still register or log in.
 - Login with a character key returns `auth.ok` without the key and enters the
   character's stored room; a character with no stored room enters at the world
   start room.
