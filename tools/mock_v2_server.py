@@ -524,8 +524,6 @@ class MockServer:
             "object": item, "by": session.name, "self": True,
             "text": f"You dropped the {item['name']}.",
         }, msg_id)
-        await session.send("player.inventory",
-                           session.inventory_payload())
         await session.broadcast("object.dropped", {
             "object": item, "by": session.name, "self": False,
             "text": f"{session.name} drops the {item['name']}.",

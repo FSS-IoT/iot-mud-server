@@ -77,6 +77,35 @@ async def test_take_emits_object_event_without_inventory_relist(vault):
 
 
 @pytest.mark.asyncio
+async def test_drop_emits_object_event_without_inventory_relist(vault):
+    engine, player, room, chest, coin, _key = vault
+    chest.remove_content(coin)
+    player.add_content(coin)
+
+    result = await execute(engine, "Ada", "drop coin")
+
+    actor = _events(result, "object.dropped", "actor")
+    broadcast = _events(result, "object.dropped", "room")
+    inventory = _events(result, "player.inventory", "actor")
+
+    assert len(actor) == 1 and len(broadcast) == 1
+    assert inventory == []
+    assert actor[0].data["object"]["id"] == "coin"
+    assert actor[0].data["self"] is True
+    assert actor[0].data["text"] == "You dropped the Coin."
+    assert broadcast[0].data["self"] is False
+    assert "Ada drops" in broadcast[0].data["text"]
+    assert coin in room.contents
+    assert coin not in player.contents
+
+    # The explicit verb still pushes the now-coinless inventory.
+    explicit = await execute(engine, "Ada", "inventory")
+    pushed = _events(explicit, "player.inventory", "actor")
+    assert len(pushed) == 1
+    assert [item["id"] for item in pushed[0].data["items"]] == ["gold_key"]
+
+
+@pytest.mark.asyncio
 async def test_explicit_inventory_still_emits_player_inventory(vault):
     engine, player, _room, chest, coin, key = vault
     chest.remove_content(coin)

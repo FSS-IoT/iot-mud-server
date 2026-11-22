@@ -275,15 +275,47 @@ async def test_take_does_not_relist_inventory(server):
         assert [item["id"] for item in inventory["data"]["items"]] == [
             "gold_coin"]
 
-        # `drop` is unchanged; #56 owns its inventory follow-up.
-        await ada.input("drop gold coin", 4)
+
+@pytest.mark.asyncio
+async def test_drop_does_not_relist_inventory(server):
+    """`drop` emits both object.dropped events and no inventory follow-up."""
+    instance, _engine = server
+    async with V2Client(f"ws://localhost:{instance.port}") as ada, \
+            V2Client(f"ws://localhost:{instance.port}") as ben:
+        await ada.register("Ada")
+        await ben.register("Ben")
+        await ada.next("room.enter")
+        await ada.input("go north", 1)
+        await ada.next("room.state")
+        await ben.input("go north", 1)
+        await ben.next("room.state")
+        await ada.next("room.enter")
+
+        await ada.input("take gold coin", 2)
+        await ada.next("object.taken")
+        await ben.next("object.taken")
+
+        await ada.input("drop gold coin", 3)
         dropped = await ada.next("object.dropped")
-        empty = await ada.next("player.inventory")
         other_drop = await ben.next("object.dropped")
 
+        assert dropped["id"] == 3
         assert dropped["data"]["self"] is True
-        assert empty["data"]["items"] == []
+        assert dropped["data"]["object"]["id"] == "gold_coin"
+        assert dropped["data"]["text"] == "You dropped the Gold Coin."
         assert other_drop["data"]["self"] is False
+        assert "Ada drops" in other_drop["data"]["text"]
+
+        # `drop` pushes no unsolicited `player.inventory`: the next inventory
+        # event must answer the explicit request and echo its id. Ambient
+        # events, if any, are skipped.
+        await ada.input("inventory", 4)
+        while True:
+            message = await ada.next_any()
+            if message.get("type") == "player.inventory":
+                break
+        assert message.get("id") == 4
+        assert message["data"]["items"] == []
 
 
 @pytest.mark.asyncio

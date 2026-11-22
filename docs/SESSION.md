@@ -58,7 +58,8 @@ Use two characters, **Ada** and **Ben**.
    Commands resolve **display names**; `object.id` is `gold_coin`, but the
    command is `take gold coin`, not `take gold_coin`.
 7. **Drop.** Ada sends `drop gold coin`. Both receive `object.dropped`; Ada
-   also receives `player.inventory` with an empty list.
+   receives no `player.inventory` follow-up. An explicit `inventory` still
+   returns `player.inventory` with an empty list.
 8. **Chat.** Ada sends `say hello`. Ada receives `player.said` with
    `self: true`; Ben receives `player.said` with `self: false` and
    `from: "Ada"`.
