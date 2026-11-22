@@ -6,18 +6,28 @@ page, a phone app, or anything else that speaks WebSocket JSON.
 
 The server's `tests/test_protocol_v2.py` covers the core of this sequence
 (presence, movement, objects, chat, errors, and the close code); this page is
-the full client acceptance. Containers and locks are covered by the adapter
-tests and the optional section at the end.
+the full client acceptance. Containers, exit locks, social commands, NPC
+dialogue, and sleep/wake are required sections: v2.1 clients are expected to
+render them.
 
 ## Before you start
 
-1. Run the server locally (`../BOOTSTRAP.md` shows how). Start it fresh for the
-   acceptance; the session changes the world. A v2.1 server requires auth, so
-   have two character names ready and somewhere outside the repository to keep
-   the keys.
-2. Read `PROTOCOL.md` version 2, especially "v2.1 auth".
+1. Run the server locally (`../BOOTSTRAP.md` shows how). Seed a **fresh**
+   database for the acceptance; the session takes the gold coin, unlocks the
+   forest chest and the tavern door, and moves items. A used database can fail
+   in ways that look like client bugs. A v2.1 server requires auth, so have two
+   character names ready and somewhere outside the repository to keep the keys.
+2. Read `PROTOCOL.md` version 2.1, especially "v2.1 auth" and "Session
+   lifecycle", and `CLIENTS.md` for the key and sleep rules.
 3. Have two copies of your client ready, or two terminals, so you can see
    another player.
+
+## Effects are not part of the acceptance
+
+The server's default `[features].effects = false` keeps authored effects on the
+engine bus and in `event_log`; no client receives an `effect` event. A client
+must ignore the event type if it ever arrives, but the acceptance run does not
+require it. Do not enable the flag just to pass this session.
 
 ## Room geometry is optional
 
@@ -72,7 +82,10 @@ Use two characters, **Ada** and **Ben**.
     works on the same socket. Unknown commands return
     `error` with `code: "unknown_command"` and do not close the socket.
 12. **Quit.** Ada sends the `quit` message. Ben receives `room.leave` with
-    `reason: "disconnect"`; Ada's socket closes with code `1000`. An
+    `reason: "disconnect"`, `asleep: true`, and `stone: true` because Ada is an
+    authenticated character; the character stays in the room. Ada's socket
+    closes with code `1000`. (The v2.0 guest path removes the character
+    instead; see "Sleep and wake" below for the full authenticated flow.) An
     `input quit` also closes `1000`, but (like the `quit` message) it is a
     session-level exception and does not send a direct reply; if your client
     waits for a reply, use the `quit` message. A bare socket close also produces
@@ -105,6 +118,27 @@ runs this sequence against the server.
 5. **Wake.** Cara reconnects and logs in with her saved key. She receives
    `auth.ok` and `room.state`, and no old tell is replayed. `who` lists her
    awake again in the same room.
+
+## NPC dialogue (v2.1.3)
+
+Use Ysolde the Alchemist in the shop; she does not wander, so the step is
+repeatable. `tests/test_npc_dialogue.py` runs this sequence.
+
+1. From the gate: `go north` (Marketplace), `go west` (Alchemist Shop).
+2. `talk Ysolde` → `npc.say` with `npc.id: "npc_alchemist"`,
+   `npc.name: "Ysolde the Alchemist"`, `self: true`, and the authored greeting.
+   The event carries no `topic`.
+3. Ben, in the same room, receives the same `npc.say` with `self: false`.
+4. `ask Ysolde about chest` → `npc.say` with `topic: "chest"` and the authored
+   line. `ask Ysolde about weather` → the NPC's `default` line, with no
+   `topic`: an unknown topic is not an error, so a client need not know the
+   script.
+5. `talk nobody` → `error{not_found}`; `ask Ysolde` without `about` →
+   `error{bad_args}`. Neither emits `npc.say`.
+6. Wandering NPCs (`wander: true`) may move between rooms during a long
+   session. Treat `npc.enter` and `npc.leave` as optional ambient updates;
+   `room.state.npcs` is the resynchronization path. Do not require an NPC to
+   stay in one room.
 
 ## Containers, close, and get from (v2.1.2)
 
@@ -182,6 +216,38 @@ rebuilds the authored lock (`PROTOCOL.md`, "Exit locks").
    `error{not_found}` and the door stays locked. The key is not consumed, so
    keep it in the inventory for the rest of the session.
 
+## Sleep and wake (v2.1.1)
+
+An authenticated disconnect is a sleep, not a logout. `tests/test_sleep_wake.py`
+runs this sequence; use Ada and Ben in the Marketplace, with Ada carrying the
+gold key from the exit-lock section.
+
+1. **Inventory before.** Ada sends `inventory` → `player.inventory` lists the
+   torch and the Gold Key (`id: "key_gold_1"`).
+2. **Sleep.** Ada sends `quit`. Ben receives `room.leave` with
+   `reason: "disconnect"`, `asleep: true`, `stone: true`, and `dropped`
+   listing the Gold Key. Ada's socket closes `1000`.
+3. **Stone.** Ben's `look` lists Ada under `room.players` with `asleep: true`
+   and `stone: true`; the Gold Key is now on the room floor in `objects`.
+   Ben's `who` lists Ada asleep and stone in the same room. Ada's character was
+   not removed.
+4. **No offline queue.** Ben sends `tell Ada hello` → `error{not_awake}`; no
+   `player.told` is sent, and nothing is stored for later.
+5. **Wake.** Ada reconnects and sends `auth` with `mode: "login"` and her saved
+   key. She receives `auth.ok` without a key, then `room.state` for the same
+   room. Her inventory still has the torch; the Gold Key is not restored
+   because it dropped when she slept. Ben receives `room.enter` with
+   `reason: "connect"`.
+6. **Recover.** Ben sends `take gold key` and gets `object.taken`; the key is
+   now his. Ada may take it back from him, or carry on; the dropped item stayed
+   where it landed.
+7. **Idle is the same path (optional).** Lower `[limits].idle_timeout_seconds`
+   in `mud.toml`, restart the server, and do nothing on an authenticated
+   socket. When the timeout passes, the room receives the same sleep
+   `room.leave` and the socket closes `4004`. A later login wakes the character
+   in place. Guest sessions (`auth_required = false`) are removed on disconnect
+   and are not slept.
+
 ## What "done" means
 
 Your client is compatible when it can:
@@ -193,9 +259,15 @@ Your client is compatible when it can:
 - render `room.enter` / `room.leave`, `player.said`, `player.emoted`,
   `player.told`, `who.list`, `object.*`, `exit.locked` / `exit.unlocked`,
   `player.inventory`, `notice`, and `error`;
-- render `npc.say`, and treat `npc.enter` / `npc.leave` as optional ambient
-  updates: a wandering NPC may move between rooms during the session, and the
-  next `room.state` already lists it in its new room;
+- run `talk` and `ask`, and render `npc.say`, with both the actor's `self: true`
+  line and the room's `self: false` line;
+- treat `npc.enter` / `npc.leave` as optional ambient updates: a wandering NPC
+  may move between rooms during the session, and the next `room.state` already
+  lists it in its new room;
+- sleep on disconnect and wake on the next login without losing the retained
+  inventory, and show a sleeping character as asleep/stone;
+- ignore an `effect` event type it does not render; the default server sends
+  none;
 - keep running after an error or a malformed frame;
 - quit cleanly.
 

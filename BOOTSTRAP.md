@@ -38,6 +38,7 @@ any path works — if your acceptance script takes a server path, point it here.
 git clone https://github.com/FSS-IoT/iot-mud-server
 cd iot-mud-server
 uv sync --all-extras
+uv run python -m src.mud.admin seed --db data/mud.db
 ./run_server.sh
 ```
 
@@ -54,11 +55,14 @@ choose another port:
 ./run_server.sh --host 0.0.0.0 --port 9000
 ```
 
-Run one server at a time.
+Run one server at a time. A v2.1 server requires auth: the first connection
+registers a character and receives a character key exactly once. Keep the key
+outside your repository; later connections log in with it. A reconnect to the
+same database keeps the world, the characters, and the epoch.
 
 ### Mock server (optional)
 
-For a fast client check, `tools/mock_v2_server.py` speaks the same v2 handshake
+For a fast client check, `tools/mock_v2_server.py` speaks the v2 handshake
 and scripts the session, including the forest chest:
 
 ```bash
@@ -66,13 +70,16 @@ uv run python tools/mock_v2_server.py
 # client: ws://localhost:8770
 ```
 
-It is a harness, not the real server. Use it while building; the real server is
-the authority for the acceptance.
+It is a harness, not the real server. It uses the v2.0 guest `join` path
+(`auth_required: false`), so it checks your rendering and pairing but not auth.
+Use it while building; the real server is the authority for the acceptance.
 
 ## 3. Read the contract
 
-- `docs/PROTOCOL.md` — the normative v2 contract.
+- `docs/PROTOCOL.md` — the normative v2.1 contract.
+- `docs/CLIENTS.md` — keys, session/sleep/wake, epoch, and client repos.
 - `docs/SESSION.md` — the exact session your client must complete.
+- `docs/CONTENT.md` — the world and the commands it supports.
 - The server's `tests/test_protocol_v2.py` — a worked client in Python, if you
   want to see the message flow.
 
@@ -81,15 +88,23 @@ the authority for the acceptance.
 Do not start with the whole game. Do this in order, with a failing check before
 each step:
 
-1. Connect and read `hello`; print the MOTD and world name.
-2. Send `join` and render `room.state`.
+1. Connect and read `hello`; print the MOTD, world name, `auth_required`, and
+   `server_commit`.
+2. Send `auth` with `mode: "register"`; show the key once, store it outside the
+   repository, and render the following `room.state`. On the next run, log in
+   with `mode: "login"` and the saved key.
 3. Send `input look` and pair the direct reply by `id`.
-4. Parse the room: name, description, exits, objects, players.
+4. Parse the room: name, description, exits, objects, players, and NPCs.
 5. Add movement, then take/drop, then say.
-6. Handle `room.enter` / `room.leave`, `player.said`, `object.*`,
-   `player.inventory`, `notice`, and `error`.
-7. Keep the socket alive after an error or a malformed frame.
-8. Handle a dark room (`room.dark: true`) without inventing contents.
+6. Add the container flow (`open`, `get from`, `put`, `close`), exit locks
+   (`use key on exit`), and `talk`/`ask`.
+7. Handle `room.enter` / `room.leave`, `player.said`, `player.emoted`,
+   `player.told`, `who.list`, `object.*`, `player.inventory`, `notice`, and
+   `error`.
+8. Keep the socket alive after an error or a malformed frame.
+9. Handle a dark room (`room.dark: true`) without inventing contents.
+10. Sleep on disconnect and wake on the next login with the retained inventory;
+    render a sleeping player as asleep/stone.
 
 Each step is a ticket in your repo. A failing check first (the software
 factory's red/green station) is the habit the club is teaching.
@@ -106,10 +121,11 @@ Against the mock, add `--uri ws://localhost:8770`.
 
 ## 5. Pass the acceptance session
 
-Start a **fresh server** for the acceptance. The world is in memory and the
-session takes the gold coin, unlocks the forest chest, and moves items; a second
-run against the same server can fail in ways that look like client bugs. Stop
-the old server and start a new one.
+Start a **fresh server with a fresh database** for the acceptance. Seed it, or
+delete the test database and let `admin seed` recreate it. The session takes
+the gold coin, unlocks the forest chest and the tavern door, and moves items; a
+second run against the same server can fail in ways that look like client bugs.
+Keep the production database out of this: use a scratch path for acceptance.
 
 Run two copies of your client (or one copy of yours and a friend's) and follow
 `docs/SESSION.md` with Ada and Ben. An automated client can drive two

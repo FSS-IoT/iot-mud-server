@@ -10,6 +10,7 @@ The game runs fully offline on one laptop, with no LLM and no internet.
 
 ```bash
 uv sync --all-extras
+uv run python -m src.mud.admin seed --db data/mud.db
 ./run_server.sh
 # ws://localhost:8765
 ```
@@ -21,7 +22,9 @@ Bind the LAN/tailnet interface or choose another port:
 ```
 
 Hosting for the club (tailnet, node sharing, ACL): see
-[`docs/HOSTING.md`](docs/HOSTING.md).
+[`docs/HOSTING.md`](docs/HOSTING.md). Client onboarding: see
+[`docs/CLIENTS.md`](docs/CLIENTS.md). Operations (seed, backup, systemd):
+see [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
 
 Windows:
 
@@ -62,8 +65,10 @@ uv run pytest
 
 Stop the server first. The legacy v1 tests bind fixed ports (8765/8766/8769),
 so a running server makes them fail with `address already in use`. The suite
-includes the two-client v2 conformance session (`tests/test_protocol_v2.py`)
-and the engine tests.
+includes the two-client v2 conformance session (`tests/test_protocol_v2.py`),
+the golden scenarios (`tests/golden/`), and the docs checks
+(`tests/test_docs_examples.py`). CI runs `uv run pytest -m "not load"`; the load
+smoke runs nightly.
 
 ## What is here
 
@@ -72,14 +77,19 @@ and the engine tests.
 | `src/mud/engine/` | Authoritative state, commands, event bus |
 | `src/mud/net/v2_server.py` | v2 WebSocket server (the common server) |
 | `src/mud/net/server.py` | v1 server, kept for history and its tests |
-| `tests/` | Server/engine tests; many are historical red/green artifacts. |
+| `src/mud/storage/` | SQLite schema, migrations, and the write-through store |
+| `src/mud/content/` | YAML world model, validator, and effects |
+| `src/mud/world/` | World loader, seeding, geometry, NPC wandering |
+| `tests/` | Server/engine tests; `tests/golden/` covers every room and event |
 | `src/mud/protocol/` | v2 envelope, outbound types, engine adapter |
 | `tools/mock_v2_server.py` | Protocol-only mock server for client authors |
 | `examples/reference_client.py` | Minimal worked v2 client (not a template) |
-| `src/mud/world/` | World loader |
-| `data/worlds/starting_village.json` | The demo world |
-| `docs/PROTOCOL.md` | The client contract |
+| `data/worlds/club_world/` | The 34-room product world (YAML, one file per area) |
+| `docs/PROTOCOL.md` | The v2.1 client contract |
+| `docs/CLIENTS.md` | Onboarding, keys, sleep/wake, and client repos |
 | `docs/SESSION.md` | The acceptance session every client passes |
+| `docs/CONTENT.md` | Authoring YAML rooms, objects, NPCs, and effects |
+| `docs/OPERATIONS.md` | Seed, config, backup/restore, systemd, version refusal |
 | `docs/HOSTING.md` | Host on a tailnet and share the node with members |
 | `BOOTSTRAP.md` | Start your own client |
 | `CONTRIBUTING.md` | Fork, test, review, merge |
@@ -87,7 +97,9 @@ and the engine tests.
 
 The v1 server stays in the tree for history and its tests. The interactive v1
 demo (`run_demo.sh` / `scripts/client.py`) is not part of this repo; it lives in
-Doc's client repo. The common server is v2.
+Doc's client repo. The common server is v2. The frozen five-room conformance
+fixture at `data/worlds/starting_village.yaml` (and `.json`) is kept for the
+legacy loader tests; it is not the product world.
 
 ## Writing a client
 
@@ -97,9 +109,12 @@ definition of done.
 
 ## Protocol
 
-Version 2.0. The handshake advertises `protocol: [2]`; a client sends `join`,
-then `input` commands, and receives typed events plus a `data.text` line. See
-`docs/PROTOCOL.md` for the envelope, events, errors, and the v2.0/v2.1 split.
+Version 2.1 (wire field `v` is `2`). The handshake advertises `protocol: [2]`;
+a v2.1 client sends `auth` with a character key, then `input` commands, and
+receives typed events plus a `data.text` line. A v2.0 guest `join` remains only
+when the server is started with `auth_required = false`. See
+`docs/PROTOCOL.md` for the envelope, events, errors, close codes, and the
+v2.0/v2.1 changelog.
 
 ## Contributing
 

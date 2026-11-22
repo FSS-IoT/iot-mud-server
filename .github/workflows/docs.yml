@@ -1,0 +1,26 @@
+name: docs
+
+# SPEC v2.1.4 criterion 3 (#87): every fenced example in PROTOCOL.md,
+# CLIENTS.md, CONTENT.md, and OPERATIONS.md is parsed or executed. The normal
+# `test` job runs the same file with the rest of the suite; this job makes the
+# docs gate visible on its own and can be re-run without the whole suite.
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  docs-examples:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.13"
+      - name: Install
+        run: uv sync --all-extras
+      - name: Parse and run docs examples
+        run: uv run pytest tests/test_docs_examples.py -q

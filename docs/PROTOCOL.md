@@ -1,12 +1,13 @@
 # IoT MUD protocol 2
 
-**Version:** 2.0. This is the normative contract between the common server and
-every member client. Additive changes stay inside 2.x; a breaking change
-becomes version 3.
+**Version:** 2.1. The wire field `v` remains `2`: every v2.1 change is
+additive. This is the normative contract between the common server and every
+member client. A breaking change becomes version 3.
 
-**Scope:** v2.0 is parity with the working server. v2.1 adds auth, SQLite,
-YAML worlds, social commands, container open state, exit locks, and NPCs. Later
-versions add IoT and LLM layers. See `ROADMAP.md` for the split.
+**Scope:** v2.1 is the current release: the v2.0 parity contract plus auth,
+SQLite persistence, YAML worlds, social commands, container open state, exit
+locks, NPCs, effects, configurable limits, and idle sleep. Later versions add
+IoT and LLM layers. See `ROADMAP.md` for the split.
 
 ## Transport
 
@@ -374,7 +375,7 @@ client that ignores it, and a room without it, behave exactly as in v2.0.
 `null`.
 
 ```json
-"room": {
+{
   "id": "gate",
   "name": "Village Gate",
   "description": "...",
@@ -848,8 +849,8 @@ idle close is `4004` after the character is already asleep.
 Every change to the wire contract gets an entry here, newest version first.
 `v` stays `2` while the changes are additive; a breaking change becomes
 version 3. A client that pins a server commit reads this section together with
-`hello.data.server_commit` to see what it may be missing. v2.1 is the
-in-progress release; its entry grows as each documented addition lands.
+`hello.data.server_commit` to see what it may be missing. v2.1 is the current
+release; a later additive fix still adds a bullet here.
 
 ### v2.1 — protocol 2
 
@@ -999,7 +1000,8 @@ depend on `shutdown` from this build.
 ## Not in version 2.0
 
 Auth/character keys, SQLite persistence, YAML worlds, `who`/`emote`/`tell`,
-`close`, `get from`, exit locks, an explicit container `open` flag, and NPCs are
-v2.1.
-They are listed in `ROADMAP.md`; nothing in this contract reserves their names
-in a way that would break an additive release.
+`close`, `get from`, exit locks, an explicit container `open` flag, and NPCs
+are v2.1 and ship in this release. The list is kept so a client written against
+a v2.0 server knows what it must add. Nothing in the v2.0 contract reserved
+these names in a way that breaks the additive release; see the
+[changelog](#changelog).
