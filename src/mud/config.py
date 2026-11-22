@@ -12,6 +12,11 @@ from pathlib import Path
 
 DEFAULT_CONFIG = Path("mud.toml")
 DEFAULT_DB = Path("data/mud.db")
+# The product world is YAML (SPEC v2.1.0 criterion 5). The path is relative to
+# the repository root; `load_demo_village` resolves it there, because that
+# loader owns world discovery and a relative path alone would depend on cwd.
+# A future config ticket can expose `[world].path` without moving the default.
+DEFAULT_WORLD = Path("data/worlds/starting_village.yaml")
 
 
 class ConfigError(ValueError):

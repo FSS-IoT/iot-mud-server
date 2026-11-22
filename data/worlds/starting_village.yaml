@@ -1,0 +1,174 @@
+# The product world for the v2 server. Converted from starting_village.json
+# (ticket #66) with identical behavior under the v2.0 conformance suite.
+#
+# Exits are declared once. The loader creates the reciprocal direction, so the
+# file does not repeat market -> south -> gate, shop -> east -> market,
+# forest -> south -> market, or tavern -> west -> market.
+name: Starting Village
+start_room: gate
+rng_seed: 20261121
+
+rooms:
+  - id: gate
+    name: Village Gate
+    description: A heavy stone gate stands tall. To the north is the Marketplace.
+    exits:
+      north: market
+    objects:
+      - id: sign
+        name: Village Sign
+        description: A wooden signpost. The arrows point North to the Marketplace; the Old Tavern is east of the market.
+        kind: readable
+        readable_text: A wooden signpost. The arrows point North to the Marketplace; the Old Tavern is east of the market.
+        weight: 0.2
+    geometry:
+      cells:
+        - "###+###"
+        - "#.....#"
+        - "#.....#"
+        - "#.....#"
+        - "#.....#"
+        - "#.....#"
+        - "#######"
+      spawn:
+        north: [3, 1]
+      props:
+        - kind: gatepost
+          cell: [1, 5]
+        - kind: banner
+          cell: [5, 1]
+
+  - id: market
+    name: Marketplace
+    description: Lively vendors cry out their wares. Exits lead South, West, North, and East.
+    exits:
+      west: shop
+      north: forest
+      east: tavern
+    objects:
+      - id: gold_coin
+        name: Gold Coin
+        description: A shiny, minted copper coin.
+        weight: 0.01
+    geometry:
+      cells:
+        - "#####+#####"
+        - "#.........#"
+        - "#.........#"
+        - "#.........#"
+        - "+.........+"
+        - "#.........#"
+        - "#.........#"
+        - "#.........#"
+        - "#####+#####"
+      spawn:
+        north: [5, 1]
+        south: [5, 7]
+        west: [1, 4]
+        east: [9, 4]
+      props:
+        - kind: stall
+          cell: [3, 2]
+        - kind: well
+          cell: [5, 4]
+        - kind: crate
+          cell: [2, 6]
+        - kind: banner
+          cell: [7, 2]
+
+  - id: tavern
+    name: Old Tavern
+    description: Warmth radiates from within. The smell of roasted meat lingers. Exits West.
+    objects:
+      - id: bread
+        name: Loaf of Bread
+        description: A stale but edible loaf.
+        weight: 0.3
+    geometry:
+      cells:
+        - "#######"
+        - "#.....#"
+        - "#.....#"
+        - "+.....#"
+        - "#.....#"
+        - "#.....#"
+        - "#######"
+      spawn:
+        west: [1, 3]
+      props:
+        - kind: table
+          cell: [2, 4]
+        - kind: bar
+          cell: [4, 2]
+        - kind: hearth
+          cell: [5, 5]
+
+  - id: shop
+    name: Alchemist Shop
+    description: Vials glimmer on shelves. It smells of sulfur.
+    objects:
+      - id: torch
+        name: Torch
+        description: A flickering wooden torch.
+        weight: 0.5
+        light_source: true
+      - id: key_gold_1
+        name: Gold Key
+        description: A small gold key, warm to the touch.
+        weight: 0.1
+    geometry:
+      cells:
+        - "#######"
+        - "#.....#"
+        - "#.....#"
+        - "#.....+"
+        - "#.....#"
+        - "#.....#"
+        - "#######"
+      spawn:
+        east: [5, 3]
+      props:
+        - kind: shelf
+          cell: [2, 1]
+        - kind: counter
+          cell: [4, 4]
+        - kind: cauldron
+          cell: [3, 5]
+
+  - id: forest
+    name: Mysterious Forest
+    description: Trees loom high above, blocking much of the sun.
+    dark: true
+    objects:
+      - id: chest_forest
+        name: Chest
+        description: A sturdy oak chest, bound in rusted iron.
+        kind: container
+        weight: 5.0
+        locked: true
+        required_key: key_gold_1
+        contains:
+          - brass_lantern
+      - id: brass_lantern
+        name: Brass Lantern
+        description: A brass lantern, its wick still dry.
+        weight: 0.4
+        light_source: true
+    geometry:
+      cells:
+        - "#########"
+        - "#.......#"
+        - "#.......#"
+        - "#.......#"
+        - "#.......#"
+        - "#.......#"
+        - "####+####"
+      spawn:
+        south: [4, 5]
+      props:
+        - kind: stump
+          cell: [2, 2]
+        - kind: boulder
+          cell: [6, 3]
+        - kind: mushrooms
+          cell: [3, 4]

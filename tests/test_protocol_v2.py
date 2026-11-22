@@ -8,13 +8,21 @@ and every member client are measured against.
 
 import asyncio
 import json
+from pathlib import Path
 
 import pytest
 import websockets
 
 from src.mud.engine.core import Engine
 from src.mud.net.v2_server import V2Server
-from src.mud.world.loader import load_demo_village
+from src.mud.world.loader import load_world
+
+# The conformance session runs against the product YAML world, not the legacy
+# JSON file (SPEC v2.1.0 criterion 5).
+WORLD_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "data" / "worlds" / "starting_village.yaml"
+)
 
 
 class V2Client:
@@ -83,7 +91,7 @@ class V2Client:
 @pytest.fixture
 async def server():
     engine = Engine()
-    await load_demo_village(engine)
+    await load_world(engine, WORLD_PATH)
     instance = V2Server(engine, port=0)
     task = asyncio.create_task(instance.run())
     for _ in range(200):
