@@ -4,8 +4,11 @@ This is a worked example, **not a template**. It is deliberately small so it can
 be read end-to-end; build your own client in whatever language and UI you like.
 It speaks v2 only and expects the server to advertise protocol `2`.
 
+    # register a new character; the server shows the key once
     uv run python examples/reference_client.py --name Ada
-    # against the mock:
+    # log in again with the saved key (no name needed)
+    uv run python examples/reference_client.py --key "$MUD_KEY"
+    # against the guest mock:
     uv run python examples/reference_client.py --name Ada --uri ws://localhost:8770
 """
 
@@ -54,11 +57,14 @@ def render_message(message: dict, name: str) -> str:
                 direction.capitalize() for direction in exits) + "."
         return out + f"{CLEAR}\n"
 
-    if kind == "session.ok":
+    if kind in ("session.ok", "auth.ok"):
         return ""
 
     if kind == "notice":
         return f"{GREEN}{data.get('text', '')}{CLEAR}\n"
+
+    if kind == "auth.error":
+        return f"{RED}{data.get('message', '')}{CLEAR}\n"
 
     if kind == "error":
         return f"{RED}{data.get('message', '')}{CLEAR}\n"
@@ -81,7 +87,61 @@ def render_message(message: dict, name: str) -> str:
     return ""
 
 
-async def client_handler(uri: str, name: str) -> None:
+async def _enter(websocket, name: str | None, key: str | None,
+                 auth_required: bool) -> str | None:
+    """Authenticate (or guest-join) and show the first room.
+
+    Returns the bound character name, or None when the server rejected the
+    attempt. On registration the key is printed exactly once; this client
+    never logs it and never sends it anywhere else.
+    """
+    if not auth_required:
+        if key is not None:
+            print(f"{YELLOW}This server does not require auth; "
+                  f"ignoring --key.{CLEAR}")
+        await websocket.send(json.dumps({
+            "v": 2, "type": "join", "id": "join",
+            "data": {"name": name},
+        }))
+        return name
+
+    if key is not None:
+        request = {"mode": "login", "key": key}
+    else:
+        request = {"mode": "register", "name": name}
+    await websocket.send(json.dumps({
+        "v": 2, "type": "auth", "id": "auth", "data": request,
+    }))
+
+    reply = json.loads(await websocket.recv())
+    if reply.get("type") != "auth.ok":
+        print(render_message(reply, name or ""), end="")
+        return None
+
+    data = reply.get("data", {})
+    character = (data.get("player") or {}).get("name") or name or "Traveler"
+    if data.get("mode") == "register":
+        registration_key = data.get("key")
+        if registration_key:
+            print(f"{YELLOW}{BOLD}Your character key is shown once. "
+                  f"Store it outside the repository:{CLEAR}")
+            print(f"{BOLD}{registration_key}{CLEAR}\n")
+    print(f"{YELLOW}Logged in as: {character}{CLEAR}\n")
+
+    while True:
+        message = json.loads(await websocket.recv())
+        if message.get("type") == "room.state":
+            rendered = render_message(message, character)
+            if rendered:
+                print(rendered)
+            return character
+        rendered = render_message(message, character)
+        if rendered:
+            print(rendered)
+
+
+async def client_handler(uri: str, name: str | None = None,
+                         key: str | None = None) -> None:
     print(f"{BLUE}{BOLD}Connecting to MUD at {uri}...{CLEAR}")
 
     # Stream events render live; direct replies are paired by id in the loop.
@@ -93,32 +153,34 @@ async def client_handler(uri: str, name: str) -> None:
         if handshake.get("type") != "hello":
             print(f"{RED}Unexpected handshake: {handshake}{CLEAR}")
             return
-        supported = handshake.get("data", {}).get("protocol", [])
+        handshake_data = handshake.get("data", {})
+        supported = handshake_data.get("protocol", [])
         if 2 not in supported:
             print(f"{RED}This reference client speaks protocol 2 only "
                   f"(server offered {supported}).{CLEAR}")
             return
 
-        motd = handshake.get("data", {}).get("motd", "Welcome to the MUD!")
+        motd = handshake_data.get("motd", "Welcome to the MUD!")
         print(f"\n{CYAN}{BOLD}--- {motd} ---{CLEAR}\n")
-        print(f"{YELLOW}Logged in as: {name}{CLEAR}\n")
 
-        await websocket.send(json.dumps({
-            "v": 2, "type": "join", "id": "join",
-            "data": {"name": name},
-        }))
+        character = await _enter(
+            websocket, name, key, bool(handshake_data.get("auth_required")))
+        if character is None:
+            return
+        if not handshake_data.get("auth_required"):
+            print(f"{YELLOW}Logged in as: {character} (guest){CLEAR}\n")
 
         async def stream_dispatcher():
             while True:
                 message = await stream_events.get()
-                rendered = render_message(message, name)
+                rendered = render_message(message, character)
                 if rendered:
                     print(rendered)
 
         async def reader():
             while True:
                 message = json.loads(await websocket.recv())
-                if message.get("id") == "join":
+                if message.get("id") in ("join", "auth"):
                     stream_events.put_nowait(message)
                 elif "id" in message:
                     replies.put_nowait(message)
@@ -131,7 +193,8 @@ async def client_handler(uri: str, name: str) -> None:
         sequence = 1
         try:
             while True:
-                raw = await asyncio.to_thread(input, f"{BOLD}{name}{CLEAR} > ")
+                raw = await asyncio.to_thread(
+                    input, f"{BOLD}{character}{CLEAR} > ")
                 text = raw.strip()
                 if not text:
                     continue
@@ -149,7 +212,7 @@ async def client_handler(uri: str, name: str) -> None:
                 sequence += 1
 
                 message = await replies.get()
-                rendered = render_message(message, name)
+                rendered = render_message(message, character)
                 if rendered:
                     print(rendered)
                 else:
@@ -167,11 +230,16 @@ if __name__ == "__main__":
     parser.add_argument("--uri", default="ws://localhost:8765",
                         help="WebSocket URI (default: ws://localhost:8765)")
     parser.add_argument("--name", default=None,
-                        help="character name (prompts if omitted)")
+                        help="character name to register (prompts if omitted)")
+    parser.add_argument("--key", default=None,
+                        help="saved character key; logs in instead of "
+                             "registering")
     args = parser.parse_args()
 
-    username = args.name or input("Enter your character name: ").strip()
-    if not username:
+    username = args.name
+    if username is None and args.key is None:
+        username = input("Enter your character name: ").strip()
+    if not username and args.key is None:
         username = "Traveler"
 
-    asyncio.run(client_handler(args.uri, username))
+    asyncio.run(client_handler(args.uri, username, args.key))

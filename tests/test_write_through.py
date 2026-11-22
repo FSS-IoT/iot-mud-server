@@ -249,7 +249,8 @@ async def test_a_real_sqlite_failure_rolls_back_and_changes_nothing(tmp_path):
 async def test_v2_server_writes_through_before_the_client_sees_it(tmp_path):
     db_path = tmp_path / "server.db"
     world = _world()
-    server = V2Server(world.engine, port=0, db_path=db_path)
+    server = V2Server(
+        world.engine, port=0, db_path=db_path, auth_required=False)
     task = asyncio.create_task(server.run())
     try:
         for _ in range(300):
@@ -314,7 +315,8 @@ def build_engine():
 
 
 async def main(path):
-    server = V2Server(build_engine(), port=0, db_path=path)
+    server = V2Server(build_engine(), port=0, db_path=path,
+                      auth_required=False)
     task = asyncio.create_task(server.run())
     while not server.port:
         await asyncio.sleep(0.01)

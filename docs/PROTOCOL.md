@@ -68,7 +68,8 @@ Rules:
   "protocol":[2],
   "world":{"name":"Starting Village","epoch":"2026-11-21T18:00:00Z"},
   "server_commit":"0123456789abcdef0123456789abcdef01234567",
-  "auth_required":false,
+  "auth_required":true,
+  "auth_modes":["key"],
   "motd":"Welcome to the IoT MUD!",
   "text":"Welcome to the IoT MUD!"
 }}
@@ -85,8 +86,16 @@ value is skipped and the next source is tried. A copy without `.git` (a Nix
 store path, an exported tarball) still serves and reports `"unknown"`. The
 lookup is cached for the life of the process, not repeated per connection.
 
-2. **Join.** The client sends `join` with a name. This is the v2.0 guest path;
-   `hello.auth_required` is `false`.
+2. **Authenticate or join.** A v2.1 server requires auth by default
+   (`hello.auth_required` is `true`): the client sends `auth` and receives
+   `auth.ok` followed by `room.state` (see [v2.1 auth](#v21-auth-additive)).
+   The v2.0 guest path below works only when `hello.auth_required` is `false`.
+
+   A `join` on a server that requires auth is rejected with
+   `error{code:"not_authenticated"}`, and the socket stays open so the client
+   can authenticate on it. The same error answers `input` before auth.
+
+   Guest `join`:
 
 ```json
 {"v":2,"type":"join","id":"c-1","data":{"name":"Ada"}}
@@ -106,6 +115,7 @@ Success: `session.ok` (direct, echoes `id`) followed by `room.state`:
 Duplicate name: `error{code:"name_taken"}`, socket stays open.
 Missing or non-string name: `error{code:"bad_args"}`.
 A second `join` on the same socket: `error{code:"already_joined"}`.
+On a guest server, `input` before `join` is `error{code:"not_joined"}`.
 
 3. **Play.** `input` carries the whole command line; the server parses it.
    Every command produces a direct reply (a typed event with the echoed `id`,
@@ -118,15 +128,19 @@ A second `join` on the same socket: `error{code:"already_joined"}`.
    `quit` or `exit` does the same. A socket close without `quit` also produces
    `room.leave`.
 
-5. **Reconnect.** Joining again sends a fresh `room.state`. In v2.0 the world is
-   in memory: a server restart resets it and changes `world.epoch`. Clients
-   compare `epoch` and drop cached maps when it changes.
+5. **Reconnect.** Authenticating again sends a fresh `room.state`. The world
+   and its epoch live in SQLite: a client that reconnects to the same seeded
+   database keeps the same `world.epoch`, so its cached map is still valid.
+   `admin seed --reset` replaces the world and changes `epoch`; clients compare
+   the value and drop cached maps when it changes. A v2.0 in-memory server
+   resets on restart and changes the epoch every time.
 
 ### v2.1 auth (additive)
 
 When `hello.auth_required` is `true`, the client sends `auth` instead of
-`join`. `hello.auth_modes` lists the accepted methods; a v2.1 server sends
-`["key"]`.
+`join`. This is the v2.1 server default; a server started for guest play sets
+`auth_required` to `false` explicitly. `hello.auth_modes` lists the accepted
+methods; a v2.1 server sends `["key"]`.
 
 Register with a name; the server returns the key exactly once:
 
@@ -174,14 +188,15 @@ session is `name_taken`. Auth attempts are rate-limited; names are not locked.
 
 The v2.0 guest path remains available only when `auth_required` is `false`. A
 `join` on a server that requires auth gets `not_authenticated`, and the socket
-stays open.
+stays open; so does `input` before auth. After a successful `auth`, `input`
+works without a separate `join`.
 
 ## Client messages
 
 | Type | Data | Notes |
 |---|---|---|
 | `join` | `name` | v2.0 guest session. Only before joining. `id` is optional; if present it is echoed on `session.ok`. |
-| `input` | `text` | The whole command line. Only after joining. **`id` is required**; it is echoed on the direct reply, and an input without one is rejected with `error{code:"bad_args"}`. |
+| `input` | `text` | The whole command line. Only after joining or authenticating. **`id` is required**; it is echoed on the direct reply, and an input without one is rejected with `error{code:"bad_args"}`. |
 | `quit` | — | Graceful close; the socket closes with `1000`. No direct reply. |
 | `auth` | `mode`, `name` (register), `key` (login) | v2.1 only. Only before joining. |
 
@@ -426,15 +441,20 @@ in-progress release; its entry grows as each documented addition lands.
 
 - `hello.data.server_commit`: the commit the server was built from, or
   `"unknown"`. Additive; v2.0 clients ignore it.
-- `hello.data.auth_required` may be `true`, with `hello.data.auth_modes`, the
-  `auth` client message, the `auth.ok` and `auth.error` events, and one-time
-  character keys.
+- `hello.data.auth_required` defaults to `true` in v2.1, with
+  `hello.data.auth_modes`, the `auth` client message, the `auth.ok` and
+  `auth.error` events, and one-time character keys. A `join` or `input` before
+  auth is `error{not_authenticated}` and keeps the socket open; the v2.0 guest
+  path is an explicit `auth_required: false` opt-out.
 - Registration names are 2-24 characters, starting with a letter; uniqueness
   is case-insensitive. Bad names are `auth.error{invalid_name}` and duplicate
   names `auth.error{name_taken}`.
 - Login with a character key returns `auth.ok` without the key and enters the
   character's stored room; a character with no stored room enters at the world
   start room.
+- `world.epoch` is stored with the seeded world: it survives a server restart
+  against the same database and changes when `admin seed --reset` replaces the
+  world.
 - `player.emoted`, `player.told`, `who.list`, and `shutdown`.
 - `room.state.data.room.geometry`: the optional room map, with its validation
   rules.
