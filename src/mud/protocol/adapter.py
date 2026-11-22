@@ -136,10 +136,18 @@ def build_room_state(engine: Engine, player: Player) -> dict[str, Any]:
             person["stone"] = True
         players.append(person)
     players.sort(key=lambda person: person["name"].lower())
-    exits = [
-        {"direction": direction, "to": _room_id(target), "locked": False}
-        for direction, target in sorted(room.exits.items())
-    ]
+    exits = []
+    for direction, target in sorted(room.exits.items()):
+        lock = room.exit_locks.get(direction)
+        entry: dict[str, Any] = {
+            "direction": direction,
+            "to": _room_id(target),
+            "locked": room.exit_is_locked(direction),
+        }
+        # The author's door name, when there is one. Additive (#77).
+        if lock is not None and lock.label:
+            entry["label"] = lock.label
+        exits.append(entry)
 
     text = f"{room.name}\n{room.description}"
     if objects:
@@ -203,6 +211,21 @@ def _find(engine: Engine, collection: list[Entity], name: str | None) -> Entity 
     if disambiguation:
         return None
     return item
+
+
+def _unlocked_exit(room: Room, before_locks: dict[str, bool]):
+    """The (direction, target) this command unlocked, or None.
+
+    Exit locks are shared by both directions of a two-way door, so looking at
+    the actor's room is enough: a change from locked to unlocked names the way
+    the actor used.
+    """
+    for direction, lock in room.exit_locks.items():
+        if before_locks.get(direction) and not lock.locked:
+            target = room.exits.get(direction)
+            if target is not None:
+                return direction, target
+    return None
 
 
 def _classify(reply: str) -> str:
@@ -345,6 +368,13 @@ async def execute(engine: Engine, player_name: str,
         id(entity): bool(getattr(entity, "lit", False))
         for entity in before_inventory
     }
+    before_exit_locks = (
+        {
+            direction: bool(lock.locked)
+            for direction, lock in before_room.exit_locks.items()
+        }
+        if before_room is not None else {}
+    )
 
     try:
         reply = await engine.process_command(command_text, player_name)
@@ -385,6 +415,25 @@ async def execute(engine: Engine, player_name: str,
                 "text": f"{player.name} arrives.",
             }, room_name=after_room.name))
             return CommandResult(events)
+        if (before_room is not None
+                and before_room.exit_is_locked(arg.strip())):
+            # The actor gets the typed refusal; the room sees the attempt.
+            direction = arg.strip()
+            target = before_room.exits.get(direction)
+            return CommandResult([
+                *_error("locked", reply).events,
+                _room("exit.locked", {
+                    "exit": {
+                        "direction": direction,
+                        "to": _room_id(target) if target is not None else None,
+                    },
+                    "room": {"id": _room_id(before_room),
+                             "name": before_room.name},
+                    "by": player.name,
+                    "self": False,
+                    "text": f"{player.name} tries the way {direction}; it is locked.",
+                }, room_name=before_room.name),
+            ])
         return _failure(reply)
 
     if verb == "take":
@@ -523,6 +572,26 @@ async def execute(engine: Engine, player_name: str,
         return _failure(reply)
 
     if verb == "use":
+        if before_room is not None:
+            unlocked = _unlocked_exit(before_room, before_exit_locks)
+            if unlocked is not None:
+                direction, target = unlocked
+                payload = {
+                    "exit": {"direction": direction, "to": _room_id(target)},
+                    "room": {"id": _room_id(before_room),
+                             "name": before_room.name},
+                    "by": player.name,
+                    "self": True,
+                    "text": reply,
+                }
+                return CommandResult([
+                    _actor("exit.unlocked", payload),
+                    _room("exit.unlocked", {
+                        **payload,
+                        "self": False,
+                        "text": f"{player.name} unlocks the way {direction}.",
+                    }, room_name=before_room.name),
+                ])
         lock_name = arg.split(" on ", 1)[1].strip() if arg and " on " in arg else None
         container = _find(engine, before_room_contents, lock_name)
         if container is None:

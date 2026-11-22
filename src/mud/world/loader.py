@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 from src.mud.config import DEFAULT_WORLD
-from src.mud.content import Entity, Room
+from src.mud.content import Entity, ExitLock, Room
 from src.mud.content.models import OPPOSITE_EXITS, Exit
 from src.mud.content.models import load_world as load_content_world
 from src.mud.content.validator import validate_world
@@ -98,21 +98,30 @@ async def _load_yaml_world(engine: Engine, data_path: Path) -> None:
     # 3. Exits. The YAML declares each exit once; create the reciprocal here.
     # `one_way` opts out, and `setdefault` keeps an explicit target if a
     # later room happens to name the same direction (the validator rejects
-    # that collision before this runs).
+    # that collision before this runs). A declared lock is one physical door:
+    # the reciprocal shares the same `ExitLock`, so using the key from either
+    # side unlocks both.
     for room_data in world.rooms:
         room = room_map[room_data.id]
         for direction, target in room_data.exits.items():
+            lock = None
             if isinstance(target, Exit):
                 target_id = target.to
                 one_way = target.one_way
+                if target.locked:
+                    lock = ExitLock(key=target.key, label=target.label)
             else:
                 target_id = target
                 one_way = False
             destination = room_map[target_id]
             room.exits[direction] = destination
+            if lock is not None:
+                room.exit_locks[direction] = lock
             opposite = OPPOSITE_EXITS.get(direction)
             if not one_way and opposite is not None:
                 destination.exits.setdefault(opposite, room)
+                if lock is not None:
+                    destination.exit_locks.setdefault(opposite, lock)
 
     # 4. Geometry, now that the effective exit map includes reciprocals.
     for room_data in world.rooms:
@@ -201,13 +210,38 @@ async def _load_json_world(engine: Engine, data_path: Path) -> None:
         room_map[r_data["id"]] = room
 
     # 3. Third pass: Establish interconnections (Exits), geometry, and Inventory
+    # A legacy JSON exit is either a room id or an object carrying the lock
+    # fields the YAML model also has. Two directions of one locked door share
+    # a single `ExitLock`, so using the key from either side unlocks it.
+    locked_doors: dict[tuple[frozenset[str], str | None], ExitLock] = {}
     for r_data in data.get("rooms", []):
         current_room = room_map[r_data["id"]]
 
-        # Handle exits (mapping string key to actual Room object)
-        for exit_name, target_room_id in r_data.get("exits", {}).items():
+        # Handle exits (mapping direction to a room id or an exit object).
+        for exit_name, value in r_data.get("exits", {}).items():
+            locked = False
+            key = None
+            label = None
+            if isinstance(value, dict):
+                target_room_id = value.get("to")
+                locked = bool(value.get("locked", False))
+                key = value.get("key")
+                label = value.get("label")
+            else:
+                target_room_id = value
+            if not isinstance(target_room_id, str):
+                continue
             if target_room_id in room_map:
                 current_room.exits[exit_name] = room_map[target_room_id]
+                if locked:
+                    door = (
+                        frozenset({r_data["id"], target_room_id}), key,
+                    )
+                    lock = locked_doors.get(door)
+                    if lock is None:
+                        lock = ExitLock(key=key, label=label)
+                        locked_doors[door] = lock
+                    current_room.exit_locks[exit_name] = lock
 
         # Validate against the resolved exits so the map can never describe a
         # door the engine cannot walk through.

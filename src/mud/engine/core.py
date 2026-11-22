@@ -263,6 +263,12 @@ class Engine:
         destination = player.location.exits.get(exit_name)
         if not isinstance(destination, Room):
             return False, f"You cannot go {exit_name}."
+        if player.location.exit_is_locked(exit_name):
+            await self.emit("exit_locked", {
+                "direction": exit_name,
+                "location": player.location.name,
+            })
+            return False, self._locked_exit_reply(exit_name)
 
         # Commit first, then apply, then publish (SPEC v2.1.0 criterion 2).
         if self.store is not None:
@@ -279,6 +285,26 @@ class Engine:
         return True, destination.name
 
     @staticmethod
+    def _locked_exit_reply(direction: str) -> str:
+        """The refusal for a locked way, phrased so the client can act on it."""
+        return (
+            f"The way {direction} is locked. Find a key and "
+            f"`use <key> on {direction}`."
+        )
+
+    @staticmethod
+    def _exit_labels(room: Room) -> list[str]:
+        """Exit names for prose, marking the locked ones (SPEC v2.1.2)."""
+        return [
+            (
+                f"{direction.capitalize()} (locked)"
+                if room.exit_is_locked(direction)
+                else direction.capitalize()
+            )
+            for direction in room.exits
+        ]
+
+    @staticmethod
     def _describe_movement(destination: Room, direction: str, old_location=None) -> str:
         """Render the standard movement prose for arriving at `destination`.
 
@@ -288,7 +314,7 @@ class Engine:
         it would duplicate this reply (one with contents, one without).
         """
         old_name = old_location.name if old_location is not None else "the previous room"
-        exits_list = [e.capitalize() for e in destination.exits.keys()]
+        exits_list = Engine._exit_labels(destination)
         exit_str = f"Exits lead {', '.join(exits_list)}."
 
         response = (
@@ -602,17 +628,44 @@ class Engine:
         await self.emit("item_put", {"item_name": held.name.lower(), "container": container.name.lower(), "location": room.name})
         return f"You put the {held.name} in the {container.name}."
 
+    @staticmethod
+    def _find_exit(room, arg: str):
+        """Resolve `arg` to one of `room`'s exits.
+
+        A player may name the way by direction (`east`), by the room it leads
+        to (`tavern`, `old tavern`), or by the author's door label (`iron
+        door`). Returns `(direction, target, lock)` where `lock` is None for an
+        open way, or None when nothing matches.
+        """
+        if room is None:
+            return None
+        name = re.sub(r"^(the|a|an)\s+", "", arg.strip().lower())
+        if not name:
+            return None
+        for direction, target in sorted(room.exits.items()):
+            lock = room.exit_locks.get(direction)
+            candidates = {direction.lower(), target.name.lower()}
+            if lock is not None and lock.label:
+                candidates.add(lock.label.lower())
+            if name in candidates or any(
+                len(name) >= 3 and name in candidate
+                for candidate in candidates
+            ):
+                return direction, target, lock
+        return None
+
     async def _handle_use(self, arg: str, player_name: str | None) -> str:
-        """Open a lock with a key: `use <key> on <lock>`.
+        """Open a lock with a key: `use <key> on <lock|exit>`.
 
         Names locate the objects by the same forgiving match as take/examine,
         but whether the lock opens is decided by identity, not name. The key is
-        resolved from the player's inventory, the lock from the player's room.
-        The key's `item_id` must equal the lock's `required_key`; otherwise the
-        key simply does not fit. Returns the reply string.
+        resolved from the player's inventory; the target is a room object or a
+        room exit. A container's `required_key` and an exit's `ExitLock.key`
+        name the key object's `item_id`, so a copy with the same name still
+        does not fit. Returns the reply string.
         """
         if " on " not in arg:
-            return "Use a key on something: `use <key> on <lock>`."
+            return "Use a key on something: `use <key> on <lock|exit>`."
 
         key_name, lock_name = arg.split(" on ", 1)
 
@@ -641,7 +694,32 @@ class Engine:
         if key_item is None:
             return f"You don't have a {key_name.strip()} to use."
         if lock_item is None:
-            return f"There is no {lock_name.strip()} here to use a {key_name.strip()} on."
+            # No room object matched; the target may be a locked exit (#77).
+            found = self._find_exit(room, lock_name)
+            if found is None:
+                return (
+                    f"There is no {lock_name.strip()} here to use a "
+                    f"{key_name.strip()} on."
+                )
+            direction, target, lock = found
+            if lock is None or not lock.locked:
+                return f"The way {direction} is already open."
+            # Identity, not name: the door checks for its specific key.
+            if not lock.key or getattr(key_item, "item_id", None) != lock.key:
+                return (
+                    f"The {key_item.name} does not fit the lock on the way "
+                    f"{direction}."
+                )
+            lock.locked = False
+            await self.emit("exit_unlocked", {
+                "direction": direction,
+                "from": room.name,
+                "to": target.name,
+                "key": key_item.name.lower(),
+            })
+            door = lock.label or f"way {direction}"
+            return f"You turn the {key_item.name}; the {door} unlocks."
+
         if not getattr(lock_item, "locked", False):
             return f"The {lock_item.name} is already open."
 
@@ -1063,7 +1141,7 @@ class Engine:
                 if not exits_dict:
                     response = "There are no exits here."
                 else:
-                    names = [d.capitalize() for d in exits_dict.keys()]
+                    names = self._exit_labels(room)
                     response = f"Available exits: {', '.join(names)}."
                 matched = True
 
@@ -1091,6 +1169,13 @@ class Engine:
             elif not self._player_location:
                 response = "You have no presence here to move."
                 matched = True
+            elif self._player_location.exit_is_locked(direction):
+                response = self._locked_exit_reply(direction)
+                matched = True
+                await self.emit("exit_locked", {
+                    "direction": direction,
+                    "location": self._player_location.name,
+                })
             else:
                 destination = self._player_location.exits.get(direction)
                 if isinstance(destination, Room):
@@ -1273,7 +1358,7 @@ class Engine:
         elif resolved_verb == "help":
             response = (
                 "Commands: look (l), go <direction>, exits, take <item>, get <item> from <container>, drop <item>, put <item> in <container>, "
-                "open <container>, close <container>, "
+                "open <container>, close <container>, use <key> on <container|exit>, "
                 "examine <thing> (exam), read <thing> (signs, books), look in <chest>, light <torch/lantern>, inventory (i), who, "
                 "say <text>, emote <action> (me), tell <player> <text>, hello. Try `look` first."
             )

@@ -331,6 +331,12 @@ stays in the room and appears in the next `room.state`.
   An instance id is stable for the life of the object, including when it moves
   between a room and an inventory.
 - `objects` and `players` are sorted by name; `exits` by direction.
+- `exits[].locked` is `true` while that exit's door is locked (v2.1, additive).
+  `exits[].label` is present only when the world author named the door (for
+  example `"tavern door"`), so a client can show what the key opens. A locked
+  exit refuses `go` with `error{locked}`; `use <key> on <direction|label|room
+  name>` turns the matching key and unlocks it. A two-way door is one physical
+  lock, so unlocking it from either side unlocks both.
 - `portable` reflects the world file: `true` by default, `false` for an object
   a player cannot lift (`get <item> from <container>` refuses it with
   `error{not_portable}`). v2.0 content is portable, so the field's value does
@@ -487,6 +493,8 @@ closes the socket with `4004`.
 | `object.read` | `object{id,name}`, `content` | Actor only |
 | `object.lit` | `object{id,kind,name,lit}`, `by`, `self` | Room |
 | `object.unlocked` | `object{id,kind,name}`, `by`, `self` | Room |
+| `exit.locked` | `exit{direction,to}`, `room{id,name}`, `by`, `self` | Room, except actor (v2.1) |
+| `exit.unlocked` | `exit{direction,to}`, `room{id,name}`, `by`, `self` | Room, including actor (v2.1) |
 
 `open <container>` sets the container's lid state and lists what is inside in
 the reply text. The contents stay inside; since v2.1 (#76) opening no longer
@@ -507,14 +515,54 @@ is resolved by display name inside the named container, so two coins can be
 disambiguated with the usual `coin 1` form. A bare `get <item>` remains the
 v2.0 alias for `take`.
 
-Reserved for later, never emitted in v2.0: `object.locked`,
-`exit.locked`, `exit.unlocked`, `npc.say`, `npc.enter`,
-`npc.leave`, `effect`, `device.event`, `narration.append`, `room.generated`.
+### Exit locks (v2.1)
 
-**Why container locks, not exit locks:** the reference engine has keys and locks on
-containers (`use <key> on <chest>`), not on room exits. Agentic-mud's design
-locked exits. v2.0 keeps the working semantics; exit locks and `close` arrive
-with v2.1, where the command set grows.
+A room exit may be locked in content. The world file declares the lock once,
+with the key object's id:
+
+```yaml
+exits:
+  east:
+    to: tavern
+    locked: true
+    key: key_gold_1
+    label: tavern door
+```
+
+The loader creates the reciprocal direction and gives it the same lock, so a
+two-way door unlocks from either side. `one_way: true` leaves the reciprocal
+absent and locks only the declared direction.
+
+`go <direction>` through a locked exit changes nothing and returns
+`error{locked}`. Other players in the room receive `exit.locked` with
+`exit{direction,to}` and `by`; the actor's refusal is the typed error, not a
+second event. The door remains listed in `room.state.exits` with
+`locked: true`.
+
+`use <key> on <exit>` unlocks it when the carried key object's `id` equals the
+lock's `key`. The exit is named by direction (`east`), by the room it leads to
+(`tavern`), or by the authored label (`tavern door`); a room object of the same
+name wins over the exit, so container locks keep working. Success emits
+`exit.unlocked` to the actor (`self: true`) and the room (`self: false`). A
+wrong key is `error{locked}` and leaves the door locked; a missing key is
+`error{not_found}`; using a key on an already open way is
+`error{already_open}`. Lock state is held in the running world; it is not
+written to SQLite, so a restart rebuilds the authored lock.
+
+Both lock vocabularies coexist: `use <key> on <container>` opens a locked
+container (`object.unlocked`), and `use <key> on <exit>` opens a locked way
+(`exit.unlocked`). The key test is the same in both cases: the key object's
+`id`, not its display name.
+
+Reserved for later, never emitted in v2.0: `object.locked`,
+`npc.say`, `npc.enter`, `npc.leave`, `effect`, `device.event`,
+`narration.append`, `room.generated`.
+
+**Why container locks and exit locks:** the reference engine has keys and locks
+on containers (`use <key> on <chest>`), not on room exits. Agentic-mud's design
+locked exits. v2.1 carries both: containers keep the working v2.0 semantics,
+and exits add the declarative lock the design calls for, with one command
+(`use`) and the same identity rule.
 
 ### Direct replies and broadcasts
 
@@ -562,7 +610,7 @@ idle close is `4004` after the character is already asleep.
 | `look at <x>` / `examine <x>` | `notice` (private; optional `object`) |
 | `look in <container>` | `notice` (private; container contents) |
 | `exits` | `notice` (private) |
-| `go <dir>` / `n`/`s`/`e`/`w`/`u`/`d` | actor: `room.state`; others: `room.leave` then `room.enter` |
+| `go <dir>` / `n`/`s`/`e`/`w`/`u`/`d` | actor: `room.state`; others: `room.leave` then `room.enter`; a locked exit: `error{locked}` to the actor and `exit.locked` to the room |
 | `take <x>` / `get <x>` | `object.taken` (actor `self:true` + room `self:false`) + `player.inventory` |
 | `drop <x>` | `object.dropped` + `player.inventory` |
 | `put <x> in <y>` | `object.put` + `player.inventory` |
@@ -570,6 +618,7 @@ idle close is `4004` after the character is already asleep.
 | `close <x>` | `object.closed` (or `error{already_closed}` / `error{bad_args}` for a non-container) |
 | `get <x> from <y>` | `object.got` (actor `self:true` + room `self:false`) + `player.inventory`; closed container `error{container_closed}`, item not inside `error{not_here}`, fixed item `error{not_portable}` |
 | `use <key> on <container>` | `object.unlocked` (or `error{locked}` / `error{already_open}`) |
+| `use <key> on <exit>` | `exit.unlocked` (actor `self:true` + room `self:false`; wrong or missing key `error{locked}`, already open `error{already_open}`) |
 | `light <source>` | `object.lit` (or `notice` if already lit / not a light) |
 | `read <x>` | `object.read` (private) |
 | `inventory` / `i` | `player.inventory` (private) |
@@ -630,6 +679,12 @@ in-progress release; its entry grows as each documented addition lands.
   `not_portable`, `not_here` (item not inside), `already_closed`, and
   `already_open` for `open`. Opening an already open container no longer
   repeats the open.
+- Locked exits are declared in content (`locked`, `key`, optional `label`,
+  `one_way`) and carried into the engine. `room.state.exits[]` reports
+  `locked` and the authored `label`; `go` through a locked exit is
+  `error{locked}` and the room sees `exit.locked`; `use <key> on <direction
+  |label|room name>` emits `exit.unlocked` and unlocks both sides of a
+  two-way door. The product tavern door is locked with the existing gold key.
 - `room.state` player entries and `room.leave` carry `asleep`/`stone` (and
   `dropped[]` on a sleep) for a stone occupant.
 - `room.state.data.room.geometry`: the optional room map, with its validation
