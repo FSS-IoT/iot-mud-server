@@ -27,6 +27,12 @@ in the value so a future parameter change needs no schema migration. Login
 **Login.** An unknown key id, a revoked key, and a bad secret all raise one
 `AuthError("invalid_key")` with the same message. The key is the only lookup;
 no character name is consulted.
+
+**Offline rekey (#73).** `rekey_character` issues a replacement key for an
+existing character and revokes every key it still holds, in one transaction.
+The `players` row is not touched, so the room and inventory are unchanged. It
+looks the character up by name because an administrator already knows who the
+member is; this is not a login path and never runs on the wire.
 """
 
 from __future__ import annotations
@@ -71,6 +77,10 @@ class AuthError(Exception):
         self.code = code
 
 
+class RekeyError(Exception):
+    """An offline rekey could not proceed; the message is safe to print."""
+
+
 @dataclass(frozen=True)
 class Registration:
     """What a successful registration produced."""
@@ -89,6 +99,22 @@ class Login:
     player_id: int
     key_id: str
     room_id: str | None
+
+
+@dataclass(frozen=True)
+class Rekey:
+    """What a successful offline rekey produced.
+
+    `key` is the plaintext credential and exists only until the caller prints
+    it. `revoked_key_ids` lists the live keys that died in the same
+    transaction; the room and inventory were not touched.
+    """
+
+    name: str
+    player_id: int
+    key_id: str
+    key: str
+    revoked_key_ids: tuple[str, ...]
 
 
 def _utc_now() -> str:
@@ -218,6 +244,65 @@ def login_character(conn: sqlite3.Connection, key: object) -> Login:
         player_id=int(row["player_id"]),
         key_id=row["key_id"],
         room_id=row["room_id"],
+    )
+
+
+def rekey_character(
+    conn: sqlite3.Connection,
+    name: object,
+    *,
+    now: Callable[[], str] = _utc_now,
+) -> Rekey:
+    """Issue a replacement key and revoke every live key, in one transaction.
+
+    The character is found by name (case-insensitively, as `players.name` is
+    `COLLATE NOCASE`); the stored casing is kept. The `players` row is not
+    written, so the character stays in its room with its inventory.
+
+    An unknown name raises `RekeyError` naming only the request. The caller is
+    an offline administrator, so there is no wire message to match and no
+    reason to enumerate other characters.
+    """
+    if not isinstance(name, str) or not name.strip():
+        raise RekeyError("A character name is required.")
+    requested = name.strip()
+
+    key, key_id = generate_key()
+    salt = secrets.token_bytes(SALT_BYTES)
+    key_hash = hash_key(key, salt)
+    created_at = now()
+
+    with conn:
+        row = conn.execute(
+            "SELECT id, name FROM players WHERE name = ?", (requested,)
+        ).fetchone()
+        if row is None:
+            raise RekeyError(f"No character named {requested!r}.")
+        player_id = int(row["id"])
+
+        stale = conn.execute(
+            "SELECT key_id FROM character_keys "
+            "WHERE player_id = ? AND revoked_at IS NULL ORDER BY key_id",
+            (player_id,),
+        ).fetchall()
+        conn.execute(
+            "UPDATE character_keys SET revoked_at = ? "
+            "WHERE player_id = ? AND revoked_at IS NULL",
+            (created_at, player_id),
+        )
+        conn.execute(
+            "INSERT INTO character_keys"
+            "(key_id, player_id, salt, hash, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (key_id, player_id, salt.hex(), key_hash, created_at),
+        )
+
+    return Rekey(
+        name=row["name"],
+        player_id=player_id,
+        key_id=key_id,
+        key=key,
+        revoked_key_ids=tuple(key_row["key_id"] for key_row in stale),
     )
 
 
