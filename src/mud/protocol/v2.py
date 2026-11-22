@@ -27,9 +27,12 @@ def is_server_commit(value: object) -> TypeGuard[str]:
     )
 
 
-# Event names the v2.0 server may emit. Kept here so tests and the server share
+# Event names the v2 server may emit. Kept here so tests and the server share
 # one list instead of spelling strings in several places.
-SESSION_EVENTS = {"hello", "session.ok", "error", "notice", "shutdown"}
+SESSION_EVENTS = {
+    "hello", "session.ok", "auth.ok", "auth.error", "error", "notice",
+    "shutdown",
+}
 ROOM_EVENTS = {"room.state", "room.enter", "room.leave"}
 SOCIAL_EVENTS = {"player.said", "player.emoted", "player.told", "who.list"}
 OBJECT_EVENTS = {
@@ -42,9 +45,13 @@ ERROR_CODES = {
     "unknown_command", "bad_args", "ambiguous_target", "not_found",
     "not_here", "not_portable", "container_closed", "no_exit", "locked",
     "already_open", "already_closed", "malformed_message", "unknown_message",
-    "not_joined", "already_joined", "name_taken", "not_authenticated",
-    "rate_limited", "internal", "unsupported_version",
+    "not_joined", "already_joined", "name_taken", "invalid_name",
+    "invalid_key", "not_authenticated", "rate_limited", "internal",
+    "unsupported_version",
 }
+
+# The auth methods `hello.data.auth_modes` may advertise.
+AUTH_MODES = ("key",)
 
 
 @dataclass

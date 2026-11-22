@@ -20,10 +20,12 @@ from typing import Any
 
 import websockets
 
+from src.mud.auth import AuthError, normalize_name, register_character
 from src.mud.config import ConfigError, load_config
 from src.mud.engine.core import Engine
 from src.mud.protocol.adapter import _room_id, build_room_state, execute
 from src.mud.protocol.v2 import (
+    AUTH_MODES,
     PROTOCOL_VERSION,
     UNKNOWN_SERVER_COMMIT,
     envelope,
@@ -106,6 +108,7 @@ class V2Server:
         epoch: str | None = None,
         db_path: str | Path | None = None,
         server_commit: str | None = None,
+        auth_required: bool = False,
     ):
         self.engine = engine
         self.host = host
@@ -114,6 +117,9 @@ class V2Server:
         self.epoch = epoch or utc_now()
         self.db_path = Path(db_path) if db_path is not None else None
         self.server_commit = resolve_server_commit(server_commit)
+        # v2.1 auth is opt-in for now: the v2.0 conformance session and the
+        # reference client stay on the guest path until #74 flips the default.
+        self.auth_required = auth_required
         self.db: sqlite3.Connection | None = None
         self.store: WriteThroughStore | None = None
         self._stop_event = asyncio.Event()
@@ -142,6 +148,27 @@ class V2Server:
             direct=msg_id is not None, msg_id=msg_id,
         )
 
+    async def _send_auth_error(self, ws, session: Session, code: str,
+                               message: str, msg_id: Any = None) -> None:
+        """A typed auth failure: direct, echoes the request id, never the key."""
+        await self._send(
+            ws, session, "auth.error",
+            {"code": code, "message": message, "text": message},
+            direct=True, msg_id=msg_id,
+        )
+
+    async def _announce_connect(self, player) -> None:
+        """Tell the character's room that it arrived."""
+        room = player.location
+        if room is None:
+            return
+        await self._broadcast_room(room.name, "room.enter", {
+            "room": {"id": _room_id(room), "name": room.name},
+            "actor": {"name": player.name},
+            "reason": "connect",
+            "text": f"{player.name} has arrived.",
+        }, exclude_name=player.name)
+
     async def _broadcast_room(self, room_name: str | None, type_: str,
                               data: dict, exclude_name: str) -> None:
         if room_name is None:
@@ -168,6 +195,11 @@ class V2Server:
             await self._send_error(ws, session, "already_joined",
                                    "This connection has already joined.",
                                    msg_id)
+            return
+
+        if self.auth_required:
+            await self._send_error(ws, session, "not_authenticated",
+                                   "Authenticate before joining.", msg_id)
             return
 
         data = msg.get("data")
@@ -207,14 +239,92 @@ class V2Server:
         await self._send(ws, session, "room.state",
                          build_room_state(self.engine, player))
 
-        room = player.location
-        if room is not None:
-            await self._broadcast_room(room.name, "room.enter", {
-                "room": {"id": _room_id(room), "name": room.name},
-                "actor": {"name": name},
-                "reason": "connect",
-                "text": f"{name} has arrived.",
-            }, exclude_name=name)
+        await self._announce_connect(player)
+
+    async def _handle_auth(self, ws, session: Session, msg: dict) -> None:
+        """Route one `auth` message; registration is the only mode for now."""
+        msg_id = msg.get("id")
+        if session.joined:
+            await self._send_auth_error(
+                ws, session, "already_joined",
+                "This connection has already joined.", msg_id)
+            return
+
+        data = msg.get("data")
+        if data is None:
+            data = {}
+        if not isinstance(data, dict):
+            await self._send_error(ws, session, "malformed_message",
+                                   "The data field must be an object.",
+                                   msg_id)
+            return
+
+        mode = data.get("mode")
+        if mode == "register":
+            await self._auth_register(ws, session, data, msg_id)
+            return
+        if mode == "login":
+            # Login is #69. No key can verify until that lands, so say so
+            # rather than pretending every key is wrong.
+            await self._send_auth_error(
+                ws, session, "bad_args",
+                "Login is not available in this build.", msg_id)
+            return
+        await self._send_auth_error(
+            ws, session, "bad_args",
+            "Auth mode must be 'register' or 'login'.", msg_id)
+
+    async def _auth_register(self, ws, session: Session, data: dict,
+                             msg_id: Any) -> None:
+        """Register a name, issue its first key, and enter the world."""
+        try:
+            name = normalize_name(data.get("name"))
+        except AuthError as exc:
+            await self._send_auth_error(
+                ws, session, exc.code, str(exc), msg_id)
+            return
+
+        if self.engine.get_player(name) is not None:
+            await self._send_auth_error(
+                ws, session, "name_taken",
+                f"The name {name!r} is already in use.", msg_id)
+            return
+
+        start_room = self.engine.current_location
+        if self.db is None or start_room is None:
+            await self._send_auth_error(
+                ws, session, "internal",
+                "The server cannot create characters right now.", msg_id)
+            return
+
+        try:
+            registration = register_character(
+                self.db, name, start_room=start_room)
+        except AuthError as exc:
+            await self._send_auth_error(
+                ws, session, exc.code, str(exc), msg_id)
+            return
+
+        player = self.engine.register_player(registration.name)
+        session.player_name = registration.name
+        session.joined = True
+        self._ws_by_name[registration.name] = ws
+
+        # The key appears here and nowhere else: not in the session, the room
+        # state, a broadcast, a log line, or the database.
+        await self._send(ws, session, "auth.ok", {
+            "player": {"name": registration.name},
+            "world": {"name": self.world_name, "epoch": self.epoch},
+            "mode": "register",
+            "key": registration.key,
+            "text": (f"Welcome, {registration.name}. Store this key; it is "
+                     "shown only once."),
+        }, direct=True, msg_id=msg_id)
+
+        await self._send(ws, session, "room.state",
+                         build_room_state(self.engine, player))
+
+        await self._announce_connect(player)
 
     async def _handle_input(self, ws, session: Session, msg: dict) -> int | None:
         msg_id = msg.get("id")
@@ -287,6 +397,9 @@ class V2Server:
             return 4003
 
         kind = msg.get("type")
+        if kind == "auth":
+            await self._handle_auth(ws, session, msg)
+            return None
         if kind == "join":
             await self._handle_join(ws, session, msg)
             return None
@@ -321,15 +434,18 @@ class V2Server:
         session = Session(ws=websocket)
         self._sessions[websocket] = session
         try:
-            await self._send(websocket, session, "hello", {
+            hello = {
                 "server": "iot-mud-server",
                 "protocol": [PROTOCOL_VERSION],
                 "world": {"name": self.world_name, "epoch": self.epoch},
                 "server_commit": self.server_commit,
-                "auth_required": False,
+                "auth_required": self.auth_required,
                 "motd": "Welcome to the IoT MUD!",
                 "text": "Welcome to the IoT MUD!",
-            })
+            }
+            if self.auth_required:
+                hello["auth_modes"] = list(AUTH_MODES)
+            await self._send(websocket, session, "hello", hello)
 
             async for raw in websocket:
                 try:

@@ -130,7 +130,7 @@ class PlayerStore:
         destination = room_key(room)
 
         def body(conn: sqlite3.Connection) -> None:
-            _ensure_room(conn, room)
+            ensure_room(conn, room)
             player_id = _ensure_player(conn, self.name, destination, self._now())
             conn.execute(
                 "UPDATE players SET room_id = ? WHERE id = ?",
@@ -145,7 +145,7 @@ class PlayerStore:
         origin = room_key(room)
 
         def body(conn: sqlite3.Connection) -> None:
-            _ensure_room(conn, room)
+            ensure_room(conn, room)
             player_id = _ensure_player(conn, self.name, origin, self._now())
             _ensure_object(conn, item, room_id=origin)
             conn.execute(
@@ -162,7 +162,7 @@ class PlayerStore:
         destination = room_key(room)
 
         def body(conn: sqlite3.Connection) -> None:
-            _ensure_room(conn, room)
+            ensure_room(conn, room)
             player_id = _ensure_player(conn, self.name, destination, self._now())
             _ensure_object(conn, item, owner_id=player_id)
             conn.execute(
@@ -217,7 +217,8 @@ class WriteThroughStore:
         return store
 
 
-def _ensure_room(conn: sqlite3.Connection, room: Any) -> None:
+def ensure_room(conn: sqlite3.Connection, room: Any) -> None:
+    """Create the room's row, or refresh its text, without moving anything."""
     conn.execute(
         "INSERT INTO rooms(id, name, description, dark) VALUES (?, ?, ?, ?) "
         "ON CONFLICT(id) DO UPDATE SET name = excluded.name, "
