@@ -112,12 +112,38 @@ A second `join` on the same socket: `error{code:"already_joined"}`.
 
 ### v2.1 auth (additive)
 
-When `hello.auth_required` is `true`, the client sends `auth` instead of `join`:
-`{"mode":"login"|"register","name":"...","password":"..."}`. Success is
-`session.ok` with `mode: "login"|"register"`; failure is `auth.error` with a
-code (`bad_credentials`, `name_taken`, `unknown_player`, `invalid_name`,
-`weak_password`). The v2.0 guest path remains available only when
-`auth_required` is `false`.
+When `hello.auth_required` is `true`, the client sends `auth` instead of
+`join`. `hello.auth_modes` lists the accepted methods; a v2.1 server sends
+`["key"]`.
+
+Register with a name; the server returns the key exactly once:
+
+```json
+{"v":2,"type":"auth","id":"c-1","data":{"mode":"register","name":"Ada"}}
+```
+
+Success is `auth.ok` (direct, echoes `id`) with `player`, `world`,
+`mode: "register"`, and `key`, followed by `room.state`. Login uses the stored
+key and returns no key:
+
+```json
+{"v":2,"type":"auth","id":"c-2","data":{"mode":"login","key":"mud1-..."}}
+```
+
+Success is `auth.ok` with `player`, `world`, and `mode: "login"`, followed by
+`room.state`. The key is an opaque, high-entropy bearer secret: clients store
+it outside the repository, never log it, and never send it to a different
+server. The server stores only a key id and a one-way hash, never the key, and
+returns it only in the registration response. A lost key is replaced with
+`admin rekey`, which revokes the old key.
+
+Failure is `auth.error` (direct, echoes `id`) with a code (`invalid_key`,
+`name_taken`, `invalid_name`). `invalid_key` covers an unknown or revoked key,
+deliberately. Auth attempts are rate-limited; names are not locked.
+
+The v2.0 guest path remains available only when `auth_required` is `false`. A
+`join` on a server that requires auth gets `not_authenticated`, and the socket
+stays open.
 
 ## Client messages
 
@@ -126,7 +152,7 @@ code (`bad_credentials`, `name_taken`, `unknown_player`, `invalid_name`,
 | `join` | `name` | v2.0 guest session. Only before joining. `id` is optional; if present it is echoed on `session.ok`. |
 | `input` | `text` | The whole command line. Only after joining. **`id` is required**; it is echoed on the direct reply, and an input without one is rejected with `error{code:"bad_args"}`. |
 | `quit` | — | Graceful close; the socket closes with `1000`. No direct reply. |
-| `auth` | `mode`, `name`, `password` | v2.1 only. |
+| `auth` | `mode`, `name` (register), `key` (login) | v2.1 only. Only before joining. |
 
 Nothing else exists in v2. Clients do not send structured actions; parsing is
 the server's job, so every client sees the same world behaviour. An `input`
@@ -143,8 +169,10 @@ vs "Ada takes the coin.").
 
 | Type | Data |
 |---|---|
-| `hello` | `server`, `protocol`, `world{name,epoch}`, `auth_required`, `motd`, `text` |
+| `hello` | `server`, `protocol`, `world{name,epoch}`, `auth_required`, `auth_modes?`, `motd`, `text` |
 | `session.ok` | `player{name}`, `world{name,epoch}`, `mode`, `text` |
+| `auth.ok` | `player{name}`, `world{name,epoch}`, `mode` (`register`\|`login`), `key?` (v2.1; register only) |
+| `auth.error` | `code`, `message`, `text` (v2.1) |
 | `error` | `code`, `message`, `text`, `command?`, `candidates?[]` |
 | `notice` | `text`, `level` (`info`\|`warning`), `object?` |
 | `shutdown` | `reason`, `in_seconds` (v2.1) |
@@ -253,8 +281,8 @@ with v2.1, where the command set grows.
 `unknown_command`, `bad_args`, `ambiguous_target`, `not_found`, `not_here`,
 `not_portable`, `container_closed`, `no_exit`, `locked`, `already_open`,
 `already_closed`, `malformed_message`, `unknown_message`, `not_joined`,
-`already_joined`, `name_taken`, `not_authenticated`, `rate_limited`, `internal`,
-`unsupported_version`.
+`already_joined`, `name_taken`, `not_authenticated`, `invalid_key`,
+`invalid_name`, `rate_limited`, `internal`, `unsupported_version`.
 
 An `error` is non-fatal unless the code says otherwise; clients print
 `message` and continue.
@@ -310,7 +338,8 @@ script against the server.
 
 ## Not in version 2.0
 
-Auth/passwords, SQLite persistence, YAML worlds, `who`/`emote`/`tell`, `close`,
-`get from`, exit locks, an explicit container `open` flag, and NPCs are v2.1.
+Auth/character keys, SQLite persistence, YAML worlds, `who`/`emote`/`tell`,
+`close`, `get from`, exit locks, an explicit container `open` flag, and NPCs are
+v2.1.
 They are listed in `ROADMAP.md`; nothing in this contract reserves their names
 in a way that would break an additive release.
