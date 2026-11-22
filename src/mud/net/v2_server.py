@@ -13,7 +13,9 @@ import logging
 import os
 import sqlite3
 import subprocess
-from dataclasses import dataclass
+import time
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -26,7 +28,7 @@ from src.mud.auth import (
     normalize_name,
     register_character,
 )
-from src.mud.config import ConfigError, load_config
+from src.mud.config import AuthConfig, ConfigError, load_config
 from src.mud.engine.core import Engine
 from src.mud.protocol.adapter import _room_id, build_room_state, execute
 from src.mud.protocol.v2 import (
@@ -48,6 +50,14 @@ from src.mud.storage.store import (
 logger = logging.getLogger(__name__)
 
 SERVER_COMMIT_ENV = "MUD_SERVER_COMMIT"
+
+# Every typed failure of an auth exchange counts toward the per-connection
+# budget. `internal`, `already_joined`, and `rate_limited` do not: those are a
+# server fault, a session-state error, and the limiter itself.
+AUTH_FAILURE_CODES = frozenset(
+    {"invalid_key", "invalid_name", "name_taken", "bad_args"})
+RATE_LIMITED_MESSAGE = (
+    "Too many authentication attempts; wait and try again.")
 
 # Repository root: <root>/src/mud/net/v2_server.py
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -123,6 +133,10 @@ class Session:
     # True for the durable character paths (`auth` register/login). A guest
     # `join` leaves it False and keeps the v2.0 remove-on-disconnect behavior.
     authenticated: bool = False
+    # Auth failure times on the server's clock. The limiter lives here, on the
+    # connection: there is no shared table and no entry keyed by a name, so a
+    # throttled connection can never lock a character name.
+    auth_failures: list[float] = field(default_factory=list)
 
 
 class V2Server:
@@ -138,6 +152,8 @@ class V2Server:
         db_path: str | Path | None = None,
         server_commit: str | None = None,
         auth_required: bool = True,
+        auth_limits: AuthConfig | None = None,
+        clock: Callable[[], float] | None = None,
     ):
         self.engine = engine
         self.host = host
@@ -150,6 +166,10 @@ class V2Server:
         # send input. The v2.0 guest path is an explicit opt-out for legacy
         # tests and a deliberate guest server.
         self.auth_required = auth_required
+        # The limiter is per connection and in memory, and the window is read
+        # from this clock, so tests advance time instead of sleeping.
+        self.auth_limits = auth_limits if auth_limits is not None else AuthConfig()
+        self.clock = clock if clock is not None else time.monotonic
         self.db: sqlite3.Connection | None = None
         self.store: WriteThroughStore | None = None
         self._stop_event = asyncio.Event()
@@ -181,11 +201,25 @@ class V2Server:
     async def _send_auth_error(self, ws, session: Session, code: str,
                                message: str, msg_id: Any = None) -> None:
         """A typed auth failure: direct, echoes the request id, never the key."""
+        if code in AUTH_FAILURE_CODES:
+            session.auth_failures.append(self.clock())
         await self._send(
             ws, session, "auth.error",
             {"code": code, "message": message, "text": message},
             direct=True, msg_id=msg_id,
         )
+
+    def _auth_is_limited(self, session: Session) -> bool:
+        """True when this connection spent its failure budget in the window.
+
+        Expired failures are pruned here, which is the whole recovery path:
+        once the clock is a window past them, the budget is empty again.
+        """
+        now = self.clock()
+        window = self.auth_limits.window_seconds
+        recent = [at for at in session.auth_failures if now - at < window]
+        session.auth_failures[:] = recent
+        return len(recent) >= self.auth_limits.max_attempts
 
     async def _announce_connect(self, player) -> None:
         """Tell the character's room that it arrived."""
@@ -285,12 +319,23 @@ class V2Server:
         await self._announce_connect(player)
 
     async def _handle_auth(self, ws, session: Session, msg: dict) -> None:
-        """Route one `auth` message; registration is the only mode for now."""
+        """Route one `auth` message, enforcing the per-connection budget first.
+
+        A connection over its budget gets `auth.error{rate_limited}` before its
+        data is read, so a flood cannot keep probing shapes or keys. The socket
+        stays open: a normal bad key is never a close, and the limit is not
+        policy abuse.
+        """
         msg_id = msg.get("id")
         if session.joined:
             await self._send_auth_error(
                 ws, session, "already_joined",
                 "This connection has already joined.", msg_id)
+            return
+
+        if self._auth_is_limited(session):
+            await self._send_auth_error(
+                ws, session, "rate_limited", RATE_LIMITED_MESSAGE, msg_id)
             return
 
         data = msg.get("data")
@@ -713,7 +758,7 @@ if __name__ == "__main__":
         engine = Engine()
         await load_demo_village(engine)
         server = V2Server(engine, host=args.host, port=args.port,
-                          db_path=db_path)
+                          db_path=db_path, auth_limits=config.auth)
         print(f"Protocol-v2 server on ws://{args.host}:{args.port} "
               f"(db: {db_path})")
         await server.run()
