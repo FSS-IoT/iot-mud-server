@@ -143,6 +143,43 @@ if it does not have a special container UI.
     `error{not_found}`; a `portable: false` object is `error{not_portable}`. A
     bare `get brass lantern` still means `take`, not `get from`.
 
+## Exit locks (v2.1.2)
+
+The product world locks the Old Tavern door. The lock is content: the door
+names the key object `key_gold_1`, and the gold key in the Alchemist Shop is
+the only key that fits. Commands use display names (`gold key`, not
+`key_gold_1`). Using the key does not consume it: it stays in the inventory
+and the door stays unlocked for the rest of the running world. A restart
+rebuilds the authored lock (`PROTOCOL.md`, "Exit locks").
+
+1. From the gate: `go north` (Marketplace), `go west` (Alchemist Shop).
+   `take gold key` → `object.taken` with `object.id: "key_gold_1"`, then
+   `player.inventory` listing the key. If the container flow already ran, the
+   same key is already in the inventory; skip the take.
+2. `go east` back to the Marketplace. Its east exit is the tavern door:
+   `room.state.exits` lists `"direction": "east"`, `"to": "tavern"`,
+   `"locked": true`, and `"label": "tavern door"`.
+3. **Refused move.** `go east` → `error` with `code: "locked"`; no
+   `room.state` and no movement. Ben, in the same room, receives
+   `exit.locked` with `exit.direction: "east"`, `exit.to: "tavern"`,
+   `by: "Ada"`, and `self: false`. The actor's refusal is the typed error, not
+   a second event.
+4. **Unlock.** `use gold key on east` → `exit.unlocked` with `self: true`,
+   `exit.direction: "east"`, `exit.to: "tavern"`, and the
+   `You turn the Gold Key; the tavern door unlocks.` text. Ben receives the
+   same event with `self: false`. `use gold key on tavern door` names the
+   authored label, and `use gold key on tavern` names the destination room;
+   both resolve to the same exit.
+5. **Enter.** `go east` → `room.state` for the Old Tavern
+   (`room.id: "tavern"`); Ben receives `room.leave` for the Marketplace.
+6. **The other side.** The reciprocal tavern → west door is the same physical
+   lock. `go west` returns to the Marketplace without a second `use`.
+7. **Wrong or missing key.** A key whose object id is not `key_gold_1` does not
+   open the door, no `exit.unlocked` is emitted, and `go east` remains
+   `error{locked}`. With no key at all, `use gold key on east` is
+   `error{not_found}` and the door stays locked. The key is not consumed, so
+   keep it in the inventory for the rest of the session.
+
 ## What "done" means
 
 Your client is compatible when it can:
@@ -152,8 +189,8 @@ Your client is compatible when it can:
   `room.state`;
 - send `input` and pair the direct reply by `id`;
 - render `room.enter` / `room.leave`, `player.said`, `player.emoted`,
-  `player.told`, `who.list`, `object.*`, `player.inventory`, `notice`, and
-  `error`;
+  `player.told`, `who.list`, `object.*`, `exit.locked` / `exit.unlocked`,
+  `player.inventory`, `notice`, and `error`;
 - keep running after an error or a malformed frame;
 - quit cleanly.
 
