@@ -1,0 +1,40 @@
+# Generic systemd unit for the common server. This file is a template: copy it
+# to /etc/systemd/system/iot-mud.service and replace /opt/iot-mud with the
+# checkout (or installed copy) on this host. `uv sync --all-extras` in that
+# directory creates the .venv the service puts first on PATH.
+#
+# The database lives in StateDirectory=iot-mud, so systemd creates and owns
+# /var/lib/iot-mud. The iot-mud system user must exist first; see
+# docs/OPERATIONS.md. Run `systemctl stop iot-mud` before backup or restore;
+# both admin commands are offline operations.
+[Unit]
+Description=IoT MUD server (protocol v2)
+Documentation=file:/opt/iot-mud/docs/OPERATIONS.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=iot-mud
+Group=iot-mud
+StateDirectory=iot-mud
+StateDirectoryMode=0750
+WorkingDirectory=/opt/iot-mud
+Environment=PATH=/opt/iot-mud/.venv/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PYTHONUNBUFFERED=1
+# Change --host to the tailnet address (or 0.0.0.0 behind a tailnet-only
+# firewall) when members connect from other machines.
+ExecStart=/usr/bin/env python -m src.mud.net.v2_server --host 127.0.0.1 --port 8765 --db /var/lib/iot-mud/mud.db
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target
