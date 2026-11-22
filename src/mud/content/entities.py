@@ -7,7 +7,8 @@ class Entity:
                  readable: bool = False, light_source: bool = False,
                  item_id: str | None = None, locked: bool = False,
                  required_key: str | None = None, lit: bool = False,
-                 dropped_on_sleep: bool = False):
+                 dropped_on_sleep: bool = False, portable: bool = True,
+                 container: bool = False, open: bool = False):
         self.name = name
         self.description = description
         self.weight = weight
@@ -28,8 +29,9 @@ class Entity:
         self.locked = locked
         self.required_key = required_key
         # The items a container holds when closed (its loot). `add_content`
-        # populates this; `open <chest>` spills it into the room so plain
-        # `take` can then pick it up. Empty by default, so plain items stay plain.
+        # populates this; `open <chest>` lists it and `get <item> from <chest>`
+        # pulls one out, so the contents stay in the container (#76). Empty by
+        # default, so plain items stay plain.
         # `readable` marks objects a player can `read` (signs, books, scrolls).
         # Plain items are not; `read <item>` is refused for them.
         self.readable = readable
@@ -47,7 +49,28 @@ class Entity:
         # persisted in `objects.state`; the gold chest key uses it. Everything
         # else stays in the sleeping character's inventory.
         self.dropped_on_sleep = dropped_on_sleep
+        # `portable` is authored per object. `get <item> from <container>`
+        # refuses to lift a fixed object into inventory (#76); `take` keeps its
+        # existing v2.0 behavior.
+        self.portable = portable
+        # `container` marks a world object authored as `kind: container`.
+        # `open` is the explicit lid state (#76): `open`, `close`, and
+        # `get ... from ...` read it. A container starts closed unless the
+        # world author sets `state.open: true`.
+        self.container = container
+        self.open = open
         self.contents: List[Entity] = []
+
+    @property
+    def is_container(self) -> bool:
+        """Whether this entity can hold contents a player reaches into.
+
+        Authored containers say so directly. Older engine callers build a
+        chest by adding contents without the flag, and a locked object is a
+        container by the content vocabulary, so both still count. Players are
+        never containers: callers exclude them by class before asking.
+        """
+        return self.container or self.locked or self.open or bool(self.contents)
 
     def add_content(self, item: Entity) -> bool:
         self.contents.append(item)

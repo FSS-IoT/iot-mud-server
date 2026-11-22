@@ -64,6 +64,11 @@ async def _load_yaml_world(engine: Engine, data_path: Path) -> None:
                 required_key=obj.required_key,
                 lit=obj.lit,
                 dropped_on_sleep=obj.dropped_on_sleep,
+                portable=obj.portable,
+                container=obj.kind == "container",
+                # The lid state is authored under `state.open`; a container
+                # with no key starts closed (#76).
+                open=bool(obj.state.get("open", False)),
             )
             entity.instance_id = obj.id
             # Kept for the v2.1.3 read/effects seam. The v2.0 adapter reads
@@ -164,6 +169,11 @@ async def _load_json_world(engine: Engine, data_path: Path) -> None:
             locked=bool(i_data.get("locked", False)),
             required_key=i_data.get("required_key"),
             dropped_on_sleep=bool(i_data.get("dropped_on_sleep", False)),
+            portable=bool(i_data.get("portable", True)),
+            # v2.0 JSON has no `kind`; contents or a lock make an item a
+            # container, which is the same test the old loader implied.
+            container=bool(i_data.get("contains") or i_data.get("locked")),
+            open=bool(i_data.get("state", {}).get("open", False)),
         )
         item.instance_id = i_data["id"]
         item_map[i_data["id"]] = item

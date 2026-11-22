@@ -1,8 +1,9 @@
-"""Red-green: `open <chest>` — reveal and spill a container's contents.
+"""Red-green: `open <chest>` — open a container and list its contents.
 
-`use <key> on <lock>` unlocks; `open <chest>` then reveals what was inside.
-A container holds loot in its `contents`; opening spills each piece into the
-room so a plain `take <loot>` can then pick it up.
+`use <key> on <lock>` unlocks; `open <chest>` then reveals what is inside.
+A container holds its contents; opening lists them and keeps them inside.
+`get <item> from <chest>` pulls one out. v2.1 does not spill loot into the
+room (see #76); `take` stays the room-floor verb.
 
 These tests expect an `open` verb that does not exist yet, so they fail now (RED).
 """
@@ -39,7 +40,7 @@ async def test_open_locked_chest_refused():
 
 @pytest.mark.asyncio
 async def test_open_unlocked_chest_reveals_contents():
-    """Opening an unlocked chest spills its loot into the room."""
+    """Opening an unlocked chest lists its contents and keeps them inside."""
     engine, _player, room, events = await _setup()
     lantern = Entity("Brass Lantern", "A brass lantern.", light_source=True)
     chest = Entity("Chest", "A sturdy oak chest.")
@@ -49,14 +50,14 @@ async def test_open_unlocked_chest_reveals_contents():
     response = await engine.process_command("open chest")
 
     assert "lantern" in response.lower()
-    assert lantern in room.contents  # spilled onto the floor
-    assert lantern not in chest.contents
+    assert lantern in chest.contents  # stays inside; `get` pulls it out
+    assert lantern not in room.contents
     assert events == [True]
 
 
 @pytest.mark.asyncio
-async def test_take_after_open():
-    """Loot revealed by opening can then be picked up."""
+async def test_get_after_open():
+    """Loot revealed by opening can then be pulled out with `get ... from`."""
     engine, player, room, _events = await _setup()
     lantern = Entity("Brass Lantern", "A brass lantern.", light_source=True)
     chest = Entity("Chest", "A sturdy oak chest.")
@@ -64,10 +65,11 @@ async def test_take_after_open():
     room.add_content(chest)
 
     await engine.process_command("open chest")
-    response = await engine.process_command("take lantern")
+    response = await engine.process_command("get lantern from chest")
 
     assert lantern in player.contents
-    assert "picked up" in response.lower()
+    assert lantern not in chest.contents
+    assert "get" in response.lower()
 
 
 @pytest.mark.asyncio

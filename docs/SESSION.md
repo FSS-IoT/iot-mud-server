@@ -104,10 +104,14 @@ runs this sequence against the server.
    `auth.ok` and `room.state`, and no old tell is replayed. `who` lists her
    awake again in the same room.
 
-## Containers and locks (v2.0)
+## Containers, close, and get from (v2.1.2)
 
-These are part of v2.0 and covered by the adapter tests; a client should render
-the events even if it does not have a special UI for them:
+The container flow is **open → get one item out → close**. Opening lists the
+contents and keeps them inside; `get <item> from <container>` pulls one out,
+and a plain `take` only reaches objects on the room floor. These commands are
+in memory for now; the authored `state.open` is what a restart reloads from
+the world, not a second inventory store. A client should render the events even
+if it does not have a special container UI.
 
 1. From the gate: `go north` (Marketplace), `go west` (Alchemist Shop, room id
    `shop`). Commands use display names, not room ids.
@@ -116,9 +120,28 @@ the events even if it does not have a special UI for them:
    would leave it dark.
 3. `open chest` → `error` with `code: "locked"`.
 4. `use gold key on chest` → `object.unlocked`.
-5. `open chest` → `object.opened`; the Brass Lantern spills into the room.
-6. `take brass lantern` → `object.taken`.
-7. `put brass lantern in chest` → `object.put` (the chest is unlocked).
+5. **Open.** `open chest` → `object.opened`; the text lists the Brass Lantern,
+   which stays inside. Opening does **not** spill it into the room.
+6. **Get from.** `get brass lantern from chest` → `object.got` with
+   `object.id: "brass_lantern"`, `container.id: "chest_forest"`, `self: true`,
+   then the documented `player.inventory` follow-up listing the lantern. Other
+   players in the room receive `object.got` with `self: false` and
+   `Ada gets the Brass Lantern from the Chest.`
+7. **Put back.** `put brass lantern in chest` → `object.put` (the chest is
+   unlocked and open).
+8. **Close.** `close chest` → `object.closed` with `object.id:
+   "chest_forest"` and `self: true`; other players in the room receive
+   `object.closed` with `self: false`. `close chest` again → `error` with
+   `code: "already_closed"`.
+9. **Closed container.** `get brass lantern from chest` while closed →
+   `error` with `code: "container_closed"`; the lantern stays inside.
+10. **Reopen and get.** `open chest` → `object.opened` (the lantern is still
+    inside), then `get brass lantern from chest` → `object.got` plus
+    `player.inventory`. A second `get brass lantern from chest` →
+    `error{not_here}` because it is in the inventory now.
+11. **Other typed errors.** A container not in the room is
+    `error{not_found}`; a `portable: false` object is `error{not_portable}`. A
+    bare `get brass lantern` still means `take`, not `get from`.
 
 ## What "done" means
 

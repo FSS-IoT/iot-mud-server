@@ -656,11 +656,12 @@ class Engine:
     async def _handle_open(self, arg: str, player_name: str | None) -> str:
         """Open a container: `open <chest>`.
 
-        A locked container refuses. An open container with nothing inside
-        reports empty. Otherwise every item it holds is spilled into the
-        player's room so a plain `take <loot>` can then pick it up, and a
-        `chest_opened` event fires. Names are resolved by the same forgiving
-        match as take/examine. Returns the reply string.
+        A locked container refuses. An already-open one refuses with
+        `already_open`. Opening sets the explicit `open` flag (#76) and
+        reports what is inside; it does not move anything. `get <item> from
+        <container>` pulls one item out, and `close` puts the lid back down.
+        An empty container reports empty. Names are resolved by the same
+        forgiving match as take/examine. Returns the reply string.
         """
         target_player = self._resolve_player(player_name)
         if target_player is not None:
@@ -683,17 +684,122 @@ class Engine:
         if getattr(container, "locked", False):
             return f"The {container.name} is locked. Find a key and `use <key> on {container.name.lower()}`."
 
+        # A plain item has no lid. It keeps the v2.0 empty-container reply and
+        # does not acquire an open state it can never close.
+        if container.is_container:
+            if container.open:
+                return f"The {container.name} is already open."
+            container.open = True
+
         loot = list(container.contents)
         if not loot:
             return f"The {container.name} is empty."
 
-        for item in loot:
-            container.remove_content(item)
-            room.add_content(item)
         await self.emit("chest_opened", {"item_name": container.name.lower(), "location": room.name})
 
         listed = ", ".join(sorted(c.name for c in loot))
         return f"You open the {container.name}. Inside you see: {listed}."
+
+    async def _handle_close(self, arg: str, player_name: str | None) -> str:
+        """Close an open container: `close <chest>`.
+
+        The lid state is explicit (`Entity.open`, #76). A container that is
+        already closed refuses with `already_closed`; a plain item is not
+        something to close. Contents stay inside: closing changes only the
+        lid, never what the container holds. Returns the reply string.
+        """
+        target_player = self._resolve_player(player_name)
+        if target_player is not None:
+            room = target_player.location
+            if room is None:
+                return "There is nowhere here to close anything."
+            container, disambig = self._disambiguate(room.contents, arg)
+            if disambig:
+                return disambig
+        else:
+            if not self.player or not self._player_location:
+                return "You do not exist!"
+            room = self._player_location
+            container, disambig = self._disambiguate(room.contents, arg)
+            if disambig:
+                return disambig
+
+        if container is None:
+            return f"There is no {arg} here to close."
+        if not container.is_container:
+            return f"The {container.name} is not something you can close."
+        if not container.open:
+            return f"The {container.name} is already closed."
+
+        container.open = False
+        await self.emit("container_closed", {
+            "item_name": container.name.lower(), "location": room.name,
+        })
+        return f"You close the {container.name}."
+
+    async def _handle_get_from(self, arg: str, player_name: str | None) -> str:
+        """Take one item out of an open container: `get <item> from <chest>`.
+
+        The container is resolved from the player's room, the item from the
+        container's contents. A closed container refuses with `container_closed`
+        before the item is resolved; an item that is not inside is
+        `not_here`; a fixed (`portable: false`) object cannot be lifted. The
+        move is in memory only: the write-through boundary for containers is
+        #63/#71, so this verb does not invent a second persistence rule.
+        Returns the reply string.
+        """
+        # `partition("from")` would split names like "brass"; the last " from "
+        # separates the two arguments, mirroring `put ... in ...`.
+        if " from " not in arg:
+            return "Get what from what? Try `get <item> from <container>`."
+        item_arg, _, container_arg = arg.rpartition(" from ")
+        item_arg = item_arg.strip()
+        container_arg = container_arg.strip()
+        if not item_arg or not container_arg:
+            return "Get what from what? Try `get <item> from <container>`."
+
+        target_player = self._resolve_player(player_name)
+        if target_player is not None:
+            room = target_player.location
+            if room is None:
+                return "There is nowhere here to get anything from."
+            container, cont_disambig = self._disambiguate(
+                room.contents, container_arg)
+            if cont_disambig:
+                return cont_disambig
+        else:
+            if not self.player or not self._player_location:
+                return "You do not exist!"
+            target_player = self.player
+            room = self._player_location
+            container, cont_disambig = self._disambiguate(
+                room.contents, container_arg)
+            if cont_disambig:
+                return cont_disambig
+
+        if container is None:
+            return f"There is no {container_arg} here."
+        if not container.is_container:
+            return f"The {container.name} is not a container."
+        if not container.open:
+            return f"The {container.name} is closed. Open it first."
+
+        item, item_disambig = self._disambiguate(container.contents, item_arg)
+        if item_disambig:
+            return item_disambig
+        if item is None:
+            return f"The {item_arg} is not in the {container.name}."
+        if not getattr(item, "portable", True):
+            return f"The {item.name} is fixed in place and cannot be put in your pack."
+
+        container.remove_content(item)
+        target_player.add_content(item)
+        await self.emit("item_got", {
+            "item_name": item.name.lower(),
+            "container": container.name.lower(),
+            "location": room.name,
+        })
+        return f"You get the {item.name} from the {container.name}."
 
     async def _handle_look_in(self, arg: str, player_name: str | None) -> str:
         """Look inside a container: `look in <chest>` / `look inside <chest>`.
@@ -891,7 +997,12 @@ class Engine:
             resolved_arg = arg
 
         input_str = f"{verb} {arg}".strip().lower() if arg else verb.lower()
-        if input_str in aliases:
+        if verb == "get" and arg and " from " in arg:
+            # `get <item> from <container>` is the v2.1 container verb (#76).
+            # A bare `get <item>` stays the v2.0 alias for `take` below.
+            resolved_verb = "get"
+            resolved_arg = arg
+        elif input_str in aliases:
             alias_target = aliases[input_str]
             if " " in alias_target:
                 v_part, a_part = alias_target.split(" ", 1)
@@ -1031,14 +1142,34 @@ class Engine:
                 matched = True
 
         # OPEN — open a container: `open <chest>`. A locked one refuses; an
-        # open, empty one reports empty; otherwise its contents spill into the
-        # room so a plain `take` can then pick them up.
+        # open, empty one reports empty; otherwise it lists the contents and
+        # keeps them inside so `get <item> from <chest>` can pull one out.
         elif resolved_verb == "open":
             if not resolved_arg:
                 response = "Open what? Try `open <chest>`."
                 matched = True
             else:
                 response = await self._handle_open(resolved_arg, player_name)
+                matched = True
+
+        # CLOSE — put the lid back: `close <chest>`. Only an open container
+        # closes; its contents stay inside.
+        elif resolved_verb == "close":
+            if not resolved_arg:
+                response = "Close what? Try `close <chest>`."
+                matched = True
+            else:
+                response = await self._handle_close(resolved_arg, player_name)
+                matched = True
+
+        # GET FROM — take one item out of an open container:
+        # `get <item> from <chest>`. The item moves into the actor's inventory.
+        elif resolved_verb == "get":
+            if not resolved_arg:
+                response = "Get what from what? Try `get <item> from <container>`."
+                matched = True
+            else:
+                response = await self._handle_get_from(resolved_arg, player_name)
                 matched = True
 
         # EXAMINE / LOOK AT — hold first, then room contents (not just players).
@@ -1141,7 +1272,8 @@ class Engine:
 
         elif resolved_verb == "help":
             response = (
-                "Commands: look (l), go <direction>, exits, take <item>, drop <item>, put <item> in <container>, "
+                "Commands: look (l), go <direction>, exits, take <item>, get <item> from <container>, drop <item>, put <item> in <container>, "
+                "open <container>, close <container>, "
                 "examine <thing> (exam), read <thing> (signs, books), look in <chest>, light <torch/lantern>, inventory (i), who, "
                 "say <text>, emote <action> (me), tell <player> <text>, hello. Try `look` first."
             )

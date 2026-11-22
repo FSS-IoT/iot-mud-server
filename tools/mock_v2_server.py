@@ -8,8 +8,9 @@ client can be tried without running the engine:
     # client: ws://localhost:8770
 
 It supports join, movement, look, take/drop, say, inventory, the forest chest
-(lock/use/open/put), errors, and quit. The real server remains authoritative;
-the mock is scripted content with no engine, database, or persistence.
+(lock/use/open/get-from/close/put), errors, and quit. The real server remains
+authoritative; the mock is scripted content with no engine, database, or
+persistence.
 """
 
 from __future__ import annotations
@@ -108,8 +109,10 @@ class World:
         self.rooms = {room: list(items) for room, items in ROOM_ITEMS.items()}
         self.players: dict[str, Session] = {}
         self.chest_locked = True
-        self.chest_looted = False
-        self.chest_items: list[str] = []
+        self.chest_open = False
+        # The lantern starts inside the chest; `open` lists it, `get ... from`
+        # pulls it out, and `put` puts it back (#76).
+        self.chest_items: list[str] = ["brass_lantern"]
         self.lit_items: set[str] = set()
 
 
@@ -155,6 +158,7 @@ class Session:
         item = dict(ITEMS[key])
         if key == "chest":
             item["locked"] = self.world.chest_locked
+            item["open"] = self.world.chest_open
         if item.get("light_source"):
             item["lit"] = key in self.world.lit_items
         return item
@@ -381,6 +385,9 @@ class MockServer:
                 direction = arg.split()[0] if arg else ""
             await self._go(session, direction, msg_id)
             return True
+        if verb == "get" and " from " in arg:
+            await self._get_from(session, arg, msg_id)
+            return True
         if verb in ("take", "get"):
             await self._take(session, arg, msg_id)
             return True
@@ -392,6 +399,9 @@ class MockServer:
             return True
         if verb == "open":
             await self._open(session, arg, msg_id)
+            return True
+        if verb == "close":
+            await self._close(session, arg, msg_id)
             return True
         if verb == "use":
             await self._use(session, arg, msg_id)
@@ -424,9 +434,11 @@ class MockServer:
         if verb in ("help", "h"):
             await session.send("notice", {
                 "text": "Commands: look, go <direction>, take <item>, "
-                        "drop <item>, put <item> in <chest>, open <chest>, "
-                        "use <key> on <chest>, light <torch/lantern>, "
-                        "read <item>, inventory, say <text>, exits, quit.",
+                        "get <item> from <chest>, drop <item>, "
+                        "put <item> in <chest>, open <chest>, "
+                        "close <chest>, use <key> on <chest>, "
+                        "light <torch/lantern>, read <item>, inventory, "
+                        "say <text>, exits, quit.",
                 "level": "info",
             }, msg_id)
             return True
@@ -581,22 +593,101 @@ class MockServer:
                 "text": "The Chest is locked. Find a key and use it.",
             }, msg_id)
             return
-        if self.world.chest_looted:
-            await session.send("object.opened", {
-                "object": session._item("chest"), "by": session.name,
-                "self": True, "text": "The Chest is empty.",
+        if self.world.chest_open:
+            await session.send("error", {
+                "code": "already_open", "message": "The Chest is already open.",
+                "text": "The Chest is already open.",
             }, msg_id)
             return
-        self.world.rooms["forest"].append("brass_lantern")
-        self.world.chest_looted = True
+        self.world.chest_open = True
+        loot = [ITEMS[item_id]["name"]
+                for item_id in self.world.chest_items]
+        text = ("You open the Chest. Inside you see: " + ", ".join(loot) + "."
+                if loot else "The Chest is empty.")
         await session.send("object.opened", {
             "object": session._item("chest"), "by": session.name,
-            "self": True,
-            "text": "You open the Chest. Inside you see: Brass Lantern.",
+            "self": True, "text": text,
         }, msg_id)
         await session.broadcast("object.opened", {
             "object": session._item("chest"), "by": session.name,
             "self": False, "text": f"{session.name} opens the Chest.",
+        })
+
+    async def _get_from(self, session: Session, arg: str, msg_id) -> None:
+        if session.room != "forest" or " from " not in arg:
+            await session.send("error", {
+                "code": "not_found", "message": "There is no container here.",
+                "text": "There is no container here.",
+            }, msg_id)
+            return
+        item_name, _, container_name = arg.rpartition(" from ")
+        if "chest" not in container_name.lower():
+            await session.send("error", {
+                "code": "not_found", "message": "There is no container here.",
+                "text": "There is no container here.",
+            }, msg_id)
+            return
+        if not self.world.chest_open:
+            await session.send("error", {
+                "code": "container_closed", "message": "The Chest is closed.",
+                "text": "The Chest is closed.",
+            }, msg_id)
+            return
+        needle = item_name.strip().lower()
+        key = next(
+            (item_id for item_id in self.world.chest_items
+             if needle in ITEMS[item_id]["name"].lower()),
+            None,
+        )
+        if key is None:
+            await session.send("error", {
+                "code": "not_here",
+                "message": f"The {item_name.strip()} is not in the Chest.",
+                "text": f"The {item_name.strip()} is not in the Chest.",
+            }, msg_id)
+            return
+        self.world.chest_items.remove(key)
+        item = session._item(key)
+        held = {"id": item["id"], "kind": item["kind"], "name": item["name"]}
+        if item.get("light_source"):
+            held["lit"] = item.get("lit", False)
+        session.inventory.append(held)
+        container = {"id": "chest_forest", "name": "Chest"}
+        await session.send("object.got", {
+            "object": item, "container": container,
+            "by": session.name, "self": True,
+            "text": f"You get the {item['name']} from the Chest.",
+        }, msg_id)
+        await session.send("player.inventory",
+                           session.inventory_payload())
+        await session.broadcast("object.got", {
+            "object": item, "container": container,
+            "by": session.name, "self": False,
+            "text": f"{session.name} gets the {item['name']} from the Chest.",
+        })
+
+    async def _close(self, session: Session, name: str, msg_id) -> None:
+        if session.room != "forest" or "chest" not in name.lower():
+            await session.send("error", {
+                "code": "not_found", "message": "There is no chest here.",
+                "text": "There is no chest here.",
+            }, msg_id)
+            return
+        if not self.world.chest_open:
+            await session.send("error", {
+                "code": "already_closed",
+                "message": "The Chest is already closed.",
+                "text": "The Chest is already closed.",
+            }, msg_id)
+            return
+        self.world.chest_open = False
+        await session.send("object.closed", {
+            "object": session._item("chest"), "by": session.name,
+            "self": True, "text": "You close the Chest.",
+        }, msg_id)
+        await session.broadcast("object.closed", {
+            "object": session._item("chest"), "by": session.name,
+            "self": False, "text": f"{session.name} closes the Chest.",
         })
 
     async def _use(self, session: Session, arg: str, msg_id) -> None:
