@@ -2,12 +2,30 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any, Literal, TypeGuard
 
 PROTOCOL_VERSION = 2
+
+# The changelog label for the current additive release inside protocol 2.
+PROTOCOL_RELEASE = "2.1"
+
+# `hello.data.server_commit` when no commit can be resolved.
+UNKNOWN_SERVER_COMMIT = "unknown"
+
+_SERVER_COMMIT_RE = re.compile(r"[0-9a-f]{40}")
+
+
+def is_server_commit(value: object) -> TypeGuard[str]:
+    """True when `value` is a 40-character lowercase hex git commit."""
+    return (
+        isinstance(value, str)
+        and _SERVER_COMMIT_RE.fullmatch(value) is not None
+    )
+
 
 # Event names the v2.0 server may emit. Kept here so tests and the server share
 # one list instead of spelling strings in several places.
