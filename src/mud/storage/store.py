@@ -7,8 +7,8 @@ unchanged.
 
 `PlayerStore` writes the actor's half — which room the player is in and which
 objects it owns. `WorldStore` reads where any object is. Seeding the world from
-content and reloading it into the engine belongs to #64; this module only makes
-each mutation durable.
+content lives in `src/mud/world/seed.py`; loading a seeded world back into the
+engine is still open. This module only makes each mutation durable.
 
 Every mutation is one SQLite transaction. A store also creates the rows it
 references when they are missing, because a fresh database has no seed yet; the

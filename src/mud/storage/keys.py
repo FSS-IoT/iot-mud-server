@@ -1,9 +1,9 @@
 """Stable ids shared by the database and the wire.
 
-A reload (#64) has to put an object back where the client saw it, so both sides
-must derive an id the same way. Rooms use the authored `item_id`, else a slug of
-the display name. Objects prefer their per-instance id (the loader sets it from
-the world file), then the authored id, then the slug.
+A reload has to put an object back where the client saw it, so both sides must
+derive an id the same way. Rooms use the authored `item_id`, else a slug of the
+display name. Objects prefer their per-instance id (the loader sets it from the
+world file), then the authored id, then the slug.
 """
 
 from __future__ import annotations
