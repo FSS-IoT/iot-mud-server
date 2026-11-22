@@ -1,0 +1,116 @@
+# The riverside loop. The path runs from the mill bridge south along the water,
+# loops through the ford and the reeds, and ends at the ferry landing.
+area: riverside
+
+rooms:
+  - id: river_path
+    name: River Path
+    description: The path follows the water between willow roots. The mill bridge is north; reeds close in to the east.
+    exits:
+      west: riverbank
+      east: reeds
+    objects:
+      - id: river_marker
+        name: River Marker
+        description: A painted post marking the high-water line.
+        kind: readable
+        readable_text: Above this mark the ford is closed. The ferry runs from the east landing.
+        weight: 0.0
+        portable: false
+
+  - id: riverbank
+    name: Riverbank
+    description: Mud and flat stones slope to the water. A ford crosses south; the path runs east.
+    exits:
+      south: ford
+    objects:
+      - id: river_notice
+        name: River Notice
+        description: A weather-stained notice nailed to a willow.
+        kind: readable
+        readable_text: |
+          The ford is knee-deep at the stones. Do not cross in flood.
+          The ferryman takes coin or mill token.
+        weight: 0.1
+      - id: driftwood
+        name: Driftwood
+        description: A pale branch worn smooth by the river.
+        weight: 0.4
+    npcs:
+      - id: npc_fisher
+        name: Nessa the Fisher
+        description: A patient woman with a long rod and a basket of silver fish.
+        dialogue:
+          greeting: "Quiet. The fish are listening."
+          default: "I know the water. Ask about the ford or the ferry."
+          topics:
+            ford: "Cross at the stones. The heron rock is east of the far side."
+            ferry: "Old Tarn runs it. Ring the landing bell once."
+            ruins: "North bank, past the shrine. The hermit keeps the gate shut."
+
+  - id: ford
+    name: The Ford
+    description: Flat stones break the current. The bank rises north; a rock favoured by herons stands east.
+    exits:
+      east: heron_rock
+    objects:
+      - id: ford_stone
+        name: Ford Stone
+        description: A worn marker stone, slick with river weed.
+        kind: readable
+        readable_text: Cross single file. The stones shift after rain.
+        weight: 0.0
+        portable: false
+
+  - id: heron_rock
+    name: Heron Rock
+    description: A grey boulder overlooks the water. A heron watches from the top, unimpressed.
+    exits:
+      north: reeds
+    objects:
+      - id: heron_feather
+        name: Heron Feather
+        description: A long grey feather, clean and dry.
+        weight: 0.05
+      - id: heron_cache
+        name: Heron Cache
+        description: A hollow under the rock, lined with dry grass and odds and ends.
+        kind: container
+        weight: 0.0
+        portable: false
+        contains:
+          - brass_button
+      - id: brass_button
+        name: Brass Button
+        description: A tarnished brass button, stamped with a tower.
+        weight: 0.02
+
+  - id: reeds
+    name: The Reeds
+    description: Tall reeds close overhead. A landing stage is east, and the path opens west toward the bridge.
+    exits:
+      east: ferry_landing
+    objects:
+      - id: reed_bundle
+        name: Reed Bundle
+        description: A bundle of cut reeds, ready for thatching.
+        weight: 0.6
+
+  - id: ferry_landing
+    name: Ferry Landing
+    description: A plank stage rides the water. A bell hangs from a post, and the ferry waits north.
+    exits:
+      north: ferry
+    objects:
+      - id: ferry_schedule
+        name: Ferry Schedule
+        description: A chalked board under a small roof.
+        kind: readable
+        readable_text: |
+          Crossings at dawn, noon, and dusk. Ring once. The ferryman does not
+          answer a second bell before the first crossing is done.
+        weight: 0.2
+      - id: ferry_bell
+        name: Ferry Bell
+        description: A small bronze bell, green with river air.
+        weight: 0.4

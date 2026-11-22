@@ -1,10 +1,12 @@
-"""Ticket #66: the starting village is YAML and loads the same world.
+"""Ticket #66: the frozen five-room starting village is YAML.
 
-The product world moves from `starting_village.json` to
-`starting_village.yaml` in the #65 format. These tests compare the *effective*
-engine graph, not the files: names, descriptions, exits (including the
-reciprocals the loader creates), objects and their containment, the start room,
-and every room's geometry must be identical whichever file the loader reads.
+The product world moved on to the `data/worlds/club_world/` directory in #80;
+`tests/test_world_content.py` owns that. This file keeps the v2.1.0 conformance
+fixture honest: `starting_village.json` and `starting_village.yaml` must still
+build the *same effective engine graph*. Names, descriptions, exits (including
+the reciprocals the loader creates), objects and their containment, the start
+room, and every room's geometry must be identical whichever file the loader
+reads.
 
 They also pin the startup contract: a missing, malformed, or semantically
 invalid YAML world fails with the content model or validator message instead of
@@ -29,6 +31,9 @@ from src.mud.world.loader import load_demo_village, load_world
 REPO_ROOT = Path(__file__).resolve().parents[1]
 JSON_WORLD = REPO_ROOT / "data" / "worlds" / "starting_village.json"
 YAML_WORLD = REPO_ROOT / "data" / "worlds" / "starting_village.yaml"
+# The v2.1.3 product world (#80). The two files above stay as the frozen
+# five-room conformance fixture the JSON oracle still covers.
+CLUB_WORLD = REPO_ROOT / "data" / "worlds" / "club_world"
 
 
 async def _load(path: Path) -> Engine:
@@ -145,18 +150,19 @@ def test_yaml_metadata_uses_the_json_start_room():
     assert data["name"]
 
 
-def test_default_world_is_yaml():
-    assert DEFAULT_WORLD == Path("data/worlds/starting_village.yaml")
-    assert DEFAULT_WORLD.suffix == ".yaml"
+def test_default_world_is_the_yaml_world_directory():
+    assert DEFAULT_WORLD == Path("data/worlds/club_world")
+    assert (REPO_ROOT / DEFAULT_WORLD / "world.yaml").is_file()
+    assert (REPO_ROOT / DEFAULT_WORLD / "areas").is_dir()
 
 
 @pytest.mark.asyncio
-async def test_load_demo_village_builds_the_same_world_as_json():
+async def test_load_demo_village_builds_the_default_world_directory():
     default_engine = Engine()
     await load_demo_village(default_engine)
-    json_engine = await _load(JSON_WORLD)
+    directory_engine = await _load(CLUB_WORLD)
 
-    assert _graph(default_engine) == _graph(json_engine)
+    assert _graph(default_engine) == _graph(directory_engine)
 
 
 # ---------------------------------------------------------------------------

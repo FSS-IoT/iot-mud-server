@@ -22,11 +22,14 @@ DEFAULT_COMMAND_BURST = 20
 # The owner's open-question default: an authenticated client with no input for
 # 15 minutes is put to sleep in place (#72).
 DEFAULT_IDLE_TIMEOUT_SECONDS = 900.0
-# The product world is YAML (SPEC v2.1.0 criterion 5). The path is relative to
-# the repository root; `load_demo_village` resolves it there, because that
-# loader owns world discovery and a relative path alone would depend on cwd.
+# The product world is a YAML world directory: `world.yaml` metadata plus one
+# area file per region under `areas/` (#80). The path is relative to the
+# repository root; `load_demo_village` resolves it there, because that loader
+# owns world discovery and a relative path alone would depend on cwd. The
+# frozen five-room conformance fixture stays at
+# `data/worlds/starting_village.yaml` for the legacy loader tests.
 # A future config ticket can expose `[world].path` without moving the default.
-DEFAULT_WORLD = Path("data/worlds/starting_village.yaml")
+DEFAULT_WORLD = Path("data/worlds/club_world")
 
 
 class ConfigError(ValueError):

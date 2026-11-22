@@ -6,14 +6,16 @@ from src.mud.world.loader import load_demo_village
 
 @pytest.mark.asyncio
 async def test_demo_village_populates_world_green():
-    """[TASK-014] GREEN PHASE: Verify that the loader populates exactly 5 rooms and at least 3 items."""
+    """The product world has 30-40 rooms and the starting village inside it."""
     engine = Engine()
     
     # Action: Load the demo scene
     await load_demo_village(engine)
     
-    # Assertions: 5 Rooms
-    assert len(engine.rooms) == 5, f"Expected 5 rooms in demo, but found {len(engine.rooms)}"
+    # Assertions: the v2.1.3 world size
+    assert 30 <= len(engine.rooms) <= 40, (
+        f"Expected 30-40 rooms in demo, but found {len(engine.rooms)}"
+    )
     
     # Assertions: Check specific known rooms/entities are present
     room_names = [r.name for r in engine.rooms.values()]
@@ -26,7 +28,7 @@ async def test_demo_village_populates_world_green():
     if engine.player:
         total_items += len(engine.player.contents)
     
-    assert total_items >= 3, f"Expected at least 3 items in the world, but found {total_items}"
+    assert total_items >= 10, f"Expected at least 10 items in the world, but found {total_items}"
 
 
 @pytest.mark.asyncio

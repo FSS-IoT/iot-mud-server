@@ -1,0 +1,188 @@
+# The old ruins west of the shrine. The court, chapel, and crypt are open; the
+# fallen tower is a locked side room opened by the bone key from the toll-house
+# strongbox. The silver key inside opens the sarcophagus in the crypt.
+area: ruins
+
+rooms:
+  - id: shrine
+    name: Wayside Shrine
+    description: A low stone shrine stands under a wind-bent tree. The ruins begin north; the north bank lies east.
+    exits:
+      north: ruins_gate
+    objects:
+      - id: altar_tablet
+        name: Altar Tablet
+        description: A cracked tablet lettered in a hand older than the village.
+        kind: readable
+        readable_text: |
+          THE ROAD REMEMBERS. The tower fell, the well rose, and the bones
+          were carried down. Leave a coin; take nothing that answers.
+        weight: 0.0
+        portable: false
+      - id: offering_bowl
+        name: Offering Bowl
+        description: A shallow stone bowl with a few green coins in the bottom.
+        kind: container
+        weight: 4.0
+        portable: false
+        contains:
+          - copper_coin
+      - id: copper_coin
+        name: Copper Coin
+        description: A soft green coin, older than the village mint.
+        weight: 0.01
+    npcs:
+      - id: npc_hermit
+        name: The Hermit
+        description: A hooded figure sweeping the shrine steps with a birch broom.
+        dialogue:
+          greeting: "You are the first to ask before taking. Good."
+          default: "Ask about the ruins, the key, or the altar."
+          topics:
+            ruins: "The gate is open. The court is not. The tower arch is older than the toll house."
+            key: "The toll keeper holds the bone key. His strongbox answers to iron."
+            altar: "Leave a coin, take a coin. The bowl keeps its own accounts."
+        effects:
+          on_talk:
+            - type: light.flicker
+              params:
+                color: "#ccaa66"
+                intensity: 0.2
+    effects:
+      on_enter:
+        - type: light.flare
+          params:
+            color: "#ccaa66"
+            intensity: 0.3
+
+  - id: ruins_gate
+    name: Ruins Gate
+    description: Two broken pillars mark the way into a weed-choked court. The shrine is south.
+    exits:
+      north: ruins_court
+    objects:
+      - id: ruin_carving
+        name: Pillar Carving
+        description: A spiral cut into the standing pillar, worn smooth by rain.
+        kind: readable
+        readable_text: The spiral turns inward. Below the court, the old water waits.
+        weight: 0.0
+        portable: false
+
+  - id: ruins_court
+    name: Ruined Court
+    description: A flagged court opens among fallen walls. A chapel stands east, and a cracked tower arch waits west.
+    exits:
+      east: chapel
+      west:
+        to: fallen_tower
+        locked: true
+        key: key_bone
+        label: cracked tower arch
+    objects:
+      - id: courtyard_font
+        name: Courtyard Font
+        description: A dry stone basin in the centre of the court.
+        kind: container
+        weight: 10.0
+        portable: false
+        contains:
+          - old_coin
+      - id: old_coin
+        name: Old Coin
+        description: A silver coin with no face on either side.
+        weight: 0.01
+      - id: court_notice
+        name: Court Notice
+        description: A modern paper notice pinned to an ancient door.
+        kind: readable
+        readable_text: |
+          The court is safe by daylight. Do not enter the crypt alone.
+          The tower arch stays locked; the bone key is held at the toll house.
+        weight: 0.05
+
+  - id: chapel
+    name: Ruined Chapel
+    description: The roof is half gone, but the altar stands dry. A stair descends into the crypt.
+    exits:
+      down: crypt
+    objects:
+      - id: chapel_altar
+        name: Chapel Altar
+        description: A plain stone altar with a single candle burning steady.
+        kind: readable
+        readable_text: |
+          The names of the tower's dead are cut small around the rim. The last
+          line is newer than the rest: "the water keeps them".
+        weight: 0.0
+        portable: false
+      - id: candle
+        name: Chapel Candle
+        description: A thick candle, burning with a clear steady flame.
+        weight: 0.2
+        light_source: true
+        lit: true
+
+  - id: crypt
+    name: Crypt
+    description: Cold air settles around stone shelves. A sealed sarcophagus rests in the centre; a stair leads down to the caves.
+    exits:
+      down: cave_mouth
+    objects:
+      - id: sarcophagus
+        name: Sealed Sarcophagus
+        description: A stone coffin with a silver keyhole cut into the lid.
+        kind: container
+        weight: 20.0
+        portable: false
+        locked: true
+        required_key: key_silver
+        contains:
+          - ancient_scroll
+          - bone_ring
+      - id: ancient_scroll
+        name: Ancient Scroll
+        description: A brittle scroll, sealed with wax the colour of old blood.
+        kind: readable
+        readable_text: |
+          We carried the dead down because the water rose. The ring was not
+          buried with them. Whoever wears it will hear the river at night.
+        weight: 0.2
+      - id: bone_ring
+        name: Bone Ring
+        description: A plain ring carved from a single piece of bone.
+        weight: 0.05
+    effects:
+      on_enter:
+        - type: sound.echo
+          params:
+            clip: crypt_drip
+            repeats: 2
+
+  - id: fallen_tower
+    name: Fallen Tower
+    description: The tower came down inward. Broken beams and stone fill the room, and a silver key glints on the rubble.
+    objects:
+      - id: key_silver
+        name: Silver Key
+        description: A slender silver key, cold as the crypt floor.
+        weight: 0.15
+        dropped_on_sleep: true
+      - id: tower_rubble
+        name: Tower Rubble
+        description: A heap of stone and splintered beams.
+        kind: container
+        weight: 12.0
+        contains:
+          - tower_seal
+          - crumpled_note
+      - id: tower_seal
+        name: Tower Seal
+        description: A lead seal stamped with the tower's spiral.
+        weight: 0.1
+      - id: crumpled_note
+        name: Crumpled Note
+        description: A note in a hurried hand, folded and refolded.
+        kind: readable
+        readable_text: The silver key opens the coffin. The bone key opened the arch. Do not take the ring.
+        weight: 0.02

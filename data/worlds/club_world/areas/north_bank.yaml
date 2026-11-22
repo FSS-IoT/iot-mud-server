@@ -1,0 +1,150 @@
+# The north bank. The ferry lands here, the toll house guards the watchtower
+# stair, and the shrine opens west toward the ruins.
+area: north_bank
+
+rooms:
+  - id: ferry
+    name: The Ferry
+    description: A flat-bottomed boat slides across the water. The landing is south; the north bank rises ahead.
+    exits:
+      north: north_bank
+    objects:
+      - id: ferry_locker
+        name: Ferry Locker
+        description: A wooden locker under the thwart, latched but not locked.
+        kind: container
+        weight: 2.0
+        contains:
+          - key_iron
+          - ferry_ticket
+      - id: key_iron
+        name: Iron Key
+        description: A heavy iron key, stamped with a tower.
+        weight: 0.3
+        dropped_on_sleep: true
+      - id: ferry_ticket
+        name: Ferry Ticket
+        description: A pasteboard ticket, punched once.
+        kind: readable
+        readable_text: ONE CROSSING. Not valid in flood. The toll house keeps the tower stair key.
+        weight: 0.02
+    npcs:
+      - id: npc_ferryman
+        name: Old Tarn
+        description: A river-brown man with a pole and a patience that outlasts the current.
+        dialogue:
+          greeting: "One bell, one crossing. Step lively."
+          default: "Ask about the ferry, the ruins, or the tower."
+          topics:
+            ferry: "I pole. The river decides. Ring the bell at the landing."
+            ruins: "Past the shrine on the north bank. The hermit has the run of it."
+            tower: "The toll house stair is locked. The iron key rides under my thwart."
+        wander: false
+
+  - id: north_bank
+    name: North Bank
+    description: The road widens on the north side. A toll house stands east and a low shrine west.
+    exits:
+      east: toll_house
+      west: shrine
+    objects:
+      - id: boundary_stone
+        name: Boundary Stone
+        description: A squat stone carved with a worn line.
+        kind: readable
+        readable_text: NORTH BANK. Toll house east. Shrine and old ruins west. No hunting beyond the wall.
+        weight: 0.0
+        portable: false
+
+  - id: toll_house
+    name: Toll House
+    description: A stone room with a counter, a cold hearth, and a stair rising north. A strongbox sits under the counter.
+    exits:
+      north:
+        to: watchtower
+        locked: true
+        key: key_iron
+        label: watchtower stair
+    objects:
+      - id: strongbox
+        name: Strongbox
+        description: A banded iron box, heavy enough to stay under the counter.
+        kind: container
+        weight: 8.0
+        locked: true
+        required_key: key_iron
+        contains:
+          - key_bone
+          - toll_receipt
+        effects:
+          on_open:
+            - type: sound.play
+              params:
+                clip: strongbox_open
+      - id: key_bone
+        name: Bone Key
+        description: A long key carved from pale bone, warm despite the cold room.
+        weight: 0.2
+        dropped_on_sleep: true
+      - id: toll_receipt
+        name: Toll Receipt
+        description: A narrow strip of paper with a dated stamp.
+        kind: readable
+        readable_text: Toll paid at the north bank. The bone key releases the old tower arch.
+        weight: 0.01
+      - id: toll_ledger
+        name: Toll Ledger
+        description: A ledger of crossings, tolls, and one long unpaid column.
+        kind: readable
+        readable_text: |
+          The hermit does not pay. The ferryman does not pay. The tower keeps
+          its own accounts, and the stair key is under the ferry thwart.
+        weight: 0.7
+    npcs:
+      - id: npc_tollkeeper
+        name: Corin the Tollkeeper
+        description: A spare man with an ink-stained cuff and a key ring at his belt.
+        dialogue:
+          greeting: "Toll is a copper, or a good reason."
+          default: "Ask about the toll, the tower, or the ruins."
+          topics:
+            toll: "Copper for a cart, nothing for a walker. The ferry ticket counts."
+            tower: "Stair is locked. The iron key under the ferry thwart opens it."
+            ruins: "West past the shrine. Bone key, bone arch. Do not ask me who carved it."
+
+  - id: watchtower
+    name: Watchtower
+    description: A round stone room with arrow slits and a ladder of iron rungs. Wind moves through the tower top above.
+    exits:
+      up: tower_top
+    objects:
+      - id: watch_log
+        name: Watch Log
+        description: A logbook open on a narrow shelf.
+        kind: readable
+        readable_text: |
+          All quiet on the north bank. Two lights seen over the ruins at dusk.
+          The stair was locked at sundown. No one has come up since.
+        weight: 0.5
+      - id: watch_bell
+        name: Watch Bell
+        description: A cracked bronze bell, rung only for real trouble.
+        weight: 3.0
+
+  - id: tower_top
+    name: Tower Top
+    description: The wind is steady here. The village, the mill, and the river bend lie below. A spyglass rests on the parapet.
+    objects:
+      - id: tower_map
+        name: Tower Map
+        description: A varnished map of the valley under a stone weight.
+        kind: readable
+        readable_text: |
+          GATE — south. MILL — east of the orchard. FERRY — north bank.
+          RUINS — west of the shrine. CAVES — beneath the old crypt. Keep to the
+          marked paths; the old walls are not all standing.
+        weight: 0.4
+      - id: spyglass
+        name: Spyglass
+        description: A brass spyglass, dented but clear.
+        weight: 1.0

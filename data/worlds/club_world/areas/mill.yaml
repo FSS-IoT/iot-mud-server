@@ -1,0 +1,107 @@
+# The mill and its race. The millrace is reachable two ways: the locked race
+# gate from the bridge, or the open water side from the millpond. The key_mill
+# in the granary opens both the gate and the race chest.
+area: mill
+
+rooms:
+  - id: mill
+    name: The Old Mill
+    description: Millstones turn slowly in the dim. Flour dust hangs in the air. The granary is north and the millpond east.
+    exits:
+      north: granary
+      east: millpond
+    objects:
+      - id: mill_ledger
+        name: Miller's Ledger
+        description: A tally book bound in cracked leather.
+        kind: readable
+        readable_text: |
+          Grain in, flour out. The race chest holds the tokens the ferryman
+          will not accept. Key stays in the granary.
+        weight: 0.6
+      - id: flour_sack
+        name: Flour Sack
+        description: A tied cloth sack, white with dust.
+        kind: container
+        weight: 2.0
+        contains:
+          - wheat_sheaf
+      - id: wheat_sheaf
+        name: Wheat Sheaf
+        description: A bundle of cut wheat, still smelling of the field.
+        weight: 0.5
+    npcs:
+      - id: npc_miller
+        name: Hollis the Miller
+        description: A dust-white man with a miller's thumb and a patient frown.
+        dialogue:
+          greeting: "Mind the stones. They do not stop for talk."
+          default: "Ask about the mill, the river, or the key."
+          topics:
+            mill: "My grandfather turned these stones. The race gate is mine to lock."
+            key: "Mill key in the granary. It opens the race gate and the chest beside it."
+            river: "The pond feeds the race. Beyond the bridge, the river belongs to the ferryman."
+
+  - id: millpond
+    name: Millpond
+    description: Still water reflects the mill wheel. Reeds crowd the far bank and a path follows the race south.
+    exits:
+      south: millrace
+    objects:
+      - id: fishing_net
+        name: Fishing Net
+        description: A small hand net, mended with twine.
+        weight: 0.3
+      - id: pond_notice
+        name: Pond Notice
+        description: A slate board propped against a post.
+        kind: readable
+        readable_text: No swimming. The wheel does not stop for a waving hand.
+        weight: 0.2
+
+  - id: millrace
+    name: Millrace
+    description: Water hurries through a stone channel. The race gate stands west, and a dripping chest sits above the flow.
+    objects:
+      - id: chest_millrace
+        name: Race Chest
+        description: A tarred chest chained above the waterline.
+        kind: container
+        weight: 6.0
+        locked: true
+        required_key: key_mill
+        contains:
+          - mill_token
+      - id: mill_token
+        name: Mill Token
+        description: A stamped brass token, good for one crossing.
+        weight: 0.05
+
+  - id: granary
+    name: Granary
+    description: Sacks of grain rise to the rafters. A small iron key hangs from a nail by the door.
+    objects:
+      - id: key_mill
+        name: Mill Key
+        description: A heavy iron key, cold and slightly greasy.
+        weight: 0.3
+        dropped_on_sleep: true
+      - id: grain_sack
+        name: Grain Sack
+        description: A bulging sack of barley.
+        kind: container
+        weight: 3.0
+        contains:
+          - barley
+      - id: barley
+        name: Handful of Barley
+        description: A handful of clean barley, rattling dry.
+        weight: 0.1
+      - id: granary_tally
+        name: Granary Tally
+        description: Chalk marks on a board, counted and recounted.
+        kind: readable
+        readable_text: |
+          Six sacks to the mill, two to the tavern, one held back for the ferry.
+          The token chest is counted at dusk.
+        weight: 0.3

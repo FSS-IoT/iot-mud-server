@@ -186,7 +186,7 @@ def test_restore_migrates_an_older_backup(tmp_path):
     assert main(["restore", "--from", str(backup), "--db", str(restored)]) == 0
 
     assert _one(restored, "PRAGMA user_version")[0] == SCHEMA_VERSION
-    assert _one(restored, "SELECT COUNT(*) FROM rooms")[0] == 5
+    assert _one(restored, "SELECT COUNT(*) FROM rooms")[0] == 34
 
 
 def test_backup_and_restore_honor_the_config_storage_path(tmp_path):
@@ -344,7 +344,7 @@ def test_backup_refuses_the_source_as_the_destination(tmp_path, capsys):
     assert main(["backup", "--db", str(source), "--to", str(source)]) == 2
 
     assert "already the source" in capsys.readouterr().err
-    assert _one(source, "SELECT COUNT(*) FROM rooms")[0] == 5
+    assert _one(source, "SELECT COUNT(*) FROM rooms")[0] == 34
 
 
 # ---------------------------------------------------------------------------

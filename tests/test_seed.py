@@ -141,14 +141,14 @@ def test_seed_fills_a_clean_database_with_the_yaml_world(tmp_path):
 
     assert main(["seed", "--db", str(path)]) == 0
 
-    assert _count(path, "rooms") == 5
-    assert _count(path, "objects") == 7
-    assert _count(path, "exits") == 8  # four declared, four reciprocals
-    assert _count(path, "npcs") == 0
+    assert _count(path, "rooms") == 34
+    assert _count(path, "objects") == 75
+    assert _count(path, "exits") == 70  # 35 declared, 35 reciprocals
+    assert _count(path, "npcs") == 11
 
     meta = _meta(path)
     assert set(meta) == {"name", "start_room", "rng_seed", "epoch"}
-    assert meta["name"] == "Starting Village"
+    assert meta["name"] == "The Commons"
     assert meta["start_room"] == "gate"
     assert meta["rng_seed"] == "20261121"
     assert meta["epoch"]
@@ -247,7 +247,7 @@ def test_seed_uses_the_config_storage_path(tmp_path):
     assert main(["seed", "--config", str(config)]) == 0
 
     assert db.exists()
-    assert _meta(db)["name"] == "Starting Village"
+    assert _meta(db)["name"] == "The Commons"
     assert _one(db, "PRAGMA user_version")[0] == SCHEMA_VERSION
 
 
@@ -267,7 +267,7 @@ def test_seed_refuses_a_second_seed_without_reset(tmp_path, capsys):
     captured = capsys.readouterr()
     assert "--reset --yes" in captured.err
     assert _meta(path)["epoch"] == epoch
-    assert _count(path, "rooms") == 5
+    assert _count(path, "rooms") == 34
 
 
 def test_seed_reset_requires_yes(tmp_path, capsys):

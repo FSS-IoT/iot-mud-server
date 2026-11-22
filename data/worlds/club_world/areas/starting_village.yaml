@@ -1,0 +1,271 @@
+# The original starting village, kept room-for-room and map-for-map.
+#
+# The only change from the frozen five-room conformance fixture
+# (data/worlds/starting_village.yaml) is the gate's south door onto the south
+# road. Everything else here must stay identical; test_world_content.py checks
+# it against the fixture. New objects and NPCs are additions, never rewrites.
+area: starting_village
+
+rooms:
+  - id: gate
+    name: Village Gate
+    description: A heavy stone gate stands tall. To the north is the Marketplace.
+    exits:
+      north: market
+      south: south_road
+    objects:
+      - id: sign
+        name: Village Sign
+        description: A wooden signpost. The arrows point North to the Marketplace; the Old Tavern is east of the market.
+        kind: readable
+        readable_text: A wooden signpost. The arrows point North to the Marketplace; the Old Tavern is east of the market.
+        weight: 0.2
+    geometry:
+      cells:
+        - "###+###"
+        - "#.....#"
+        - "#.....#"
+        - "#.....#"
+        - "#.....#"
+        - "#.....#"
+        - "###+###"
+      spawn:
+        north: [3, 1]
+      props:
+        - kind: gatepost
+          cell: [1, 5]
+        - kind: banner
+          cell: [5, 1]
+    effects:
+      on_enter:
+        - type: sound.play
+          params:
+            clip: gate_wind
+
+  - id: market
+    name: Marketplace
+    description: Lively vendors cry out their wares. Exits lead South, West, North, and East.
+    exits:
+      west: shop
+      north: forest
+      east:
+        to: tavern
+        locked: true
+        key: key_gold_1
+        label: tavern door
+    objects:
+      - id: gold_coin
+        name: Gold Coin
+        description: A shiny, minted copper coin.
+        weight: 0.01
+    npcs:
+      - id: npc_merchant
+        name: Mira the Merchant
+        description: A sharp-eyed trader in a patched green coat, counting coins behind her stall.
+        dialogue:
+          greeting: "Fresh coin, fresh gossip. Which do you want?"
+          default: "I sell what the village makes and hear what it hides."
+          topics:
+            market: "Everything here came up the south road or down the river."
+            gold: "The gold key? The alchemist keeps it. The tavern door answers to it."
+            tavern: "Borin pours well, but he locks his door after the market closes."
+        wander: true
+        wander_every: 20
+        effects:
+          on_talk:
+            - type: sound.play
+              params:
+                clip: coins_clink
+    geometry:
+      cells:
+        - "#####+#####"
+        - "#.........#"
+        - "#.........#"
+        - "#.........#"
+        - "+.........+"
+        - "#.........#"
+        - "#.........#"
+        - "#.........#"
+        - "#####+#####"
+      spawn:
+        north: [5, 1]
+        south: [5, 7]
+        west: [1, 4]
+        east: [9, 4]
+      props:
+        - kind: stall
+          cell: [3, 2]
+        - kind: well
+          cell: [5, 4]
+        - kind: crate
+          cell: [2, 6]
+        - kind: banner
+          cell: [7, 2]
+    effects:
+      on_enter:
+        - type: ambience.market
+          params:
+            volume: 0.4
+
+  - id: tavern
+    name: Old Tavern
+    description: Warmth radiates from within. The smell of roasted meat lingers. Exits West.
+    objects:
+      - id: bread
+        name: Loaf of Bread
+        description: A stale but edible loaf.
+        weight: 0.3
+      - id: tavern_ledger
+        name: Tavern Ledger
+        description: A heavy book of debts and promises.
+        kind: readable
+        readable_text: |
+          Most names are paid in full. One page is headed "the hermit" and
+          holds only the words: no debt, no answer.
+        weight: 1.0
+    npcs:
+      - id: npc_barkeep
+        name: Borin the Barkeep
+        description: A broad man with flour on his sleeves and a towel over one shoulder.
+        dialogue:
+          greeting: "Sit. The fire is warm even if the ale is thin."
+          default: "Ask about the road, the mill, or the woods."
+          topics:
+            ale: "Small beer, mostly. The good barrel waits for the harvest."
+            forest: "East of the market. Take a light; the chest under the oaks eats torches."
+            key: "The gold key opens my door and the forest chest. The alchemist keeps the only one."
+    geometry:
+      cells:
+        - "#######"
+        - "#.....#"
+        - "#.....#"
+        - "+.....#"
+        - "#.....#"
+        - "#.....#"
+        - "#######"
+      spawn:
+        west: [1, 3]
+      props:
+        - kind: table
+          cell: [2, 4]
+        - kind: bar
+          cell: [4, 2]
+        - kind: hearth
+          cell: [5, 5]
+
+  - id: shop
+    name: Alchemist Shop
+    description: Vials glimmer on shelves. It smells of sulfur.
+    objects:
+      - id: torch
+        name: Torch
+        description: A flickering wooden torch.
+        weight: 0.5
+        light_source: true
+      - id: key_gold_1
+        name: Gold Key
+        description: A small gold key, warm to the touch.
+        weight: 0.1
+        dropped_on_sleep: true
+      - id: shelf_journal
+        name: Alchemist's Journal
+        description: A journal of recipes, half of them crossed out.
+        kind: readable
+        readable_text: |
+          The gold key must travel with its owner, never in a pocket that might
+          be slept in. The miller's key is heavier than it looks.
+        weight: 0.4
+    npcs:
+      - id: npc_alchemist
+        name: Ysolde the Alchemist
+        description: A pale woman measuring powder into a blue vial.
+        dialogue:
+          greeting: "Mind the vapours. What do you need?"
+          default: "I read, I measure, and I do not promise miracles."
+          topics:
+            torch: "Take it. Darkness east of the market is not a place for the polite."
+            chest: "Oak, iron-bound. The gold key opens it."
+            gold: "The key drops from a sleeper's pocket. That is not my doing."
+    geometry:
+      cells:
+        - "#######"
+        - "#.....#"
+        - "#.....#"
+        - "#.....+"
+        - "#.....#"
+        - "#.....#"
+        - "#######"
+      spawn:
+        east: [5, 3]
+      props:
+        - kind: shelf
+          cell: [2, 1]
+        - kind: counter
+          cell: [4, 4]
+        - kind: cauldron
+          cell: [3, 5]
+
+  - id: forest
+    name: Mysterious Forest
+    description: Trees loom high above, blocking much of the sun.
+    dark: true
+    objects:
+      - id: chest_forest
+        name: Chest
+        description: A sturdy oak chest, bound in rusted iron.
+        kind: container
+        weight: 5.0
+        locked: true
+        required_key: key_gold_1
+        contains:
+          - brass_lantern
+        effects:
+          on_open:
+            - type: sound.play
+              params:
+                clip: iron_latch
+      - id: brass_lantern
+        name: Brass Lantern
+        description: A brass lantern, its wick still dry.
+        weight: 0.4
+        light_source: true
+    npcs:
+      - id: npc_woodsman
+        name: Hal the Woodsman
+        description: A quiet man with bark dust in his hair and an axe across his back.
+        dialogue:
+          greeting: "Keep your voice low. The trees carry sound."
+          default: "I know the paths. The village knows the prices."
+          topics:
+            forest: "Oaks old enough to remember the first gate. The chest is older."
+            chest: "Gold key. The alchemist has one; it drops when its carrier sleeps."
+            wolves: "None this side of the river. The north bank has its own troubles."
+        effects:
+          on_talk:
+            - type: sound.play
+              params:
+                clip: leaves_rustle
+    geometry:
+      cells:
+        - "#########"
+        - "#.......#"
+        - "#.......#"
+        - "#.......#"
+        - "#.......#"
+        - "#.......#"
+        - "####+####"
+      spawn:
+        south: [4, 5]
+      props:
+        - kind: stump
+          cell: [2, 2]
+        - kind: boulder
+          cell: [6, 3]
+        - kind: mushrooms
+          cell: [3, 4]
+    effects:
+      on_enter:
+        - type: light.dim
+          params:
+            color: "#223322"
+            intensity: 0.4

@@ -1,0 +1,119 @@
+# The road out of the village. A short loop through the orchard, then east over
+# the mill bridge. The millrace gate is a locked shortcut; the mill itself is
+# open from the bridge.
+area: south_road
+
+rooms:
+  - id: south_road
+    name: South Road
+    description: A rutted road runs north to the village gate and east toward the river. An orchard opens to the west.
+    exits:
+      west: orchard
+      east: mill_bridge
+    objects:
+      - id: milestone
+        name: Milestone
+        description: A weathered stone marker, its numbers worn shallow.
+        kind: readable
+        readable_text: |
+          VILLAGE GATE — one mile north.
+          MILL BRIDGE — east.
+          ORCHARD — west, windfall apples for the taking.
+        weight: 0.0
+        portable: false
+      - id: market_notice
+        name: Market Notice
+        description: A pinned sheet of village news, edges curling in the damp.
+        kind: readable
+        readable_text: |
+          NOTICE. The south road is open again. The miller wants hands for the
+          harvest, and the ferryman asks travellers to ring the bell once.
+        weight: 0.1
+    npcs:
+      - id: npc_carter
+        name: Tamsin the Carter
+        description: A road-worn driver walking beside an empty handcart.
+        dialogue:
+          greeting: "Road's quiet. That never lasts."
+          default: "Ask about the road, the mill, or the river."
+          topics:
+            road: "North to the gate, east to the bridge. The orchard loop is kinder on wheels."
+            mill: "Hollis grinds what the village grows. His key opens the race gate."
+            river: "The ferry runs while the light holds. Ring once, not twice."
+        wander: true
+        wander_every: 12
+
+  - id: orchard
+    name: Apple Orchard
+    description: Rows of gnarled apple trees lean over windfall fruit. Beehives hum to the north.
+    exits:
+      north: beehives
+    objects:
+      - id: apple_basket
+        name: Apple Basket
+        description: A woven basket half full of windfall apples.
+        kind: container
+        weight: 1.0
+        state:
+          open: true
+        contains:
+          - red_apple
+          - green_apple
+      - id: red_apple
+        name: Red Apple
+        description: A crisp red apple, still cool from the grass.
+        weight: 0.1
+      - id: green_apple
+        name: Green Apple
+        description: A sharp green apple with a leaf still attached.
+        weight: 0.1
+      - id: orchard_sign
+        name: Orchard Sign
+        description: A painted board nailed to a leaning post.
+        kind: readable
+        readable_text: Pick the windfall, leave the branches. The bees keep the north row.
+        weight: 0.2
+
+  - id: beehives
+    name: Beehives
+    description: Wooden hives stand in a sunny clearing. The air is thick with bees and the smell of wax.
+    objects:
+      - id: honey_jar
+        name: Honey Jar
+        description: A sealed clay jar, sticky around the rim.
+        kind: container
+        weight: 0.8
+        contains:
+          - honeycomb
+      - id: honeycomb
+        name: Honeycomb
+        description: A golden wedge of comb, heavy with honey.
+        weight: 0.2
+      - id: apiary_sign
+        name: Apiary Sign
+        description: A small board in careful lettering.
+        kind: readable
+        readable_text: Do not smoke the hives before noon. The orchard keeper counts every jar.
+        weight: 0.1
+
+  - id: mill_bridge
+    name: Mill Bridge
+    description: A stone bridge crosses the millrace. The mill stands north; the river path runs south. A locked race gate opens east.
+    exits:
+      north: mill
+      south: river_path
+      east:
+        to: millrace
+        locked: true
+        key: key_mill
+        label: millrace gate
+    objects:
+      - id: bridge_plaque
+        name: Bridge Plaque
+        description: A bronze plate set into the bridge parapet.
+        kind: readable
+        readable_text: |
+          MILL BRIDGE, rebuilt by the village in the year the river rose.
+          The race gate stays locked; the miller keeps the key.
+        weight: 0.0
+        portable: false
