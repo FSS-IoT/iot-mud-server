@@ -4,7 +4,9 @@ Signed: Micah, 2026-11-21
 
 Auth revision: Micah, 2026-11-21 — character keys replace passwords (key-only).
 
-Reviewed: _(pending Doc's agent; PR approval is the record)_
+Reviewed: Doc's agent, 2026-11-21 — one change requested: v2.1.1 owns the
+store, v2.1.2 depends on it. Applied before merge; the owner accepted with the
+admin bypass.
 
 No v2.1 code is written before the signature line exists. Every PR from a
 non-admin account needs an approving review from another account. Admins can
@@ -37,8 +39,11 @@ v2.
 | v2.1.4 Acceptance | Rate limits, idle timeout, load, docs, ops, club playtest | yes |
 | v2.2 | IoT bridge and optional LLM narration | no, grill first |
 
-**Order:** v2.1.0 blocks identity and world. v2.1.1 and v2.1.2 can run in
-parallel after v2.1.0. v2.1.3 content can start as soon as the YAML format and
+**Order:** v2.1.0 blocks identity and world. v2.1.1 builds the persistence
+store (`PlayerStore`/`WorldStore`: the interface plus the SQLite schema for
+location and contents, write-through), and v2.1.2 depends on that store for the
+verb logic, so the two can run in parallel after v2.1.0 without two competing
+persistence layers. v2.1.3 content can start as soon as the YAML format and
 validator exist. v2.1.4 closes the milestone.
 
 ## Acceptance criteria
@@ -198,3 +203,5 @@ Each has a resolution and an owner; none blocks the spec signature.
 - 2026-11-21: auth revised to key-only. A server-issued character key replaces
   passwords; `admin rekey` replaces `set-password`; `auth.ok` is the auth
   success event; the password minimum and the name lock are removed.
+- 2026-11-21: milestone split accepted from review. v2.1.1 owns the store
+  (`PlayerStore`/`WorldStore`) and v2.1.2 depends on it for the verb logic.
