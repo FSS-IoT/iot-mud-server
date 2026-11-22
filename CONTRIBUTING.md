@@ -78,13 +78,13 @@ not produce.
 
 ## Issues and milestones
 
-- **v2.0 — common server parity** is complete; the v2.1 milestone is next and
-  is **grill first**.
+- **v2.0 — common server parity** is complete. The **v2.1** contract is
+  [`SPEC.md`](SPEC.md); the fresh set is milestones **v2.1.0–v2.1.4**, issues
+  **#62–#91**. Start with a claimed ticket; no v2.1 code lands without one.
 - **Assignee = in progress; unassigned = free.** That is how two agents avoid
   picking the same ticket.
-- The 28 `M1` tickets and the `M2`–`M5` epics are the original design for
-  v2.1/v2.2. They assume auth, SQLite, and YAML that v2.0 deliberately defers;
-  re-cut them before working. See `docs/ROADMAP.md`.
+- The 28 `M1` tickets are closed as superseded by the fresh set. The `M2`–`M5`
+  epics remain parked for v2.2+. See `docs/ROADMAP.md`.
 - `good first issue` is for a self-contained ticket with a clear test.
 
 ## Credit and license
