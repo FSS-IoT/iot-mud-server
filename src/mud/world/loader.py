@@ -3,7 +3,7 @@ from pathlib import Path
 
 from src.mud.config import DEFAULT_WORLD
 from src.mud.content import NPC, Entity, ExitLock, Room
-from src.mud.content.models import OPPOSITE_EXITS, Exit
+from src.mud.content.models import OPPOSITE_EXITS, Exit, LoadedWorld
 from src.mud.content.models import load_world as load_content_world
 from src.mud.content.validator import validate_world
 from src.mud.engine.core import Engine
@@ -13,13 +13,17 @@ from src.mud.world.wander import NpcWanderer
 YAML_SUFFIXES = frozenset({".yaml", ".yml"})
 
 
-async def load_world(engine: Engine, data_path: str | Path) -> None:
+async def load_world(
+    engine: Engine, data_path: str | Path
+) -> LoadedWorld | None:
     """Populate the engine from a world file.
 
     A `.yaml`/`.yml` file or a world directory is read through the v2.1
     content model and checked by the semantic validator before any engine
     state is built. A `.json` file keeps the v2.0 loader that legacy tests
-    still exercise, so both formats build the same effective world.
+    still exercise, so both formats build the same effective world. A YAML
+    world returns its parsed content (the admin reload reads the name); the
+    legacy JSON path returns None.
 
     Geometry is validated while the world loads: a bad map raises
     `WorldDataError` instead of being served. A room without a `geometry` key
@@ -27,12 +31,14 @@ async def load_world(engine: Engine, data_path: str | Path) -> None:
     """
     path = Path(data_path)
     if path.is_dir() or path.suffix.lower() in YAML_SUFFIXES:
-        await _load_yaml_world(engine, path)
-        return
+        return await _load_yaml_world(engine, path)
     await _load_json_world(engine, path)
+    return None
 
 
-async def _load_yaml_world(engine: Engine, data_path: Path) -> None:
+async def _load_yaml_world(
+    engine: Engine, data_path: Path
+) -> LoadedWorld:
     """Build the engine from the v2.1 YAML model.
 
     The content model rejects a missing, malformed, or wrongly shaped file.
@@ -182,6 +188,7 @@ async def _load_yaml_world(engine: Engine, data_path: Path) -> None:
     # Keep the legacy single-player placeholder for backward compatibility;
     # it is not a real item and must not be added to a room's contents.
     engine.player = Entity("Adventurer", "A traveler passing through.")
+    return loaded
 
 
 async def _load_json_world(engine: Engine, data_path: Path) -> None:

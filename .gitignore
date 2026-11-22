@@ -70,3 +70,11 @@ error_log.txt
 # OS Files
 .DS_Store
 Thumbs.db
+
+# Admin console (experimental). The built SPA is committed so the held branch
+# works without Node; node_modules and editor backups are not.
+admin/node_modules/
+admin/.vite/
+!admin/dist/
+!admin/dist/**
+data/worlds/*/backups/

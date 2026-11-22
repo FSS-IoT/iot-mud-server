@@ -29,6 +29,8 @@ from src.mud.auth import (
     register_character,
 )
 from src.mud.config import (
+    DEFAULT_WORLD,
+    AdminConfig,
     AuthConfig,
     ConfigError,
     FeaturesConfig,
@@ -36,6 +38,7 @@ from src.mud.config import (
     load_config,
 )
 from src.mud.engine.core import Engine
+from src.mud.net.admin_console import AdminConsoleError, AdminConsoleServer
 from src.mud.protocol.adapter import _room_id, build_room_state, execute
 from src.mud.protocol.v2 import (
     AUTH_MODES,
@@ -52,6 +55,7 @@ from src.mud.storage.store import (
     StorageWriteError,
     WriteThroughStore,
 )
+from src.mud.world.loader import load_world
 from src.mud.world.wander import NpcMove
 
 logger = logging.getLogger(__name__)
@@ -205,6 +209,10 @@ class Session:
     # Set once the #72 sleep path has run for this session, so an idle close
     # followed by `_cleanup` cannot sleep and broadcast the leave twice.
     slept: bool = False
+    # Set by an admin world reload before its sockets are closed. Its handler
+    # may finish after the engine swap; it must not touch the new engine, where
+    # a quick reconnect could already hold the same character name.
+    retired: bool = False
 
 
 class V2Server:
@@ -223,6 +231,8 @@ class V2Server:
         auth_limits: AuthConfig | None = None,
         limits: LimitsConfig | None = None,
         features: FeaturesConfig | None = None,
+        admin: AdminConfig | None = None,
+        world_path: str | Path | None = None,
         clock: Callable[[], float] | None = None,
         idle_poll_seconds: float = 1.0,
         tick_seconds: float = 1.0,
@@ -250,6 +260,17 @@ class V2Server:
         # no `effect` event to any client.
         self.features = (
             features if features is not None else FeaturesConfig())
+        # The experimental admin console is disabled unless config enables it.
+        # `world_path` is the YAML world a reload rebuilds the engine from, not
+        # the SQLite seed: characters live in the database, world content lives
+        # in the authoring files.
+        self.admin = admin if admin is not None else AdminConfig()
+        self.world_path = (
+            Path(world_path) if world_path is not None
+            else REPO_ROOT / DEFAULT_WORLD
+        )
+        self.admin_server: AdminConsoleServer | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
         self.clock = clock if clock is not None else time.monotonic
         self.idle_poll_seconds = idle_poll_seconds
         # The world tick is wall-clock paced by the server, but game logic
@@ -393,6 +414,110 @@ class V2Server:
             if room_key(room) == room_id:
                 return room
         return None
+
+    # ------------------------------------------------------------------
+    # Admin console bridge and live world reload
+    # ------------------------------------------------------------------
+
+    async def admin_snapshot(self) -> dict[str, Any]:
+        """A consistent read of live state for the admin HTTP thread.
+
+        The HTTP server runs in its own thread; this coroutine runs on the MUD
+        event loop, so it never walks a dict another task is mutating.
+        """
+        live = []
+        for session in list(self._sessions.values()):
+            if session.player_name is None:
+                continue
+            player = self.engine.get_player(session.player_name)
+            room = player.location if player is not None else None
+            live.append(
+                {
+                    "name": session.player_name,
+                    "room_id": room_key(room) if room is not None else None,
+                    "room_name": room.name if room is not None else None,
+                    "asleep": bool(player.asleep) if player is not None else True,
+                    "authenticated": session.authenticated,
+                }
+            )
+        return {
+            "world": {"name": self.world_name, "epoch": self.epoch},
+            "rooms": len(self.engine.rooms),
+            "room_names": {
+                room_key(room): room.name
+                for room in self.engine.rooms.values()
+            },
+            "live_sessions": len(self._sessions),
+            "live_players": live,
+        }
+
+    async def _close_one(self, ws: Any, code: int, reason: str) -> None:
+        try:
+            await ws.close(code=code, reason=reason)
+        except websockets.exceptions.ConnectionClosed:
+            pass
+        except Exception:
+            logger.debug("could not close an admin-reloaded client", exc_info=True)
+
+    async def close_all_clients(
+        self, code: int = 1001, reason: str = "World reload"
+    ) -> int:
+        """Close every MUD socket, bounded so one dead peer cannot stall it."""
+        sockets = list(self._sessions)
+        if not sockets:
+            return 0
+        closing = asyncio.gather(
+            *(self._close_one(ws, code, reason) for ws in sockets),
+            return_exceptions=True,
+        )
+        try:
+            await asyncio.wait_for(closing, timeout=3.0)
+        except TimeoutError:
+            logger.warning("timed out closing %d MUD clients", len(sockets))
+        return len(sockets)
+
+    async def reload_world(self) -> dict[str, Any]:
+        """Rebuild the live engine from the configured YAML world.
+
+        The new engine is loaded and validated before any client is touched, so
+        a broken world changes nothing. Once it is ready, every MUD socket is
+        closed with `1001, "World reload"`, the session maps are cleared, and
+        the engine is swapped. The SQLite database stays open and attached to
+        the new engine: characters survive, and a reconnect/login restores
+        their room and inventory (#71). The admin HTTP thread is untouched.
+        """
+        new_engine = Engine()
+        loaded = await load_world(new_engine, self.world_path)
+        if self.store is not None:
+            new_engine.attach_store(self.store)
+        await new_engine.subscribe("effect", self._relay_effect)
+
+        for session in self._sessions.values():
+            session.retired = True
+        closed = await self.close_all_clients(1001, "World reload")
+        self._sessions.clear()
+        self._ws_by_name.clear()
+        self.engine = new_engine
+        if loaded is not None:
+            self.world_name = loaded.world.name
+        self.epoch = utc_now()
+        logger.info(
+            "world reloaded from %s: %d client(s) closed; epoch %s",
+            self.world_path, closed, self.epoch,
+        )
+        return {
+            "closed": closed,
+            "world_name": self.world_name,
+            "epoch": self.epoch,
+            "rooms": len(self.engine.rooms),
+        }
+
+    @property
+    def admin_port(self) -> int:
+        """The bound admin port, or 0 when the console is not running."""
+        if self.admin_server is None:
+            return 0
+        return self.admin_server.port
 
     # ------------------------------------------------------------------
     # Handlers
@@ -789,7 +914,7 @@ class V2Server:
 
     async def _cleanup(self, session: Session) -> None:
         name = session.player_name
-        if name is None:
+        if name is None or session.retired:
             return
         try:
             player = self.engine.get_player(name)
@@ -949,6 +1074,15 @@ class V2Server:
                 pass
 
     async def run(self) -> None:
+        # Refuse before opening the database or binding the MUD port: a
+        # half-started server with an unauthenticated admin surface is worse
+        # than one that does not start at all.
+        if self.admin.enabled and not self.admin.token:
+            raise AdminConsoleError(
+                "the admin console is enabled but no token is configured; "
+                "set [admin].token or MUD_ADMIN_TOKEN"
+            )
+        self._loop = asyncio.get_running_loop()
         if self.db_path is not None:
             self.db = open_database(self.db_path)
             # The seeded world owns its name and epoch; a database without a
@@ -973,12 +1107,23 @@ class V2Server:
             self._server = await websockets.serve(
                 self.handler, self.host, self.port, max_size=65536)
             self.port = self._server.sockets[0].getsockname()[1]
+            if self.admin.enabled:
+                self.admin_server = AdminConsoleServer(
+                    self,
+                    self.admin,
+                    self.world_path,
+                    loop=self._loop,
+                )
+                self.admin_server.start()
             self._idle_task = asyncio.create_task(self._idle_loop())
             self._wander_task = asyncio.create_task(self._wander_loop())
             await self._stop_event.wait()
             self._server.close()
             await self._server.wait_closed()
         finally:
+            if self.admin_server is not None:
+                self.admin_server.stop()
+                self.admin_server = None
             if self._idle_task is not None:
                 self._idle_task.cancel()
                 try:
@@ -1057,16 +1202,22 @@ if __name__ == "__main__":
     async def main():
         engine = Engine()
         await load_demo_village(engine)
-        server = V2Server(engine, host=args.host, port=args.port,
-                          db_path=db_path, auth_limits=config.auth,
-                          limits=config.limits, features=config.features)
+        server = V2Server(
+            engine, host=args.host, port=args.port,
+            db_path=db_path, auth_limits=config.auth,
+            limits=config.limits, features=config.features,
+            admin=config.admin, world_path=REPO_ROOT / DEFAULT_WORLD,
+        )
         print(f"Protocol-v2 server on ws://{args.host}:{args.port} "
               f"(db: {db_path})")
+        if config.admin.enabled:
+            print(f"Admin console on http://{config.admin.host}:"
+                  f"{config.admin.port} (world: {server.world_path})")
         await server.run()
 
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
         print("\nShutting down.")
-    except DatabaseError as exc:
+    except (AdminConsoleError, DatabaseError) as exc:
         raise SystemExit(f"error: {exc}") from exc

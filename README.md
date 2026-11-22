@@ -26,6 +26,10 @@ Hosting for the club (tailnet, node sharing, ACL): see
 [`docs/CLIENTS.md`](docs/CLIENTS.md). Operations (seed, backup, systemd):
 see [`docs/OPERATIONS.md`](docs/OPERATIONS.md).
 
+The experimental browser admin console and visual world editor live only on the
+held `experimental/admin-console` branch. See [`ADMIN.md`](ADMIN.md); it is not
+part of `main`.
+
 Windows:
 
 ```powershell
