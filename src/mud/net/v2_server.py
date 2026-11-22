@@ -323,10 +323,28 @@ class V2Server:
             if player.name == exclude_name:
                 continue
             target = self._ws_by_name.get(player.name)
-            session = self._sessions.get(target)
-            if target is None or session is None:
+            if target is None:
                 continue
-            await self._send(target, session, type_, data, direct=False)
+            session = self._sessions.get(target)
+            if session is None:
+                # The handler finished between the name lookup and the send.
+                self._forget_connection(target, player.name)
+                continue
+            try:
+                await self._send(target, session, type_, data, direct=False)
+            except websockets.exceptions.ConnectionClosed:
+                # Simultaneous disconnects can close a peer after the lookup
+                # above and before this send. A normal disconnect is not an
+                # unhandled handler failure: drop the stale mappings so later
+                # pushes skip the socket. The target's own `_cleanup` still
+                # owns its sleep/leave transition.
+                self._forget_connection(target, player.name)
+
+    def _forget_connection(self, ws, name: str | None = None) -> None:
+        """Drop a socket that a send (or lookup) just proved closed."""
+        self._sessions.pop(ws, None)
+        if name is not None and self._ws_by_name.get(name) is ws:
+            self._ws_by_name.pop(name, None)
 
     def _room_by_key(self, room_id: str | None):
         """The loaded room stored under `room_id`, or None if it is unknown.
