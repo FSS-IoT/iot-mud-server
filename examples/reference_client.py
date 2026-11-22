@@ -11,6 +11,9 @@ It speaks v2 only and expects the server to advertise protocol `2`.
     uv run python examples/reference_client.py --key-file ~/.config/iot-mud/ada.key
     # against the guest mock:
     uv run python examples/reference_client.py --name Ada --uri ws://localhost:8770
+    # refuse to start unless hello reports the commit this client targets:
+    uv run python examples/reference_client.py --name Ada \
+        --expect-commit 0e2b2c3bad33df6f3da062e3eacc4e35572b90c6
 
 Inside the prompt, `!malformed` sends one broken frame so you can check that an
 error does not close the socket. It is a debugging aid, not a protocol command.
@@ -20,6 +23,7 @@ import argparse
 import asyncio
 import json
 import os
+import re
 from pathlib import Path
 
 import websockets
@@ -31,6 +35,35 @@ YELLOW = "\033[93m"
 RED = "\033[91m"
 CYAN = "\033[96m"
 BOLD = "\033[1m"
+
+
+def full_commit(value: str) -> str:
+    """Argparse type for a full lowercase git commit."""
+    if re.fullmatch(r"[0-9a-f]{40}", value) is None:
+        raise argparse.ArgumentTypeError(
+            "expected a full 40-character lowercase hex commit"
+        )
+    return value
+
+
+def commit_error(expected: str, reported: object) -> str | None:
+    """Why `reported` cannot confirm `expected`, or None when it matches.
+
+    `--expect-commit` checks this before auth, so a client pinned to another
+    server stops with both values instead of failing later on a new event.
+    """
+    if reported == expected:
+        return None
+    if reported == "unknown":
+        return (
+            f"Server reports server_commit \"unknown\"; it cannot confirm the "
+            f"pinned commit {expected}. Use a checkout with .git or ask the "
+            f"operator."
+        )
+    return (
+        f"Server commit mismatch: expected {expected}, server reported "
+        f"{reported!r}."
+    )
 
 
 def render_hello(data: dict) -> str:
@@ -245,7 +278,8 @@ async def _enter(websocket, name: str | None, key: str | None,
 
 async def client_handler(uri: str, name: str | None = None,
                          key: str | None = None,
-                         save_key: Path | None = None) -> None:
+                         save_key: Path | None = None,
+                         expect_commit: str | None = None) -> None:
     print(f"{BLUE}{BOLD}Connecting to MUD at {uri}...{CLEAR}")
 
     # Stream events render live; direct replies are paired by id in the loop.
@@ -265,6 +299,15 @@ async def client_handler(uri: str, name: str | None = None,
             raise SystemExit(1)
 
         print(f"\n{render_hello(handshake_data)}")
+
+        if expect_commit is not None:
+            problem = commit_error(
+                expect_commit, handshake_data.get("server_commit"))
+            if problem is not None:
+                print(f"{RED}{problem}{CLEAR}")
+                raise SystemExit(1)
+            print(f"{GREEN}Server commit matches pin: "
+                  f"{expect_commit}{CLEAR}")
 
         character = await _enter(
             websocket, name, key, bool(handshake_data.get("auth_required")),
@@ -365,6 +408,11 @@ if __name__ == "__main__":
     parser.add_argument("--save-key", type=Path, default=None,
                         help="write a newly registered key to this file "
                              "(mode 0600)")
+    parser.add_argument("--expect-commit", type=full_commit, metavar="SHA",
+                        default=None,
+                        help="full server commit this client was written "
+                             "against; exit 1 when hello reports a different "
+                             "commit or \"unknown\"")
     args = parser.parse_args()
 
     if args.key is not None and args.key_file is not None:
@@ -391,4 +439,5 @@ if __name__ == "__main__":
     if not username and key is None:
         username = "Traveler"
 
-    asyncio.run(client_handler(args.uri, username, key, args.save_key))
+    asyncio.run(client_handler(
+        args.uri, username, key, args.save_key, args.expect_commit))

@@ -34,22 +34,43 @@ You need a server to test against. Clone it anywhere you keep checkouts; it does
 not have to be next to your client. The examples use a sibling directory, but
 any path works — if your acceptance script takes a server path, point it here.
 
-**Pin it.** Do not chase "latest" while you are building: check out one fixed
-server commit and build against that. It is the whole point of
-`hello.data.server_commit` (see `docs/PROTOCOL.md`, Changelog) — you pin a
-commit, ask the server which commit it is, and read the changelog to see what
-you are missing. This repo is pinned to the commit the docs were written
-against; if the docs drift from it, the pinned commit test fails and you fix the
-docs.
+### Pin the server commit
+
+Do not chase "latest" while you build. Choose one fixed server commit and
+record its full 40 characters in your client README. The v2.1.4 reference
+server is:
+
+```text
+0e2b2c3bad33df6f3da062e3eacc4e35572b90c6
+```
+
+It includes #90, the newcomer walkthrough, and is the first commit whose
+reference client prints `Server commit: ...`. Build against that commit:
 
 ```bash
 git clone https://github.com/FSS-IoT/iot-mud-server
 cd iot-mud-server
-git checkout efac23bf6a662c5088dc778435c7d52e3b334c2c
+git checkout 0e2b2c3bad33df6f3da062e3eacc4e35572b90c6
 uv sync --all-extras
 uv run python -m src.mud.admin seed --db data/mud.db
 ./run_server.sh
 ```
+
+After `hello`, compare `hello.data.server_commit` with that pin. If they
+differ, read the `docs/PROTOCOL.md` changelog from the pinned release forward
+to see what your client is missing; a newer v2.1 server may send fields and
+events your client has never seen, so "additive" does not mean the wire did
+not change. If the server reports `"unknown"`, it is a copy without `.git` and
+cannot confirm the pin; use a checkout or ask the operator. The reference
+client enforces the pin:
+
+```bash
+uv run python examples/reference_client.py --name Ada \
+  --expect-commit 0e2b2c3bad33df6f3da062e3eacc4e35572b90c6
+```
+
+It prints the expected and reported commit and exits `1` on a mismatch or
+`"unknown"`, before authenticating.
 
 Windows:
 
