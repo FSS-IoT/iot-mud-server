@@ -34,9 +34,18 @@ You need a server to test against. Clone it anywhere you keep checkouts; it does
 not have to be next to your client. The examples use a sibling directory, but
 any path works — if your acceptance script takes a server path, point it here.
 
+**Pin it.** Do not chase "latest" while you are building: check out one fixed
+server commit and build against that. It is the whole point of
+`hello.data.server_commit` (see `docs/PROTOCOL.md`, Changelog) — you pin a
+commit, ask the server which commit it is, and read the changelog to see what
+you are missing. This repo is pinned to the commit the docs were written
+against; if the docs drift from it, the pinned commit test fails and you fix the
+docs.
+
 ```bash
 git clone https://github.com/FSS-IoT/iot-mud-server
 cd iot-mud-server
+git checkout efac23bf6a662c5088dc778435c7d52e3b334c2c
 uv sync --all-extras
 uv run python -m src.mud.admin seed --db data/mud.db
 ./run_server.sh

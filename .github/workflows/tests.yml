@@ -8,7 +8,12 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
+      # `fetch-depth: 0` so the pinned server commit in BOOTSTRAP.md
+      # (tests/test_bootstrap_pin.py) is resolvable in the checkout; a shallow
+      # clone only has the PR commit, not the commit it pins.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.13"
