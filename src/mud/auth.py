@@ -1,8 +1,12 @@
-"""Character-key registration (SPEC v2.1.1 criterion 1).
+"""Character-key registration and login (SPEC v2.1.1 criteria 1 and 2).
 
 A member registers a name and receives a one-time character key. Only the key's
 id, salt, and one-way scrypt hash are stored; the plaintext key is returned in
 the `auth.ok` response and never written down or logged.
+
+Login sends the key back and no name. The public key id finds the stored row and
+the secret is verified against the hash with a constant-time comparison, so a
+failed login never says whether a character name exists.
 
 **Name rule.** 2-24 characters, the first a letter, the rest letters, digits,
 `_`, or `-` (`Ada`, `ada-2`, `Ada_Lovelace`). Surrounding whitespace is
@@ -19,11 +23,16 @@ treat the whole string as opaque.
 `character_keys.hash` is `scrypt$<n>$<r>$<p>$<hex digest>`; the parameters live
 in the value so a future parameter change needs no schema migration. Login
 (#69) verifies against the same layout.
+
+**Login.** An unknown key id, a revoked key, and a bad secret all raise one
+`AuthError("invalid_key")` with the same message. The key is the only lookup;
+no character name is consulted.
 """
 
 from __future__ import annotations
 
 import hashlib
+import hmac
 import re
 import secrets
 import sqlite3
@@ -50,6 +59,9 @@ NAME_MIN_LENGTH = 2
 NAME_MAX_LENGTH = 24
 _NAME_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{1,23}")
 
+KEY_ID_RE = re.compile(rf"k[0-9a-f]{{{KEY_ID_BYTES * 2}}}")
+INVALID_KEY_MESSAGE = "That character key is not valid."
+
 
 class AuthError(Exception):
     """A typed auth failure that is safe to put on the wire."""
@@ -67,6 +79,16 @@ class Registration:
     player_id: int
     key_id: str
     key: str
+
+
+@dataclass(frozen=True)
+class Login:
+    """The durable character a verified key belongs to."""
+
+    name: str
+    player_id: int
+    key_id: str
+    room_id: str | None
 
 
 def _utc_now() -> str:
@@ -114,6 +136,89 @@ def hash_key(key: str, salt: bytes) -> str:
         dklen=SCRYPT_DKLEN,
     )
     return f"scrypt${SCRYPT_N}${SCRYPT_R}${SCRYPT_P}${digest.hex()}"
+
+
+def parse_key(key: object) -> tuple[str, str]:
+    """Return `(key id, secret)` for a well-formed key, else raise `AuthError`.
+
+    Only the shape is checked here; whether the id exists is a lookup, and
+    whether the secret is right is the hash comparison. Both failures carry the
+    same message.
+    """
+    if not isinstance(key, str) or not key.startswith(KEY_PREFIX):
+        raise AuthError("invalid_key", INVALID_KEY_MESSAGE)
+    parts = key.split("-", 2)
+    if len(parts) != 3:
+        raise AuthError("invalid_key", INVALID_KEY_MESSAGE)
+    _prefix, key_id, secret = parts
+    if KEY_ID_RE.fullmatch(key_id) is None or not secret:
+        raise AuthError("invalid_key", INVALID_KEY_MESSAGE)
+    return key_id, secret
+
+
+def verify_key(key: str, salt_hex: str, stored_hash: str) -> bool:
+    """Check `key` against the stored scrypt value, in constant time.
+
+    The parameters and salt are read from the stored row, so a later change to
+    the scrypt cost needs no migration. A malformed stored value compares as
+    false rather than raising, which keeps a corrupt row from becoming an
+    unhandled error on the login path.
+    """
+    try:
+        salt = bytes.fromhex(salt_hex)
+        algorithm, n_text, r_text, p_text, digest_hex = stored_hash.split("$")
+        if algorithm != "scrypt":
+            return False
+        expected = bytes.fromhex(digest_hex)
+        if not expected:
+            return False
+    except ValueError:
+        return False
+
+    try:
+        computed = hashlib.scrypt(
+            key.encode("utf-8"),
+            salt=salt,
+            n=int(n_text),
+            r=int(r_text),
+            p=int(p_text),
+            dklen=len(expected),
+        )
+    except (ValueError, MemoryError, OverflowError):
+        return False
+    return hmac.compare_digest(computed, expected)
+
+
+def login_character(conn: sqlite3.Connection, key: object) -> Login:
+    """Find the character a key belongs to, or raise `AuthError("invalid_key")`.
+
+    The key id selects the row; no character name is accepted or looked up. An
+    unknown id, a revoked key, and a bad secret are indistinguishable on the
+    wire: one code, one message.
+    """
+    if not isinstance(key, str):
+        raise AuthError("invalid_key", INVALID_KEY_MESSAGE)
+    key_id, _secret = parse_key(key)
+
+    row = conn.execute(
+        "SELECT k.key_id, k.player_id, k.salt, k.hash, k.revoked_at, "
+        "p.name, p.room_id "
+        "FROM character_keys k JOIN players p ON p.id = k.player_id "
+        "WHERE k.key_id = ?",
+        (key_id,),
+    ).fetchone()
+    if row is None or row["revoked_at"] is not None:
+        raise AuthError("invalid_key", INVALID_KEY_MESSAGE)
+
+    if not verify_key(key, row["salt"], row["hash"]):
+        raise AuthError("invalid_key", INVALID_KEY_MESSAGE)
+
+    return Login(
+        name=row["name"],
+        player_id=int(row["player_id"]),
+        key_id=row["key_id"],
+        room_id=row["room_id"],
+    )
 
 
 def register_character(

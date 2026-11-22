@@ -20,7 +20,12 @@ from typing import Any
 
 import websockets
 
-from src.mud.auth import AuthError, normalize_name, register_character
+from src.mud.auth import (
+    AuthError,
+    login_character,
+    normalize_name,
+    register_character,
+)
 from src.mud.config import ConfigError, load_config
 from src.mud.engine.core import Engine
 from src.mud.protocol.adapter import _room_id, build_room_state, execute
@@ -33,6 +38,7 @@ from src.mud.protocol.v2 import (
     utc_now,
 )
 from src.mud.storage.db import DatabaseError, open_database
+from src.mud.storage.keys import room_key
 from src.mud.storage.store import WriteThroughStore
 
 logger = logging.getLogger(__name__)
@@ -185,6 +191,19 @@ class V2Server:
                 continue
             await self._send(target, session, type_, data, direct=False)
 
+    def _room_by_key(self, room_id: str | None):
+        """The loaded room stored under `room_id`, or None if it is unknown.
+
+        Room ids on disk and on the wire come from `room_key`, while the engine
+        indexes rooms by display name; this is the one translation login needs.
+        """
+        if room_id is None:
+            return None
+        for room in self.engine.rooms.values():
+            if room_key(room) == room_id:
+                return room
+        return None
+
     # ------------------------------------------------------------------
     # Handlers
     # ------------------------------------------------------------------
@@ -264,11 +283,7 @@ class V2Server:
             await self._auth_register(ws, session, data, msg_id)
             return
         if mode == "login":
-            # Login is #69. No key can verify until that lands, so say so
-            # rather than pretending every key is wrong.
-            await self._send_auth_error(
-                ws, session, "bad_args",
-                "Login is not available in this build.", msg_id)
+            await self._auth_login(ws, session, data, msg_id)
             return
         await self._send_auth_error(
             ws, session, "bad_args",
@@ -319,6 +334,61 @@ class V2Server:
             "key": registration.key,
             "text": (f"Welcome, {registration.name}. Store this key; it is "
                      "shown only once."),
+        }, direct=True, msg_id=msg_id)
+
+        await self._send(ws, session, "room.state",
+                         build_room_state(self.engine, player))
+
+        await self._announce_connect(player)
+
+    async def _auth_login(self, ws, session: Session, data: dict,
+                          msg_id: Any) -> None:
+        """Verify a key and bind the session to its durable character.
+
+        The request has no name: `login_character` finds the row by key id and
+        verifies the secret. A bad secret, an unknown id, and a revoked key all
+        arrive here as one `invalid_key`; the key itself is never echoed or
+        logged.
+        """
+        if self.db is None:
+            await self._send_auth_error(
+                ws, session, "internal",
+                "The server cannot check keys right now.", msg_id)
+            return
+
+        try:
+            login = login_character(self.db, data.get("key"))
+        except AuthError as exc:
+            await self._send_auth_error(
+                ws, session, exc.code, str(exc), msg_id)
+            return
+
+        if self.engine.get_player(login.name) is not None:
+            await self._send_auth_error(
+                ws, session, "name_taken",
+                "That character is already in play.", msg_id)
+            return
+
+        player = self.engine.register_player(login.name)
+        room = self._room_by_key(login.room_id)
+        if room is not None and player.location is not room:
+            # Login wakes the character where the store left it. A room that
+            # no longer exists in the world leaves the character at the start.
+            if player.location is not None:
+                player.location.remove_content(player)
+            player.location = room
+            room.add_content(player)
+
+        session.player_name = login.name
+        session.joined = True
+        self._ws_by_name[login.name] = ws
+
+        # No key field: a login response never repeats the credential.
+        await self._send(ws, session, "auth.ok", {
+            "player": {"name": login.name},
+            "world": {"name": self.world_name, "epoch": self.epoch},
+            "mode": "login",
+            "text": f"Welcome back, {login.name}.",
         }, direct=True, msg_id=msg_id)
 
         await self._send(ws, session, "room.state",

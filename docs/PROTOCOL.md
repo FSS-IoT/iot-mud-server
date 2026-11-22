@@ -143,11 +143,18 @@ key and returns no key:
 ```
 
 Success is `auth.ok` with `player`, `world`, and `mode: "login"`, followed by
-`room.state`. The key is an opaque, high-entropy bearer secret: clients store
-it outside the repository, never log it, and never send it to a different
-server. The server stores only a key id and a one-way hash, never the key, and
-returns it only in the registration response. A lost key is replaced with
-`admin rekey`, which revokes the old key.
+`room.state`; a login response never carries `key`. The request has no name:
+the public key id selects the stored row and the secret is checked against the
+scrypt hash in constant time, so a failed login never says whether a character
+name exists. The character enters its stored room; a character with no stored
+room, or one whose room is not in the loaded world, enters at the world start
+room.
+
+The key is an opaque, high-entropy bearer secret: clients store it outside the
+repository, never log it, and never send it to a different server. The server
+stores only a key id and a one-way hash, never the key, and returns it only in
+the registration response; it never logs a key and never echoes one back. A
+lost key is replaced with `admin rekey`, which revokes the old key.
 
 A key is `mud1-`, a public key id, a `-`, then 32 bytes of secret entropy in
 base64url. Clients treat the whole string as opaque. The key id selects the
@@ -160,8 +167,10 @@ is case-insensitive. A bad name is `auth.error{invalid_name}`; a name already
 registered is `auth.error{name_taken}`.
 
 Failure is `auth.error` (direct, echoes `id`) with a code (`invalid_key`,
-`name_taken`, `invalid_name`). `invalid_key` covers an unknown or revoked key,
-deliberately. Auth attempts are rate-limited; names are not locked.
+`name_taken`, `invalid_name`). `invalid_key` covers a malformed key, an unknown
+key id, a revoked key, and a wrong secret, deliberately: the code and message
+are identical in every case. Logging in while that character already has a live
+session is `name_taken`. Auth attempts are rate-limited; names are not locked.
 
 The v2.0 guest path remains available only when `auth_required` is `false`. A
 `join` on a server that requires auth gets `not_authenticated`, and the socket
@@ -423,6 +432,9 @@ in-progress release; its entry grows as each documented addition lands.
 - Registration names are 2-24 characters, starting with a letter; uniqueness
   is case-insensitive. Bad names are `auth.error{invalid_name}` and duplicate
   names `auth.error{name_taken}`.
+- Login with a character key returns `auth.ok` without the key and enters the
+  character's stored room; a character with no stored room enters at the world
+  start room.
 - `player.emoted`, `player.told`, `who.list`, and `shutdown`.
 - `room.state.data.room.geometry`: the optional room map, with its validation
   rules.
