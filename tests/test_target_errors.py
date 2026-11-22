@@ -23,6 +23,7 @@ from src.mud.content import Entity, Player, Room
 from src.mud.engine.core import Engine
 from src.mud.net.v2_server import V2Server
 from src.mud.protocol.adapter import execute
+from src.mud.protocol.v2 import ERROR_CODES
 
 
 def _engine(*items, capacity=2.0):
@@ -37,6 +38,13 @@ def _engine(*items, capacity=2.0):
     for item in items:
         room.add_content(item)
     return engine, player, room
+
+
+def test_new_codes_are_in_the_shared_error_vocabulary():
+    """The adapter's new codes are part of `ERROR_CODES`, not just the docs."""
+    assert {"too_heavy", "ambiguous"} <= ERROR_CODES
+    # The v2.0 spelling stays reserved for clients that pinned an old server.
+    assert "ambiguous_target" in ERROR_CODES
 
 
 def _events(result, type_=None, target=None):

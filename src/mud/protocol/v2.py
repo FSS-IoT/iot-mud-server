@@ -42,12 +42,12 @@ OBJECT_EVENTS = {
 }
 
 ERROR_CODES = {
-    "unknown_command", "bad_args", "ambiguous_target", "not_found",
-    "not_here", "not_portable", "container_closed", "no_exit", "locked",
-    "already_open", "already_closed", "malformed_message", "unknown_message",
-    "not_joined", "already_joined", "name_taken", "invalid_name",
-    "invalid_key", "not_authenticated", "not_awake", "rate_limited",
-    "internal", "unsupported_version",
+    "unknown_command", "bad_args", "ambiguous", "ambiguous_target",
+    "not_found", "not_here", "not_portable", "container_closed", "no_exit",
+    "locked", "already_open", "already_closed", "too_heavy",
+    "malformed_message", "unknown_message", "not_joined", "already_joined",
+    "name_taken", "invalid_name", "invalid_key", "not_authenticated",
+    "not_awake", "rate_limited", "internal", "unsupported_version",
 }
 
 # The auth methods `hello.data.auth_modes` may advertise.
