@@ -120,6 +120,34 @@ the events even if it does not have a special UI for them:
 6. `take brass lantern` → `object.taken`.
 7. `put brass lantern in chest` → `object.put` (the chest is unlocked).
 
+## Close and get from (v2.1.2)
+
+Continue in the forest with the chest open and the Brass Lantern inside. These
+commands are in memory for now; the container's authored `state.open` is what
+a restart reloads from the world, not a second inventory store.
+
+1. **Close.** Ada sends `close chest`. Ada receives `object.closed` with
+   `object.id: "chest_forest"` and `self: true`; Ben, in the room, receives
+   `object.closed` with `self: false`. Ada sends `close chest` again and
+   receives `error` with `code: "already_closed"`.
+2. **Closed container.** Ada sends `get brass lantern from chest` while the
+   chest is closed. She receives `error` with `code: "container_closed"`, and
+   the lantern stays inside.
+3. **Open again.** Ada sends `open chest` → `object.opened`. As in v2.0, the
+   lantern spills into the room; Ada sends `take brass lantern` →
+   `object.taken`, then `put brass lantern in chest` → `object.put` to put it
+   back.
+4. **Get from.** Ada sends `get brass lantern from chest`. Ada receives
+   `object.got` with `object.id: "brass_lantern"`, `container.id:
+   "chest_forest"`, `self: true`, then the documented `player.inventory`
+   follow-up listing the lantern. Ben receives `object.got` with `self: false`
+   and `Ada gets the Brass Lantern from the Chest.`
+5. **Errors.** Ada sends `get brass lantern from chest` again → `error` with
+   `code: "not_here"` (it is in her inventory now). Naming a container that is
+   not in the room is `error{not_found}`; a `portable: false` object is
+   `error{not_portable}`. A bare `get brass lantern` still means `take`, not
+   `get from`.
+
 ## What "done" means
 
 Your client is compatible when it can:

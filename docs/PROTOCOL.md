@@ -276,7 +276,8 @@ stays in the room and appears in the next `room.state`.
     {"direction": "north", "to": "market", "locked": false}
   ],
   "objects": [
-    {"id": "sign", "kind": "sign", "name": "Village Sign", "portable": true, "readable": true}
+    {"id": "sign", "kind": "sign", "name": "Village Sign", "portable": true, "readable": true},
+    {"id": "chest_forest", "kind": "chest_forest", "name": "Chest", "portable": true, "container": true, "open": false}
   ],
   "players": [{"name": "Ben"}],
   "npcs": []
@@ -289,8 +290,13 @@ stays in the room and appears in the next `room.state`.
   An instance id is stable for the life of the object, including when it moves
   between a room and an inventory.
 - `objects` and `players` are sorted by name; `exits` by direction.
-- `portable` is always `true` for v2.0 content; the field is reserved for
-  future non-portable objects.
+- `portable` reflects the world file: `true` by default, `false` for an object
+  a player cannot lift (`get <item> from <container>` refuses it with
+  `error{not_portable}`). v2.0 content is portable, so the field's value does
+  not change the v2.0 commands.
+- `container: true` marks an object that holds contents; `open` is its lid
+  state (v2.1, additive). A container authored with `state.open: true` starts
+  open. `open`, `close`, and `get <item> from <container>` read the flag.
 - `players` lists other people in the room, excluding the recipient. The client
   adds its own name from `session.ok`. An awake occupant keeps the v2.0 shape
   `{"name": "Ben"}`. A sleeping occupant adds `asleep: true` and `stone: true`:
@@ -433,14 +439,29 @@ remove-on-disconnect behavior.
 | `object.taken` | `object{id,kind,name}`, `by`, `self` | Room |
 | `object.dropped` | `object{id,kind,name}`, `by`, `self` | Room |
 | `object.opened` | `object{id,kind,name}`, `by`, `self` | Room |
+| `object.closed` | `object{id,kind,name}`, `by`, `self` | Room (v2.1) |
 | `object.put` | `object{...}`, `container{id,name}`, `by`, `self` | Room |
 | `object.got` | `object{...}`, `container{id,name}`, `by`, `self` | Room (v2.1) |
 | `object.read` | `object{id,name}`, `content` | Actor only |
 | `object.lit` | `object{id,kind,name,lit}`, `by`, `self` | Room |
 | `object.unlocked` | `object{id,kind,name}`, `by`, `self` | Room |
 
-Reserved for later, never emitted in v2.0: `object.locked`, `object.closed`,
-`object.got`, `exit.locked`, `exit.unlocked`, `npc.say`, `npc.enter`,
+`close <container>` closes an open container and emits `object.closed` to the
+actor (`self: true`) and the room (`self: false`). Closing an already closed
+container is `error{already_closed}`; a plain item is `error{bad_args}`.
+
+`get <item> from <container>` moves one item out of an **open** container into
+the actor's inventory and emits `object.got` to the actor and the room, then a
+`player.inventory` state push to the actor (the same follow-up as `take`). A
+closed container is `error{container_closed}`, an item that is not inside is
+`error{not_here}`, a fixed (`portable: false`) object is
+`error{not_portable}`, and a missing container is `error{not_found}`. The item
+is resolved by display name inside the named container, so two coins can be
+disambiguated with the usual `coin 1` form. A bare `get <item>` remains the
+v2.0 alias for `take`.
+
+Reserved for later, never emitted in v2.0: `object.locked`,
+`exit.locked`, `exit.unlocked`, `npc.say`, `npc.enter`,
 `npc.leave`, `effect`, `device.event`, `narration.append`, `room.generated`.
 
 **Why container locks, not exit locks:** the reference engine has keys and locks on
@@ -493,7 +514,9 @@ protocol version, `4004` idle timeout, `4005` rate-limit abuse. v2.0 uses
 | `take <x>` / `get <x>` | `object.taken` (actor `self:true` + room `self:false`) + `player.inventory` |
 | `drop <x>` | `object.dropped` + `player.inventory` |
 | `put <x> in <y>` | `object.put` + `player.inventory` |
-| `open <x>` | `object.opened` (container contents in text; an empty unlocked container also emits it) |
+| `open <x>` | `object.opened` (container contents in text; an empty unlocked container also emits it; an open one is `error{already_open}`) |
+| `close <x>` | `object.closed` (or `error{already_closed}` / `error{bad_args}` for a non-container) |
+| `get <x> from <y>` | `object.got` (actor `self:true` + room `self:false`) + `player.inventory`; closed container `error{container_closed}`, item not inside `error{not_here}`, fixed item `error{not_portable}` |
 | `use <key> on <container>` | `object.unlocked` (or `error{locked}` / `error{already_open}`) |
 | `light <source>` | `object.lit` (or `notice` if already lit / not a light) |
 | `read <x>` | `object.read` (private) |
@@ -546,6 +569,13 @@ in-progress release; its entry grows as each documented addition lands.
   requester, with `asleep` and `stone`; an authenticated disconnect sleeps the
   character in place, drops `dropped_on_sleep` items into its room, and login
   wakes it with the rest of its inventory.
+- Containers carry an explicit `open` state, authored as `state.open` and
+  exposed as `objects[].open` (additive). `close <container>` emits
+  `object.closed`; `get <item> from <container>` emits `object.got` plus the
+  `player.inventory` follow-up and requires an open container. Typed errors:
+  `container_closed`, `not_portable`, `not_here` (item not inside),
+  `already_closed`, and `already_open` for `open`. Opening an already open
+  container no longer repeats the open.
 - `room.state` player entries and `room.leave` carry `asleep`/`stone` (and
   `dropped[]` on a sleep) for a stone occupant.
 - `room.state.data.room.geometry`: the optional room map, with its validation

@@ -108,15 +108,19 @@ def build_room_state(engine: Engine, player: Player) -> dict[str, Any]:
         if isinstance(entity, Player):
             continue
         data = _object_data(entity, room.contents)
-        data["portable"] = True
+        data["portable"] = bool(getattr(entity, "portable", True))
         if getattr(entity, "readable", False):
             data["readable"] = True
         if getattr(entity, "light_source", False):
             data["lit"] = bool(getattr(entity, "lit", False))
         if getattr(entity, "locked", False):
             data["locked"] = True
-        if getattr(entity, "contents", None) or getattr(entity, "locked", False):
+        if (getattr(entity, "container", False)
+                or getattr(entity, "contents", None)
+                or getattr(entity, "locked", False)):
             data["container"] = True
+            # Explicit lid state (#76); additive, so v2.0 clients ignore it.
+            data["open"] = bool(getattr(entity, "open", False))
         objects.append(data)
     objects.sort(key=lambda obj: obj["name"].lower())
 
@@ -215,6 +219,18 @@ def _classify(reply: str) -> str:
         return "not_found"
     if lowered.startswith("there is nowhere"):
         return "not_here"
+    # Container verbs (#76): the lid and contents decide the code.
+    if " is already closed" in lowered:
+        return "already_closed"
+    if " is closed" in lowered:
+        return "container_closed"
+    if " is not in the " in lowered:
+        return "not_here"
+    if "fixed in place" in lowered:
+        return "not_portable"
+    if ("not something you can close" in lowered
+            or "is not a container" in lowered):
+        return "bad_args"
     # A name on the durable roster whose session is gone (#72) is asleep and
     # stone. `tell` refuses rather than queueing; the code is additive (#75).
     if " is asleep, turned to stone" in lowered:
@@ -288,6 +304,10 @@ def _parse(text: str) -> tuple[str, str | None, str]:
         return "look", arg, raw
 
     input_str = f"{verb} {arg}".strip() if arg else verb
+    if verb == "get" and arg and " from " in arg:
+        # `get <item> from <container>` is its own v2.1 verb (#76); a bare
+        # `get <item>` still resolves to `take` through the alias table.
+        return "get", arg, raw
     if input_str in _ALIASES:
         target = _ALIASES[input_str]
         resolved, _, resolved_arg = target.partition(" ")
@@ -315,6 +335,10 @@ async def execute(engine: Engine, player_name: str,
     before_inventory = list(player.contents)
     before_locked = {
         id(entity): bool(getattr(entity, "locked", False))
+        for entity in before_room_contents
+    }
+    before_open = {
+        id(entity): bool(getattr(entity, "open", False))
         for entity in before_room_contents
     }
     before_lit = {
@@ -447,6 +471,53 @@ async def execute(engine: Engine, player_name: str,
                 _room("object.opened", {
                     "object": obj, "by": player.name, "self": False,
                     "text": f"{player.name} opens the {container.name}.",
+                }),
+            ])
+        return _failure(reply)
+
+    if verb == "close":
+        container = _find(engine, before_room_contents, arg)
+        was_open = before_open.get(id(container), False) if container is not None else False
+        if (container is not None and was_open
+                and not bool(getattr(container, "open", False))
+                and reply.lower().startswith("you close")):
+            obj = _object_data(container, before_room_contents)
+            return CommandResult([
+                _actor("object.closed", {
+                    "object": obj, "by": player.name, "self": True,
+                    "text": reply,
+                }),
+                _room("object.closed", {
+                    "object": obj, "by": player.name, "self": False,
+                    "text": f"{player.name} closes the {container.name}.",
+                }),
+            ])
+        return _failure(reply)
+
+    if verb == "get":
+        _item_arg, _, container_arg = (
+            arg.rpartition(" from ") if arg and " from " in arg
+            else ("", "", ""))
+        container = _find(engine, before_room_contents, container_arg.strip())
+        moved = [item for item in player.contents
+                 if item not in before_inventory]
+        if (moved and container is not None
+                and reply.lower().startswith("you get ")):
+            item = moved[0]
+            obj = _object_data(item, player.contents)
+            cont = _object_data(container, before_room_contents)
+            return CommandResult([
+                _actor("object.got", {
+                    "object": obj, "container": cont,
+                    "by": player.name, "self": True, "text": reply,
+                }),
+                Outbound("player.inventory", _inventory_data(player),
+                         direct=False),
+                _room("object.got", {
+                    "object": obj, "container": cont,
+                    "by": player.name, "self": False,
+                    "text": (f"{player.name} gets the {item.name} from the "
+                             f"{container.name}."),
                 }),
             ])
         return _failure(reply)

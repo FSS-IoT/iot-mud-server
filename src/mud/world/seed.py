@@ -141,6 +141,9 @@ def _object_state(obj: GameObject) -> str:
             "locked": obj.locked,
             "required_key": obj.required_key,
             "dropped_on_sleep": obj.dropped_on_sleep,
+            # Explicit lid state (#76); authored `state.open` wins only through
+            # the dict above, so normalize it once for every object row.
+            "open": bool(obj.state.get("open", False)),
         }
     )
     return json.dumps(state, sort_keys=True)
