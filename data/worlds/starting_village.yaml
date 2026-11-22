@@ -4,6 +4,10 @@
 # Exits are declared once. The loader creates the reciprocal direction, so the
 # file does not repeat market -> south -> gate, shop -> east -> market,
 # forest -> south -> market, or tavern -> west -> market.
+#
+# The Old Tavern's door is locked (v2.1.2, #77): the declared east exit carries
+# `locked` and the gold key's object id, and the reciprocal tavern -> west door
+# inherits the same lock and key.
 name: Starting Village
 start_room: gate
 rng_seed: 20261121
@@ -44,7 +48,11 @@ rooms:
     exits:
       west: shop
       north: forest
-      east: tavern
+      east:
+        to: tavern
+        locked: true
+        key: key_gold_1
+        label: tavern door
     objects:
       - id: gold_coin
         name: Gold Coin

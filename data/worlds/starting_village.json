@@ -34,7 +34,12 @@
         "south": "gate",
         "west": "shop",
         "north": "forest",
-        "east": "tavern"
+        "east": {
+          "to": "tavern",
+          "locked": true,
+          "key": "key_gold_1",
+          "label": "tavern door"
+        }
       },
       "geometry": {
         "cells": [
@@ -68,7 +73,11 @@
       "name": "Old Tavern",
       "description": "Warmth radiates from within. The smell of roasted meat lingers. Exits West.",
       "exits": {
-        "west": "market"
+        "west": {
+          "to": "market",
+          "locked": true,
+          "key": "key_gold_1"
+        }
       },
       "geometry": {
         "cells": [

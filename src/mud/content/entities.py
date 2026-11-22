@@ -88,6 +88,28 @@ class Entity:
     def __str__(self) -> str:
         return self.name
 
+class ExitLock:
+    """A locked room exit and the one key object that opens it.
+
+    `key` is the `item_id` of the key object, exactly as a container's
+    `required_key`. `label` is the author's name for the door ("iron door"),
+    used when a player names the lock instead of a direction.
+
+    Both directions of a two-way door share one `ExitLock` instance: turning
+    the key unlocks the door itself, so the reciprocal side comes along without
+    a second use. A one-way lock has only the side it declares.
+    """
+
+    def __init__(self, key: str | None, label: str | None = None):
+        self.key = key
+        self.label = label
+        self.locked = True
+
+    def __repr__(self) -> str:
+        state = "locked" if self.locked else "unlocked"
+        return f"<ExitLock: key={self.key!r} {state}>"
+
+
 class Player(Entity):
     """A named player in the world. Owns its current location."""
 
@@ -107,6 +129,10 @@ class Room(Entity):
                  light_source: Entity | None = None, dark: bool = False):
         super().__init__(name, description)
         self.exits = exits or {}
+        # Locks sit beside exits, keyed by the same direction. A direction with
+        # no lock entry is an open way. The `ExitLock` remembers whether the
+        # door is still locked; the reciprocal direction shares the instance.
+        self.exit_locks: Dict[str, ExitLock] = {}
         # A fixed light in the room (a wall lantern, a brazier). None means the
         # room has no built-in light. Kept as an Entity so it can itself be
         # carried (a portable light) or inspected.
@@ -119,3 +145,8 @@ class Room(Entity):
         # validates it and stores the normalized wire shape; None means the
         # room has no map, and the protocol omits the field entirely.
         self.geometry: dict | None = None
+
+    def exit_is_locked(self, direction: str) -> bool:
+        """Whether this room's `direction` exit is currently locked."""
+        lock = self.exit_locks.get(direction)
+        return bool(lock is not None and lock.locked)
