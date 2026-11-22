@@ -149,6 +149,16 @@ server. The server stores only a key id and a one-way hash, never the key, and
 returns it only in the registration response. A lost key is replaced with
 `admin rekey`, which revokes the old key.
 
+A key is `mud1-`, a public key id, a `-`, then 32 bytes of secret entropy in
+base64url. Clients treat the whole string as opaque. The key id selects the
+stored row; the salt and scrypt hash are the only secret-derived values on
+disk.
+
+Registration names are 2-24 characters, start with a letter, and continue with
+letters, digits, `_`, or `-`; surrounding whitespace is trimmed and uniqueness
+is case-insensitive. A bad name is `auth.error{invalid_name}`; a name already
+registered is `auth.error{name_taken}`.
+
 Failure is `auth.error` (direct, echoes `id`) with a code (`invalid_key`,
 `name_taken`, `invalid_name`). `invalid_key` covers an unknown or revoked key,
 deliberately. Auth attempts are rate-limited; names are not locked.
@@ -410,6 +420,9 @@ in-progress release; its entry grows as each documented addition lands.
 - `hello.data.auth_required` may be `true`, with `hello.data.auth_modes`, the
   `auth` client message, the `auth.ok` and `auth.error` events, and one-time
   character keys.
+- Registration names are 2-24 characters, starting with a letter; uniqueness
+  is case-insensitive. Bad names are `auth.error{invalid_name}` and duplicate
+  names `auth.error{name_taken}`.
 - `player.emoted`, `player.told`, `who.list`, and `shutdown`.
 - `room.state.data.room.geometry`: the optional room map, with its validation
   rules.
