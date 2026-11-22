@@ -988,6 +988,14 @@ The scripted acceptance session lives in `SESSION.md`. A client is compatible
 when it completes that session; `tests/test_protocol_v2.py` implements the same
 script against the server.
 
+The golden scenarios in `tests/golden/` run a fresh port-0 server with a
+temporary database and cover every room and area of the product world plus
+every client-delivered event type in this document. The run pins
+`[features].effects=false`, so authored `effect` events stay on the bus and in
+`event_log`; `shutdown` is the one documented event with no delivery path at
+all. The coverage test records both as named exceptions; a client must not
+depend on `shutdown` from this build.
+
 ## Not in version 2.0
 
 Auth/character keys, SQLite persistence, YAML worlds, `who`/`emote`/`tell`,
