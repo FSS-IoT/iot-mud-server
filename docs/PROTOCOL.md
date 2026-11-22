@@ -852,6 +852,22 @@ version 3. A client that pins a server commit reads this section together with
 `hello.data.server_commit` to see what it may be missing. v2.1 is the current
 release; a later additive fix still adds a bullet here.
 
+### v2.1.4 — protocol 2 reference pin
+
+- The v2.1.4 reference server is commit
+  `0e2b2c3bad33df6f3da062e3eacc4e35572b90c6`, which includes #90 (the newcomer
+  walkthrough) and is the first commit whose reference client prints
+  `Server commit: ...`. A client records that full commit in its README and
+  compares it with `hello.data.server_commit` on connect.
+- Additive does not mean the wire is unchanged. A v2.1 server after the pin may
+  send new fields and events: read the entries from the pinned release forward
+  to see what your client is missing, ignore unknown fields and event types,
+  and treat a different `hello.data.server_commit` as a prompt to check that
+  list. A server reporting `"unknown"` (a copy without `.git`) cannot confirm a
+  pin.
+- No event or field from an earlier v2.1 entry is removed or reshaped by this
+  pin. The pin records the reference build, not a freeze on additive changes.
+
 ### v2.1 — protocol 2
 
 - `hello.data.server_commit`: the commit the server was built from, or

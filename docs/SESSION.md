@@ -33,6 +33,12 @@ render them.
 3. Have two copies of your client ready, or two terminals, so you can see
    another player.
 
+Before the first run, record the full server commit your client targets in its
+README and compare it with `hello.data.server_commit`; `BOOTSTRAP.md` gives the
+v2.1.4 reference pin and the reference client checks it with
+`--expect-commit <full sha>`. If the commit differs, read the `PROTOCOL.md`
+changelog before the acceptance, not after.
+
 For a second run, stop the server and use a new file (or delete it:
 `rm -f .scratch/session.db*`; on PowerShell,
 `Remove-Item -Force .scratch\session.db*`). Do not reseed the old file:
@@ -332,6 +338,9 @@ contract; the presentation is yours.
 Tick these against your own client's output. The reference client's wording is
 shown in parentheses as one example; the structured fields are the contract.
 
+- [ ] **Pin.** Your README records the full 40-character server commit, and
+      `hello.data.server_commit` matches it (or you have read the changelog for
+      the difference).
 - [ ] **Hello.** `data.protocol` contains `2`, `data.auth_required` is `true`,
       `data.auth_modes` is `["key"]`, and the world epoch and
       `data.server_commit` are readable. (`Protocol: 2`, `Auth: required
