@@ -59,6 +59,15 @@ class CharacterState:
     items: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class RosterEntry:
+    """One character's row for the server-wide `who` roster (#72)."""
+
+    name: str
+    room_id: str | None
+    asleep: bool
+
+
 class WorldStore:
     """Read the durable location and contents of the world's objects."""
 
@@ -193,6 +202,59 @@ class PlayerStore:
 
         self._transaction("drop", body)
 
+    def sleep(self, *, room: Any | None = None) -> None:
+        """Commit that the character is asleep (stone) in `room` (#72).
+
+        `asleep` and `last_seen` are the durable sleep state; the room id is
+        refreshed when the caller has it, so a sleeping character is found in
+        the room it last stood in. Item drops are separate `drop` writes.
+        """
+        destination = room_key(room) if room is not None else None
+        now = self._now()
+
+        def body(conn: sqlite3.Connection) -> None:
+            if destination is None:
+                player_id = _ensure_player(conn, self.name, None, now)
+                conn.execute(
+                    "UPDATE players SET asleep = 1, last_seen = ? WHERE id = ?",
+                    (now, player_id),
+                )
+            else:
+                ensure_room(conn, room)
+                player_id = _ensure_player(conn, self.name, destination, now)
+                conn.execute(
+                    "UPDATE players SET room_id = ?, asleep = 1, "
+                    "last_seen = ? WHERE id = ?",
+                    (destination, now, player_id),
+                )
+            self._id = player_id
+
+        self._transaction("sleep", body)
+
+    def wake(self) -> None:
+        """Commit that the character is awake again (#72).
+
+        The row must already exist: wake follows a verified login. A missing
+        row raises `StorageWriteError` rather than inventing a character.
+        """
+        now = self._now()
+
+        def body(conn: sqlite3.Connection) -> None:
+            row = conn.execute(
+                "SELECT id FROM players WHERE name = ?", (self.name,)
+            ).fetchone()
+            if row is None:
+                raise StorageWriteError(
+                    f"wake could not be saved: no character {self.name!r}")
+            player_id = int(row["id"])
+            conn.execute(
+                "UPDATE players SET asleep = 0, last_seen = ? WHERE id = ?",
+                (now, player_id),
+            )
+            self._id = player_id
+
+        self._transaction("wake", body)
+
     def _transaction(
         self, op: str, body: Callable[[sqlite3.Connection], None]
     ) -> None:
@@ -234,6 +296,26 @@ class WriteThroughStore:
                 self.conn, name, now=self._now, fail=self._fail)
             self._players[name] = store
         return store
+
+    def roster(self) -> tuple[RosterEntry, ...]:
+        """Every registered character, awake or asleep, sorted by name (#72).
+
+        A `who` roster is server-wide, including characters whose session is
+        gone. It reads the durable rows, so a restart does not hide a sleeping
+        character; the engine overlays live socket state on top.
+        """
+        rows = self.conn.execute(
+            "SELECT name, room_id, asleep FROM players "
+            "ORDER BY name COLLATE NOCASE"
+        ).fetchall()
+        return tuple(
+            RosterEntry(
+                name=row["name"],
+                room_id=row["room_id"],
+                asleep=bool(row["asleep"]),
+            )
+            for row in rows
+        )
 
 
 def ensure_room(conn: sqlite3.Connection, room: Any) -> None:

@@ -119,11 +119,17 @@ def build_room_state(engine: Engine, player: Player) -> dict[str, Any]:
         objects.append(data)
     objects.sort(key=lambda obj: obj["name"].lower())
 
-    players = [
-        {"name": other.name}
-        for other in engine.players_in_room(room)
-        if other.name != player.name
-    ]
+    players = []
+    for other in engine.players_in_room(room):
+        if other.name == player.name:
+            continue
+        person = {"name": other.name}
+        if getattr(other, "asleep", False):
+            # Sleep is the stone state (#72): present but invincible. The
+            # fields are additive, so an awake entry keeps the v2.0 shape.
+            person["asleep"] = True
+            person["stone"] = True
+        players.append(person)
     players.sort(key=lambda person: person["name"].lower())
     exits = [
         {"direction": direction, "to": _room_id(target), "locked": False}
@@ -135,8 +141,12 @@ def build_room_state(engine: Engine, player: Player) -> dict[str, Any]:
         text += "\n\nHere you see: " + ", ".join(
             obj["name"] for obj in objects) + "."
     if players:
-        text += "\n\nOthers in the room: " + ", ".join(
-            person["name"] for person in players) + "."
+        names = [
+            f"{person['name']} (asleep)" if person.get("asleep")
+            else person["name"]
+            for person in players
+        ]
+        text += "\n\nOthers in the room: " + ", ".join(names) + "."
 
     payload = {
         "id": _room_id(room),
@@ -489,6 +499,14 @@ async def execute(engine: Engine, player_name: str,
     if verb == "inventory":
         return CommandResult([
             _actor("player.inventory", _inventory_data(player, text=reply)),
+        ])
+
+    if verb == "who":
+        return CommandResult([
+            _actor("who.list", {
+                "players": engine.who_entries(),
+                "text": reply,
+            }),
         ])
 
     if verb == "say":

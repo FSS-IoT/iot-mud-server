@@ -116,6 +116,7 @@ rooms:
         name: Gold Key
         description: A small gold key, warm to the touch.
         weight: 0.1
+        dropped_on_sleep: true
     geometry:
       cells:
         - "#######"

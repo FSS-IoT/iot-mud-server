@@ -150,6 +150,9 @@ class GameObject(BaseModel):
     required_key: str | None = Field(default=None, pattern=ID_PATTERN)
     light_source: bool = False
     lit: bool = False
+    # The item leaves a sleeping character and lands in its room (#72). The
+    # gold chest key uses it; the rest of the inventory stays.
+    dropped_on_sleep: bool = False
     state: dict[str, Any] = Field(default_factory=dict)
     contains: list[str] = Field(default_factory=list)
     effects: Effects = Field(default_factory=dict)

@@ -50,6 +50,7 @@ def _entity_snapshot(entity) -> dict:
         "lit": entity.lit,
         "locked": entity.locked,
         "required_key": entity.required_key,
+        "dropped_on_sleep": entity.dropped_on_sleep,
         "contents": sorted(
             (_entity_snapshot(child) for child in entity.contents),
             key=lambda child: child["item_id"] or child["name"],
