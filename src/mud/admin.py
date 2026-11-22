@@ -1,6 +1,10 @@
 """Offline administration commands.
 
 Run as `python -m src.mud.admin <command>`.
+
+`rekey` is the one command that prints a credential: the new character key
+goes to stdout exactly once, after the transaction commits. Nothing logs it and
+only its salt and scrypt hash are stored.
 """
 
 from __future__ import annotations
@@ -10,6 +14,7 @@ import sqlite3
 import sys
 from pathlib import Path
 
+from src.mud.auth import RekeyError, rekey_character
 from src.mud.config import DEFAULT_WORLD, ConfigError, load_config
 from src.mud.content.models import ContentModelError
 from src.mud.content.validator import check_world
@@ -70,6 +75,18 @@ def build_parser() -> argparse.ArgumentParser:
     seed.add_argument(
         "--yes", action="store_true",
         help="confirm the destructive --reset")
+
+    rekey = commands.add_parser(
+        "rekey", help="issue a new character key and revoke the old ones")
+    rekey.add_argument(
+        "name", help="character name (case-insensitive)")
+    rekey.add_argument(
+        "--config", type=Path, default=None,
+        help="TOML config file (default: ./mud.toml if it exists)")
+    rekey.add_argument(
+        "--db", type=Path, default=None,
+        help="SQLite database path (overrides [storage].path)")
+
     return parser
 
 
@@ -108,6 +125,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "seed":
         return _seed(args)
+
+    if args.command == "rekey":
+        return _rekey(args)
 
     return 2
 
@@ -173,6 +193,62 @@ def _seed_summary(result: SeedResult, path: Path) -> str:
             f"epoch {result.epoch}"
         )
     return f"seeded {result.name} into {path}: {counts}; epoch {result.epoch}"
+
+
+def _rekey(args: argparse.Namespace) -> int:
+    """Issue a replacement key offline and print it exactly once.
+
+    The database must already exist and hold a seeded world; a rekey is not a
+    way to conjure an empty database by mistyping a path. The character's room
+    and inventory are never written.
+    """
+    try:
+        config = load_config(args.config)
+    except ConfigError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    path = args.db or config.storage.path
+    if not path.is_file():
+        print(f"error: database not found: {path}", file=sys.stderr)
+        return 1
+
+    try:
+        conn = open_database(path)
+    except (DatabaseError, sqlite3.Error) as exc:
+        print(f"error: could not open {path}: {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        if conn.execute(
+            "SELECT 1 FROM world_meta WHERE key = 'start_room'"
+        ).fetchone() is None:
+            print(
+                f"error: {path} has no world; run `admin seed` first",
+                file=sys.stderr,
+            )
+            return 1
+        result = rekey_character(conn, args.name)
+    except RekeyError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except sqlite3.Error as exc:
+        print(f"error: could not rekey in {path}: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        conn.close()
+
+    # The one copy of the credential: stdout, after the commit. The summary
+    # goes to stderr so stdout stays a single line a caller can capture.
+    print(f"rekeyed {result.name}: {result.key}")
+    revoked = len(result.revoked_key_ids)
+    print(
+        f"revoked {revoked} key{'' if revoked == 1 else 's'}; "
+        "room and inventory unchanged; the new key is shown once and is not "
+        "stored in plaintext",
+        file=sys.stderr,
+    )
+    return 0
 
 
 if __name__ == "__main__":
