@@ -504,7 +504,7 @@ async def test_v2_hello_and_session_ok_carry_the_seeded_epoch(tmp_path):
 
     engine = Engine()
     await load_demo_village(engine)
-    server = V2Server(engine, port=0, db_path=path)
+    server = V2Server(engine, port=0, db_path=path, auth_required=False)
     task = asyncio.create_task(server.run())
     await _wait_for_bind(server)
     try:

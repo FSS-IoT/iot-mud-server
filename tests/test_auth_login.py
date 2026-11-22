@@ -1,8 +1,8 @@
 """Ticket #69: log in with a character key.
 
 The auth test server runs with `auth_required=True` and a real SQLite file, so a
-registration survives a disconnect and a restart. The default guest server is
-unchanged and covered by `test_protocol_v2.py`; #74 flips the default.
+registration survives a disconnect and a restart. The guest path is now an
+explicit opt-out; `test_protocol_v2.py` covers the default auth server.
 
 The login request carries no name. The public key id selects the row and the
 secret is verified against the stored scrypt hash with a constant-time compare,
@@ -360,10 +360,10 @@ async def test_login_never_logs_the_key(server, caplog):
 
 
 @pytest.mark.asyncio
-async def test_auth_stays_opt_in_and_the_guest_path_is_unchanged(tmp_path):
+async def test_the_guest_path_requires_an_explicit_opt_out(tmp_path):
     engine = Engine()
     await load_demo_village(engine)
-    instance = V2Server(engine, port=0)
+    instance = V2Server(engine, port=0, auth_required=False)
     task = asyncio.create_task(instance.run())
     await _wait_for_bind(instance)
     try:

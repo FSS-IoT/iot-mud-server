@@ -130,7 +130,7 @@ class V2Server:
         epoch: str | None = None,
         db_path: str | Path | None = None,
         server_commit: str | None = None,
-        auth_required: bool = False,
+        auth_required: bool = True,
     ):
         self.engine = engine
         self.host = host
@@ -139,8 +139,9 @@ class V2Server:
         self.epoch = epoch or utc_now()
         self.db_path = Path(db_path) if db_path is not None else None
         self.server_commit = resolve_server_commit(server_commit)
-        # v2.1 auth is opt-in for now: the v2.0 conformance session and the
-        # reference client stay on the guest path until #74 flips the default.
+        # v2.1 is the product: a session authenticates before it can join or
+        # send input. The v2.0 guest path is an explicit opt-out for legacy
+        # tests and a deliberate guest server.
         self.auth_required = auth_required
         self.db: sqlite3.Connection | None = None
         self.store: WriteThroughStore | None = None
@@ -417,8 +418,13 @@ class V2Server:
     async def _handle_input(self, ws, session: Session, msg: dict) -> int | None:
         msg_id = msg.get("id")
         if not session.joined or session.player_name is None:
-            await self._send_error(ws, session, "not_joined",
-                                   "Join before sending commands.", msg_id)
+            if self.auth_required:
+                await self._send_error(ws, session, "not_authenticated",
+                                       "Authenticate before sending commands.",
+                                       msg_id)
+            else:
+                await self._send_error(ws, session, "not_joined",
+                                       "Join before sending commands.", msg_id)
             return None
         if msg_id is None:
             await self._send_error(ws, session, "bad_args",

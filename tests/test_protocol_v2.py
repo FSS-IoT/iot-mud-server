@@ -1,9 +1,13 @@
 """Protocol-v2 conformance session.
 
 Two real websocket clients drive the v2 server through the accepted session:
-handshake, join, room state, movement broadcasts, take/drop, chat, malformed
-input, a duplicate name, and a clean quit. This is the gate the common server
-and every member client are measured against.
+handshake, auth registration (and key login), room state, movement broadcasts,
+take/drop, chat, malformed input, a duplicate name, and a clean quit. This is
+the gate the common server and every member client are measured against.
+
+The fixture is the shipped v2.1 default: a temporary SQLite database and
+`auth_required=True`. The v2.0 guest `join` path is exercised separately by
+tests that opt out explicitly.
 """
 
 import asyncio
@@ -57,7 +61,27 @@ class V2Client:
     async def send(self, message):
         await self.ws.send(json.dumps(message))
 
+    async def auth(self, data, msg_id="auth"):
+        await self.send({
+            "v": 2, "type": "auth", "id": msg_id, "data": data,
+        })
+
+    async def register(self, name, msg_id="register"):
+        """Register a fresh character; return `auth.ok` and `room.state`."""
+        await self.auth({"mode": "register", "name": name}, msg_id)
+        ok = await self.next("auth.ok")
+        state = await self.next("room.state")
+        return ok, state
+
+    async def login(self, key, msg_id="login"):
+        """Log in with a saved key; return `auth.ok` and `room.state`."""
+        await self.auth({"mode": "login", "key": key}, msg_id)
+        ok = await self.next("auth.ok")
+        state = await self.next("room.state")
+        return ok, state
+
     async def join(self, name):
+        """The v2.0 guest path, for an explicit `auth_required=False` server."""
         await self.send({
             "v": 2, "type": "join", "id": "join",
             "data": {"name": name},
@@ -89,10 +113,12 @@ class V2Client:
 
 
 @pytest.fixture
-async def server():
+async def server(tmp_path):
     engine = Engine()
     await load_world(engine, WORLD_PATH)
-    instance = V2Server(engine, port=0)
+    instance = V2Server(
+        engine, port=0, db_path=tmp_path / "conformance.db",
+        auth_required=True)
     task = asyncio.create_task(instance.run())
     for _ in range(200):
         if instance.port:
@@ -114,30 +140,32 @@ async def _two_clients(server):
     uri = f"ws://localhost:{server.port}"
     ada = await V2Client(uri).connect()
     ben = await V2Client(uri).connect()
-    await ada.join("Ada")
-    await ben.join("Ben")
+    await ada.register("Ada")
+    await ben.register("Ben")
     # Ben's room_state already lists Ada; only the existing player is notified.
     await ada.next("room.enter")  # Ben arrived
     return ada, ben
 
 
 @pytest.mark.asyncio
-async def test_hello_and_join(server):
+async def test_hello_and_auth_register(server):
     instance, _engine = server
     async with V2Client(f"ws://localhost:{instance.port}") as ada:
         assert ada.hello["v"] == 2
         assert ada.hello["type"] == "hello"
         assert ada.hello["data"]["server"] == "iot-mud-server"
         assert ada.hello["data"]["protocol"] == [2]
-        assert ada.hello["data"]["auth_required"] is False
+        assert ada.hello["data"]["auth_required"] is True
+        assert ada.hello["data"]["auth_modes"] == ["key"]
         assert ada.hello["data"]["text"] == "Welcome to the IoT MUD!"
         assert ada.hello["data"]["world"]["epoch"]
 
-        ok, state = await ada.join("Ada")
+        ok, state = await ada.register("Ada")
 
         assert ok["data"]["player"]["name"] == "Ada"
-        assert ok["data"]["mode"] == "guest"
-        assert ok["id"] == "join"
+        assert ok["data"]["mode"] == "register"
+        assert ok["id"] == "register"
+        assert ok["data"]["key"].startswith("mud1-")
         room = state["data"]["room"]
         assert room["id"] == "gate"
         assert room["name"] == "Village Gate"
@@ -161,12 +189,33 @@ async def test_hello_and_join(server):
 
 
 @pytest.mark.asyncio
+async def test_key_login_resumes_the_character(server):
+    """A saved key logs the character back in without repeating the key."""
+    instance, _ = server
+    uri = f"ws://localhost:{instance.port}"
+    async with V2Client(uri) as ada:
+        registered, _state = await ada.register("Ada")
+        key = registered["data"]["key"]
+
+    async with V2Client(uri) as ada:
+        ok, state = await ada.login(key)
+
+        assert ok["data"]["player"] == {"name": "Ada"}
+        assert ok["data"]["mode"] == "login"
+        assert "key" not in ok["data"]
+        assert state["data"]["room"]["id"] == "gate"
+
+        await ada.input("look", 2)
+        assert (await ada.next("room.state"))["id"] == 2
+
+
+@pytest.mark.asyncio
 async def test_move_broadcasts_leave_and_enter(server):
     instance, _engine = server
     async with V2Client(f"ws://localhost:{instance.port}") as ada, \
             V2Client(f"ws://localhost:{instance.port}") as ben:
-        await ada.join("Ada")
-        await ben.join("Ben")
+        await ada.register("Ada")
+        await ben.register("Ben")
         await ada.next("room.enter")
 
         await ada.input("go north", 2)
@@ -193,8 +242,8 @@ async def test_take_drop_and_inventory(server):
     instance, _engine = server
     async with V2Client(f"ws://localhost:{instance.port}") as ada, \
             V2Client(f"ws://localhost:{instance.port}") as ben:
-        await ada.join("Ada")
-        await ben.join("Ben")
+        await ada.register("Ada")
+        await ben.register("Ben")
         await ada.next("room.enter")
         await ada.input("go north", 1)
         await ada.next("room.state")
@@ -245,8 +294,8 @@ async def test_player_is_not_takeable(server):
     instance, _ = server
     async with V2Client(f"ws://localhost:{instance.port}") as ada, \
             V2Client(f"ws://localhost:{instance.port}") as ben:
-        await ada.join("Ada")
-        await ben.join("Ben")
+        await ada.register("Ada")
+        await ben.register("Ben")
         await ada.next("room.enter")
 
         await ben.input("take Ada", 2)
@@ -267,8 +316,8 @@ async def test_say_reaches_roommates(server):
     instance, _engine = server
     async with V2Client(f"ws://localhost:{instance.port}") as ada, \
             V2Client(f"ws://localhost:{instance.port}") as ben:
-        await ada.join("Ada")
-        await ben.join("Ben")
+        await ada.register("Ada")
+        await ben.register("Ben")
         await ada.next("room.enter")
 
         await ada.input("say hello", 2)
@@ -285,7 +334,7 @@ async def test_say_reaches_roommates(server):
 async def test_malformed_message_keeps_the_socket(server):
     instance, _engine = server
     async with V2Client(f"ws://localhost:{instance.port}") as ada:
-        await ada.join("Ada")
+        await ada.register("Ada")
 
         await ada.ws.send("this is not json")
         error = await ada.next("error")
@@ -301,7 +350,7 @@ async def test_malformed_message_keeps_the_socket(server):
 async def test_unknown_command_keeps_the_socket(server):
     instance, _engine = server
     async with V2Client(f"ws://localhost:{instance.port}") as ada:
-        await ada.join("Ada")
+        await ada.register("Ada")
 
         await ada.input("dance", 2)
         error = await ada.next("error")
@@ -320,8 +369,8 @@ async def test_input_quit_closes_1000(server, command):
     instance, _ = server
     async with V2Client(f"ws://localhost:{instance.port}") as ada, \
             V2Client(f"ws://localhost:{instance.port}") as ben:
-        await ada.join("Ada")
-        await ben.join("Ben")
+        await ada.register("Ada")
+        await ben.register("Ben")
         await ada.next("room.enter")
 
         await ada.input(command, 2)
@@ -337,7 +386,7 @@ async def test_input_quit_closes_1000(server, command):
 async def test_missing_version_is_malformed_and_keeps_socket(server):
     instance, _ = server
     async with V2Client(f"ws://localhost:{instance.port}") as ada:
-        await ada.join("Ada")
+        await ada.register("Ada")
 
         await ada.send({"type": "input", "id": 2,
                         "data": {"text": "look"}})
@@ -363,15 +412,15 @@ async def test_unsupported_version_closes_4003(server):
 
 
 @pytest.mark.asyncio
-async def test_join_with_non_object_data_is_rejected(server):
+async def test_auth_with_non_object_data_is_rejected(server):
     instance, _ = server
     async with V2Client(f"ws://localhost:{instance.port}") as ada:
-        await ada.send({"v": 2, "type": "join", "id": "join",
+        await ada.send({"v": 2, "type": "auth", "id": "auth",
                         "data": "Ada"})
         error = await ada.next("error")
         assert error["data"]["code"] == "malformed_message"
 
-        ok, state = await ada.join("Ada")
+        ok, state = await ada.register("Ada")
         assert ok["data"]["player"]["name"] == "Ada"
         assert state["data"]["room"]["id"] == "gate"
 
@@ -380,7 +429,7 @@ async def test_join_with_non_object_data_is_rejected(server):
 async def test_input_with_non_object_data_is_rejected(server):
     instance, _ = server
     async with V2Client(f"ws://localhost:{instance.port}") as ada:
-        await ada.join("Ada")
+        await ada.register("Ada")
 
         await ada.send({"v": 2, "type": "input", "id": 2,
                         "data": "look"})
@@ -396,7 +445,7 @@ async def test_input_with_non_object_data_is_rejected(server):
 async def test_input_without_id_is_rejected(server):
     instance, _ = server
     async with V2Client(f"ws://localhost:{instance.port}") as ada:
-        await ada.join("Ada")
+        await ada.register("Ada")
 
         await ada.send({"v": 2, "type": "input",
                         "data": {"text": "look"}})
@@ -412,7 +461,7 @@ async def test_input_without_id_is_rejected(server):
 async def test_read_emits_readable_content(server):
     instance, _ = server
     async with V2Client(f"ws://localhost:{instance.port}") as ada:
-        await ada.join("Ada")
+        await ada.register("Ada")
 
         await ada.input("read sign", 2)
         event = await ada.next("object.read")
@@ -425,14 +474,14 @@ async def test_duplicate_name_is_rejected_and_can_retry(server):
     instance, _engine = server
     async with V2Client(f"ws://localhost:{instance.port}") as ada, \
             V2Client(f"ws://localhost:{instance.port}") as ben:
-        await ada.join("Ada")
+        await ada.register("Ada")
 
-        await ben.send({"v": 2, "type": "join", "id": "join",
-                        "data": {"name": "Ada"}})
-        error = await ben.next("error")
+        await ben.auth({"mode": "register", "name": "Ada"}, "dup")
+        error = await ben.next("auth.error")
+        assert error["id"] == "dup"
         assert error["data"]["code"] == "name_taken"
 
-        ok, state = await ben.join("Ben")
+        ok, state = await ben.register("Ben")
         assert ok["data"]["player"]["name"] == "Ben"
         assert state["data"]["room"]["id"] == "gate"
 
@@ -442,8 +491,8 @@ async def test_quit_notifies_the_room(server):
     instance, _engine = server
     async with V2Client(f"ws://localhost:{instance.port}") as ada, \
             V2Client(f"ws://localhost:{instance.port}") as ben:
-        await ada.join("Ada")
-        await ben.join("Ben")
+        await ada.register("Ada")
+        await ben.register("Ben")
         await ada.next("room.enter")
 
         await ada.send({"v": 2, "type": "quit"})
@@ -456,7 +505,7 @@ async def test_quit_notifies_the_room(server):
 async def test_dark_room_state_hides_contents(server):
     instance, _engine = server
     async with V2Client(f"ws://localhost:{instance.port}") as ada:
-        await ada.join("Ada")
+        await ada.register("Ada")
 
         await ada.input("go north", 2)
         market = await ada.next("room.state")
@@ -478,7 +527,7 @@ async def test_container_sequence_over_websocket(server):
     """The v2.0 lock/open/take/put path works end-to-end over the socket."""
     instance, _ = server
     async with V2Client(f"ws://localhost:{instance.port}") as ada:
-        await ada.join("Ada")
+        await ada.register("Ada")
         await ada.input("go north", 2)
         await ada.next("room.state")
         await ada.input("go west", 3)
@@ -521,7 +570,7 @@ async def test_container_sequence_over_websocket(server):
 async def test_exits_uses_the_players_current_room(server):
     instance, _engine = server
     async with V2Client(f"ws://localhost:{instance.port}") as ada:
-        await ada.join("Ada")
+        await ada.register("Ada")
         await ada.input("go north", 2)
         await ada.next("room.state")
 

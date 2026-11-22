@@ -12,8 +12,10 @@ tests and the optional section at the end.
 ## Before you start
 
 1. Run the server locally (`../BOOTSTRAP.md` shows how). Start it fresh for the
-   acceptance; the session changes the world.
-2. Read `PROTOCOL.md` version 2.
+   acceptance; the session changes the world. A v2.1 server requires auth, so
+   have two character names ready and somewhere outside the repository to keep
+   the keys.
+2. Read `PROTOCOL.md` version 2, especially "v2.1 auth".
 3. Have two copies of your client ready, or two terminals, so you can see
    another player.
 
@@ -27,14 +29,20 @@ dark room omits it until a light makes the room visible.
 
 ## The session
 
-Use two players, **Ada** and **Ben**.
+Use two characters, **Ada** and **Ben**.
 
 1. **Connect.** Both clients receive `hello` with `v: 2`, `data.protocol`
-   containing `2`, and `data.world.epoch`.
-2. **Join.** Ada sends `join` with `{"name":"Ada"}`; Ben sends `join` with
-   `{"name":"Ben"}`. Each receives `session.ok` and then `room.state`. Ben's
-   join state lists Ada under `room.players`; Ada's lists no one yet because
-   Ben joins second. When Ben joins, Ada receives `room.enter`.
+   containing `2`, `data.world.epoch`, `data.auth_required: true`, and
+   `data.auth_modes: ["key"]`.
+2. **Register.** Ada sends `auth` with
+   `{"mode":"register","name":"Ada"}`; Ben sends the same with `"Ben"`. Each
+   receives `auth.ok` followed by `room.state`. `auth.ok.data.key` is the
+   character key: show it once, store it outside the repository, and never log
+   it or send it anywhere else. Ben's state lists Ada under `room.players`;
+   Ada's lists no one yet because Ben registers second. When Ben registers,
+   Ada receives `room.enter`. On a later connection, send
+   `{"mode":"login","key":"mud1-..."}` instead: `auth.ok` returns the same
+   character without repeating the key, followed by `room.state`.
 3. **Look.** Ada sends `input` `look`. Her new `room.state` now lists Ben under
    `room.players`.
 4. **Move.** Ada sends `go north`. Ada receives `room.state` for the
@@ -88,8 +96,9 @@ the events even if it does not have a special UI for them:
 
 Your client is compatible when it can:
 
-- connect and read `hello`;
-- join and render `room.state`;
+- connect and read `hello`, including `auth_required` and `auth_modes`;
+- register (show the key once) or log in with a saved key, then render
+  `room.state`;
 - send `input` and pair the direct reply by `id`;
 - render `room.enter` / `room.leave`, `player.said`, `object.*`,
   `player.inventory`, `notice`, and `error`;
@@ -101,9 +110,12 @@ contract; the presentation is yours.
 
 ## Troubleshooting
 
-- **The client hangs after `join`.** Check that you are sending `v: 2` and
-  that you handle `session.ok` and `room.state`; a v1 client cannot speak to a
-  v2 server.
+- **The client hangs after `join`.** A v2.1 server rejects `join` with
+  `error{code:"not_authenticated"}` and keeps the socket open: send `auth`
+  first. Check that you are sending `v: 2` and that you handle `auth.ok`,
+  `auth.error`, and `room.state`; a v1 client cannot speak to a v2 server.
+- **`auth.error` with `name_taken`.** The character name is already
+  registered. Log in with its saved key, or register a different name.
 - **`take` fails with "There is no ..."** Use the object's display name, not
   its `id` (`take gold coin`, not `take gold_coin`).
 - **The room is dark.** The Mysterious Forest is dark unless someone carries a
