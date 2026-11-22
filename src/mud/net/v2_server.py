@@ -39,7 +39,7 @@ from src.mud.protocol.v2 import (
 )
 from src.mud.storage.db import DatabaseError, open_database
 from src.mud.storage.keys import room_key
-from src.mud.storage.store import WriteThroughStore
+from src.mud.storage.store import PlayerStore, WriteThroughStore
 
 logger = logging.getLogger(__name__)
 
@@ -385,15 +385,17 @@ class V2Server:
                 "That character is already in play.", msg_id)
             return
 
+        # Login wakes the character where the store left it, carrying what the
+        # store says it owns (#71). The world was loaded from content, so the
+        # engine has to move those objects out of the room or container the
+        # loader authored them into.
+        character = PlayerStore(self.db, login.name).load()
         player = self.engine.register_player(login.name)
-        room = self._room_by_key(login.room_id)
-        if room is not None and player.location is not room:
-            # Login wakes the character where the store left it. A room that
-            # no longer exists in the world leaves the character at the start.
-            if player.location is not None:
-                player.location.remove_content(player)
-            player.location = room
-            room.add_content(player)
+        self.engine.restore_player(
+            player,
+            room=self._room_by_key(character.room_id),
+            item_keys=character.items,
+        )
 
         session.player_name = login.name
         session.joined = True
