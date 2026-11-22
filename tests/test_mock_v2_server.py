@@ -137,8 +137,29 @@ async def test_mock_runs_the_session_and_container_flow():
             await _send(ws, "input", {"text": "put brass lantern in chest"}, 13)
             put = await _next(ws, "object.put")
             assert put["data"]["container"]["id"] == "chest_forest"
+            # `put` keeps the documented inventory push; hold it so the drop
+            # assertion below starts from a known frame.
+            put_inventory = json.loads(
+                await asyncio.wait_for(ws.recv(), timeout=2.0))
+            assert put_inventory["type"] == "player.inventory"
+            assert [item["name"] for item in put_inventory["data"]["items"]] == [
+                "Gold Key", "Torch"]
 
-            await _send(ws, "input", {"text": "say hello"}, 14)
+            await _send(ws, "input", {"text": "drop gold key"}, 14)
+            dropped = await _next(ws, "object.dropped")
+            assert dropped["data"]["self"] is True
+            assert dropped["data"]["object"]["id"] == "gold_key"
+            # `drop` has no inventory follow-up; the explicit request answers
+            # as the very next frame on this connection.
+            await _send(ws, "input", {"text": "inventory"}, 15)
+            inventory = json.loads(
+                await asyncio.wait_for(ws.recv(), timeout=2.0))
+            assert inventory["type"] == "player.inventory"
+            assert inventory["id"] == 15
+            assert [item["name"] for item in inventory["data"]["items"]] == [
+                "Torch"]
+
+            await _send(ws, "input", {"text": "say hello"}, 16)
             said = await _next(ws, "player.said")
             assert said["data"]["self"] is True
             assert said["data"]["from"] == "Ada"

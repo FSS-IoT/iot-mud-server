@@ -202,7 +202,7 @@ def _inventory_data(engine: Engine, player: Player,
 
     `capacity` and `used` are in the same unit as `Entity.weight`; `used` is
     the sum of the carried objects' own weights, not their nested contents.
-    Every inventory push (the `inventory` verb and the drop/put/get
+    Every inventory push (the `inventory` verb and the put/get
     follow-ups) goes through here, so the numbers cannot drift.
     """
     items = []
@@ -566,8 +566,6 @@ async def execute(engine: Engine, player_name: str,
                     "object": obj, "by": player.name, "self": True,
                     "text": reply,
                 }),
-                Outbound("player.inventory", _inventory_data(engine, player),
-                         direct=False),
                 _room("object.dropped", {
                     "object": obj, "by": player.name, "self": False,
                     "text": f"{player.name} drops the {item.name}.",
