@@ -20,28 +20,45 @@ you code, and treat `SESSION.md` as the definition of done.
 
    ```bash
    uv sync --all-extras
-   uv run python -m src.mud.admin seed --db data/mud.db
-   ./run_server.sh
+   uv run python -m src.mud.admin seed --db .scratch/session.db
+   ./run_server.sh --port 8766 --db .scratch/session.db
    ```
 
-   The default URI is `ws://localhost:8765`. Use `--host` and `--port` to
-   listen elsewhere; the port is an implementation detail, not part of the
-   protocol.
+   The server prints the URI it starts with. `--port` and `--db` are server
+   flags, not protocol fields; use any free port and a new scratch path for
+   each acceptance run. The default URI is `ws://localhost:8765`, and 8765 is
+   left free for a real server. Run the seed once per database; if the file
+   already exists, start the server without reseeding, or delete the file for
+   a fresh run. `admin seed --reset` replaces the world but keeps characters
+   and keys, so it is not a fresh acceptance.
 
-2. Connect once with the reference client and register a character. The server
-   prints the character key exactly once:
+2. Connect once with the reference client and register a character. The
+   server returns the character key in `auth.ok` exactly once; the client
+   prints it and can save it:
 
    ```bash
-   uv run python examples/reference_client.py --name Ada
+   uv run python examples/reference_client.py --name Ada \
+     --uri ws://localhost:8766 --save-key ~/.config/iot-mud/ada.key
    ```
 
-3. Read `PROTOCOL.md`'s envelope and session lifecycle, then build the
+3. Log in from the saved key. The key is not repeated:
+
+   ```bash
+   uv run python examples/reference_client.py \
+     --uri ws://localhost:8766 --key-file ~/.config/iot-mud/ada.key
+   ```
+
+4. Read `PROTOCOL.md`'s envelope and session lifecycle, then build the
    smallest client that reads `hello`, authenticates, and renders
    `room.state`.
-4. Add one command at a time and pair each direct reply by its `id`. Keep the
+5. Add one command at a time and pair each direct reply by its `id`. Keep the
    socket alive after an `error`.
-5. Run the full `SESSION.md` acceptance with two characters. Record the server
+6. Run the full `SESSION.md` acceptance with two characters. Record the server
    commit and date in your own repo.
+
+The client's `--uri` must name the server's `--port`. A mismatch is a
+connection error, not a protocol error; the server cannot tell you which port
+you meant to use.
 
 The optional mock server is a protocol-only harness for the first steps:
 
@@ -74,10 +91,30 @@ Treat the whole string as opaque.
 
 - **Store it outside the repository.** A file under your home directory with
   mode `0600`, the operating system keyring, or a password manager. Never
-  commit it, never paste it into an issue, and never log it.
+  commit it, never paste it into an issue, and never log it. The reference
+  client writes that file for you:
+
+  ```bash
+  uv run python examples/reference_client.py --name Ada \
+    --uri ws://localhost:8766 --save-key ~/.config/iot-mud/ada.key
+  ```
+
+  `--save-key` creates the parent directory and writes the key with mode
+  `0600`. It refuses to overwrite an existing file, so a stray re-registration
+  cannot destroy a working key. On Linux, check it with
+  `stat -c %a ~/.config/iot-mud/ada.key`; the answer is `600`.
 - **Log in with it, not with the name.** `auth` with `mode: "login"` and
   `key`; the response has no `key` and the same character enters its stored
-  room.
+  room. Read the file instead of putting the key on the command line:
+
+  ```bash
+  uv run python examples/reference_client.py \
+    --uri ws://localhost:8766 --key-file ~/.config/iot-mud/ada.key
+  ```
+
+  `--key "$MUD_KEY"` also works, but the value is visible in shell history and
+  the process list. Prefer `--key-file`, or export the variable without
+  echoing it.
 - **Send it only to the server that issued it.** A key is a bearer secret for
   one character on one database. A different server will reject it.
 - **A lost key is replaced offline.** Ask the operator for
@@ -168,15 +205,19 @@ the layout.
 `examples/reference_client.py` is a small, readable Python client. It is a
 worked example, **not a template**:
 
-- it registers with `--name` and prints the key once;
-- it logs in with `--key` and never repeats the key;
-- it renders `room.state`, `notice`, `error`, speech, object events, and
-  `shutdown`;
-- it pairs direct replies by `id` and streams broadcasts separately.
+- it registers with `--name`, shows the key once, and writes it to `--save-key`
+  with mode `0600`;
+- it logs in with `--key-file` (or `--key`) and never repeats the key;
+- it prints the `hello` summary — protocol, world and epoch, auth mode, and
+  `server_commit` — so you can compare against the pin in your README;
+- it renders `room.state`, `notice`, `error`, speech, object events, `who.list`,
+  `player.inventory`, `npc.say`, and `shutdown`;
+- it pairs direct replies by `id`, streams broadcasts separately, prints the
+  close code after `quit`, and `!malformed` sends one broken frame to check
+  that an error does not close the socket.
 
-It intentionally does not render `who.list`, `npc.say`, `effect`, or
-`player.inventory` as dedicated UI, and it has no map view. Those are the
-parts you write.
+It intentionally has no map view, no session persistence beyond the key file,
+and no UI framework. Those are the parts you write.
 
 ## Your client repository
 

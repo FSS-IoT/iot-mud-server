@@ -280,8 +280,10 @@ async def golden_server(
 
 
 @asynccontextmanager
-async def golden_client(server: GoldenServer) -> AsyncIterator[GoldenClient]:
-    client = GoldenClient(server.uri)
+async def golden_client(
+    server: GoldenServer | str,
+) -> AsyncIterator[GoldenClient]:
+    client = GoldenClient(server if isinstance(server, str) else server.uri)
     await client.connect()
     try:
         yield client

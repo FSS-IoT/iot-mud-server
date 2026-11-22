@@ -45,8 +45,10 @@ uv run python -m src.mud.admin seed --db data/mud.db
 Windows:
 
 ```powershell
-uv run python -m src.mud.net.v2_server
+uv run python -m src.mud.net.v2_server --db .scratch\dev.db --port 8766
 ```
+
+The same commands work; use `--config` and `--db` with Windows paths.
 
 The server listens on `ws://localhost:8765`. To bind a LAN/tailnet interface or
 choose another port:
@@ -54,6 +56,34 @@ choose another port:
 ```bash
 ./run_server.sh --host 0.0.0.0 --port 9000
 ```
+
+`./run_server.sh --help` lists every flag. `--db PATH` overrides the database
+path, so a test server can keep its own file.
+
+For development, use a scratch database and a port other than 8765. Stop the
+default server first, then start the scratch one; that keeps a used world from
+surprising you and lets a production server keep running:
+
+```bash
+uv run python -m src.mud.admin seed --db .scratch/dev.db
+./run_server.sh --port 8766 --db .scratch/dev.db
+```
+
+`admin seed` creates `.scratch/` and its database. If the file already exists,
+seeding refuses with "the database already holds a world"; stop the server and
+replace the world explicitly:
+
+```bash
+uv run python -m src.mud.admin seed --db .scratch/dev.db --reset --yes
+```
+
+`--reset` replaces rooms, exits, objects, and NPCs, but **keeps characters and
+their keys** and puts them at the start room. It is a world reset, not a fresh
+database. The acceptance in §5 uses its own new file for that reason.
+
+Pick a free port if 8766 is busy, and pass the same value to your client's
+`--uri`. The server prints the URI and database it starts with. The CLI rejects
+`--port 0`; choose a free number instead.
 
 Run one server at a time. A v2.1 server requires auth: the first connection
 registers a character and receives a character key exactly once. Keep the key
@@ -80,8 +110,8 @@ Use it while building; the real server is the authority for the acceptance.
 - `docs/CLIENTS.md` — keys, session/sleep/wake, epoch, and client repos.
 - `docs/SESSION.md` — the exact session your client must complete.
 - `docs/CONTENT.md` — the world and the commands it supports.
-- The server's `tests/test_protocol_v2.py` — a worked client in Python, if you
-  want to see the message flow.
+- `examples/reference_client.py` — a worked client in Python, if you want to
+  see the message flow. It is an example, not a template.
 
 ## 4. Build the smallest client first
 
@@ -110,28 +140,67 @@ Each step is a ticket in your repo. A failing check first (the software
 factory's red/green station) is the habit the club is teaching.
 
 A minimal worked client is `examples/reference_client.py`; it is one way to
-speak the protocol, not a template. Run two copies for the two-player steps:
+speak the protocol, not a template. It prints the `hello` fields, the first
+room, the key once, and one line per session/object/social/NPC event. Run two
+copies against the scratch server from §2, using its port:
 
 ```bash
-uv run python examples/reference_client.py --name Ada
-uv run python examples/reference_client.py --name Ben
+uv run python examples/reference_client.py --name Nova \
+  --uri ws://localhost:8766 --save-key ~/.config/iot-mud/nova.key
+uv run python examples/reference_client.py --name Pip \
+  --uri ws://localhost:8766 --save-key ~/.config/iot-mud/pip.key
 ```
 
-Against the mock, add `--uri ws://localhost:8770`.
+Nova and Pip are throwaway smoke-test characters on the development database;
+the acceptance in §5 registers Ada and Ben on its own new database.
+
+`--save-key` creates the parent directory and writes the key with mode `0600`.
+It refuses to overwrite an existing file: move the old key deliberately, or
+choose another path. Log in later from the file, so the key never appears in
+shell history:
+
+```bash
+uv run python examples/reference_client.py --uri ws://localhost:8766 \
+  --key-file ~/.config/iot-mud/nova.key
+```
+
+The client prints `Connection closed: 1000` after a clean `quit`. Inside the
+prompt, `!malformed` sends one broken frame so you can see the
+`[malformed_message]` error and confirm the socket stays open.
+
+Against the mock, add `--uri ws://localhost:8770`. The mock does not require
+auth, so `--save-key` is ignored there.
 
 ## 5. Pass the acceptance session
 
-Start a **fresh server with a fresh database** for the acceptance. Seed it, or
-delete the test database and let `admin seed` recreate it. The session takes
-the gold coin, unlocks the forest chest and the tavern door, and moves items; a
-second run against the same server can fail in ways that look like client bugs.
-Keep the production database out of this: use a scratch path for acceptance.
+Use a **separate, new database** for the acceptance. The session takes the gold
+coin, unlocks the forest chest and the tavern door, and moves items; a used
+database can fail in ways that look like client bugs. Do not reuse the
+development database from §4: `admin seed --reset` keeps characters and keys,
+so the old smoke-test characters would still be registered there. Stop the
+development server before starting the acceptance server.
+
+```bash
+uv run python -m src.mud.admin seed --db .scratch/session.db
+./run_server.sh --port 8766 --db .scratch/session.db
+```
 
 Run two copies of your client (or one copy of yours and a friend's) and follow
-`docs/SESSION.md` with Ada and Ben. An automated client can drive two
-connections against that fresh server. Record the run in your client repo (for
-example `docs/ACCEPTANCE.md`) with the server commit and date. You are done when
-every step passes.
+`docs/SESSION.md` with Ada and Ben, using `--uri ws://localhost:8766`. Register
+them on this database and save their keys with `--save-key`; the Nova and Pip
+keys from §4 belong to the development database and will be rejected here. An
+automated client can drive two connections against that fresh server;
+`SESSION.md` explains how to raise the command limits if your script is faster
+than a human.
+
+For a second acceptance run, stop the server and delete the acceptance file
+before seeding again (`rm -f .scratch/session.db*`; on PowerShell,
+`Remove-Item -Force .scratch\session.db*`). A reset is not enough: it keeps the
+characters and their keys.
+
+Record the run in your client repo (for example `docs/ACCEPTANCE.md`) with the
+server commit and date. You are done when every step passes and the checklist
+at the end of `SESSION.md` is ticked.
 
 Then connect to the club server. Its address is shared with the club, not
 committed to the repo. Test with a second player before calling it shipped.
