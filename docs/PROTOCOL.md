@@ -380,7 +380,7 @@ unknown field.
 |---|---|---|
 | `player.inventory` | `items[]{id,name,lit?}`, `capacity?`, `used?` | Actor only |
 | `player.said` | `from`, `text`, `self` | Room, including actor |
-| `player.emoted` | `from`, `text`, `self` | Room (v2.1) |
+| `player.emoted` | `from`, `text`, `self` | Room, including actor (v2.1) |
 | `player.told` | `from`, `to`, `text`, `self` | Target and sender (v2.1) |
 | `who.list` | `players[]{name,room_id,asleep,stone}` | Actor only (v2.1) |
 
@@ -390,6 +390,19 @@ with no room). `asleep` and `stone` are the same state `room.state` exposes: a
 sleeping character is present and invincible. The roster reads the durable
 `players` rows, so a character that slept before a restart is still listed
 asleep in its last room.
+
+`player.emoted` is `emote <action>` (alias `me`): a room-local third-person
+action. The actor and every other player in the room receive the same rendered
+`text` (`Ada waves at the sky.`); `self` is `true` for the actor. No player
+outside the room receives it.
+
+`player.told` is `tell <player> <text>`: a private line to an awake character
+anywhere in the world. The sender receives `self: true` with
+`You tell Ben, "hello there".`; the target receives `self: false` with
+`Ada tells you, "hello there".`; nobody else in either room receives it. A
+target that is asleep or stone is `error{not_awake}` and the tell is dropped:
+the protocol has no offline queue, and login does not replay it. An unknown
+name is `error{not_found}`.
 
 `player.said.text` is the rendered line (`Ada says, "hello".`), not the raw
 utterance. A structured raw-message field is a v2.1 candidate; v2.0 clients
@@ -457,7 +470,8 @@ with v2.1, where the command set grows.
 `not_portable`, `container_closed`, `no_exit`, `locked`, `already_open`,
 `already_closed`, `malformed_message`, `unknown_message`, `not_joined`,
 `already_joined`, `name_taken`, `not_authenticated`, `invalid_key`,
-`invalid_name`, `rate_limited`, `internal`, `unsupported_version`.
+`invalid_name`, `not_awake`, `rate_limited`, `internal`,
+`unsupported_version`.
 
 An `error` is non-fatal unless the code says otherwise; clients print
 `message` and continue.
@@ -487,6 +501,8 @@ protocol version, `4004` idle timeout, `4005` rate-limit abuse. v2.0 uses
 | `who` | `who.list` (private, server-wide, includes asleep) |
 | `help` / `h` | `notice` (private) |
 | `say <text>` | actor: `player.said` (`self:true`); room: `player.said` (`self:false`) |
+| `emote <action>` / `me <action>` | actor: `player.emoted` (`self:true`); room: `player.emoted` (`self:false`); no other room |
+| `tell <player> <text>` | sender and awake target: `player.told` (`self:true`/`false`), no room broadcast; asleep/stone target: `error{not_awake}`; unknown name: `error{not_found}` |
 | `hello` | `notice` (private) |
 | `exit` / `quit` | close `1000`; no direct reply; `room.leave` to the room |
 | malformed / unknown | `error`; socket stays open |
@@ -522,16 +538,21 @@ in-progress release; its entry grows as each documented addition lands.
   against the same database and changes when `admin seed --reset` replaces the
   world.
 - `player.emoted`, `player.told`, `who.list`, and `shutdown`.
-- `who` lists the server-wide durable roster (`who.list`) with `asleep` and
-  `stone`; an authenticated disconnect sleeps the character in place, drops
-  `dropped_on_sleep` items into its room, and login wakes it with the rest of
-  its inventory.
+- `emote <action>` (alias `me`) is room-local; `tell <player> <text>` is
+  private to the sender and an awake target, with no room broadcast and no
+  offline queue. A sleeping/stone target is `error{not_awake}`; an unknown
+  name is `error{not_found}`.
+- `who` lists the server-wide durable roster (`who.list`), including the
+  requester, with `asleep` and `stone`; an authenticated disconnect sleeps the
+  character in place, drops `dropped_on_sleep` items into its room, and login
+  wakes it with the rest of its inventory.
 - `room.state` player entries and `room.leave` carry `asleep`/`stone` (and
   `dropped[]` on a sleep) for a stone occupant.
 - `room.state.data.room.geometry`: the optional room map, with its validation
   rules.
-- Error codes `invalid_key`, `invalid_name`, `not_authenticated`, and
-  `rate_limited`; close codes `4001`, `4002`, `4004`, and `4005`.
+- Error codes `invalid_key`, `invalid_name`, `not_authenticated`,
+  `not_awake`, and `rate_limited`; close codes `4001`, `4002`, `4004`, and
+  `4005`.
 
 ### v2.0 — protocol 2
 
