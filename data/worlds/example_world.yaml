@@ -1,0 +1,94 @@
+# A small, valid world used by tests/test_content_check.py. It exercises the
+# YAML model an area author writes: reciprocal exits are implicit, locks name a
+# portable key, containers are acyclic, and effects use the dotted schema.
+name: Example World
+start_room: gate
+rng_seed: 20261121
+
+rooms:
+  - id: gate
+    name: Village Gate
+    description: |
+      A heavy stone gate stands open to the north. A brass key hangs on a peg.
+    area: example
+    geometry:
+      cells:
+        - "##+##"
+        - "#...#"
+        - "#...#"
+        - "#...#"
+        - "#####"
+    exits:
+      north:
+        to: market
+        locked: true
+        key: brass_key
+        label: oak door
+    objects:
+      - id: brass_key
+        name: brass key
+        description: A small brass key, warm to the touch.
+        weight: 0.1
+        portable: true
+      - id: sign
+        name: village sign
+        description: The arrows point north to the market.
+        kind: readable
+        readable_text: North to the market. The old shop is east of it.
+    npcs:
+      - id: guard
+        name: the guard
+        description: A sleepy guard leaning on a spear.
+        dialogue:
+          greeting: "Halt. The gate is locked after dark."
+          default: "The guard watches the road."
+          topics:
+            gate: "The gate opens with the brass key."
+            market: "The market is north of here."
+        wander: false
+    effects:
+      on_enter:
+        - type: light.dim
+          params:
+            color: "#3355ff"
+            intensity: 0.3
+
+  - id: market
+    name: Marketplace
+    description: |
+      Vendors cry their wares around a stone well. A shop stands to the east.
+    area: example
+    exits:
+      east: shop
+    objects:
+      - id: chest
+        name: oak chest
+        description: A sturdy oak chest bound in iron.
+        kind: container
+        locked: true
+        required_key: brass_key
+        state:
+          open: false
+        contains:
+          - bread
+      - id: bread
+        name: loaf of bread
+        description: A stale but edible loaf.
+        weight: 0.3
+      - id: torch
+        name: torch
+        description: A flickering wooden torch.
+        weight: 0.5
+        light_source: true
+        lit: false
+
+  - id: shop
+    name: Alchemist Shop
+    description: Vials glimmer on shelves. It smells of sulfur.
+    area: example
+    objects:
+      - id: ledger
+        name: mildewed ledger
+        description: The last entry is dated three winters ago.
+        kind: readable
+        readable_text: The last entry is dated three winters ago.

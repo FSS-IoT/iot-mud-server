@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 from src.mud.config import ConfigError, load_config
+from src.mud.content.validator import check_world
 from src.mud.storage.db import SCHEMA_VERSION, DatabaseError, open_database
 
 
@@ -28,6 +29,16 @@ def build_parser() -> argparse.ArgumentParser:
     init_db.add_argument(
         "--db", type=Path, default=None,
         help="SQLite database path (overrides [storage].path)")
+
+    content = commands.add_parser(
+        "content", help="validate authored world content")
+    content_commands = content.add_subparsers(
+        dest="content_command", required=True)
+    check = content_commands.add_parser(
+        "check", help="validate a YAML world without touching the database")
+    check.add_argument(
+        "--world", type=Path, required=True,
+        help="YAML world file, or a directory with world.yaml and areas/")
     return parser
 
 
@@ -53,6 +64,15 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         conn.close()
         print(f"initialized {path} (schema version {SCHEMA_VERSION})")
+        return 0
+
+    if args.command == "content":
+        errors = check_world(args.world)
+        if errors:
+            for error in errors:
+                print(error, file=sys.stderr)
+            return 1
+        print(f"{args.world}: ok")
         return 0
 
     return 2
