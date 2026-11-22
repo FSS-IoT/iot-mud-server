@@ -1,24 +1,151 @@
 import json
 from pathlib import Path
 
+from src.mud.config import DEFAULT_WORLD
 from src.mud.content import Entity, Room
+from src.mud.content.models import OPPOSITE_EXITS, Exit
+from src.mud.content.models import load_world as load_content_world
+from src.mud.content.validator import validate_world
 from src.mud.engine.core import Engine
-from src.mud.world.geometry import validate_geometry
+from src.mud.world.geometry import WorldDataError, validate_geometry
+
+YAML_SUFFIXES = frozenset({".yaml", ".yml"})
 
 
 async def load_world(engine: Engine, data_path: str | Path) -> None:
-    """Populate the engine from a world JSON file.
+    """Populate the engine from a world file.
+
+    A `.yaml`/`.yml` file or a world directory is read through the v2.1
+    content model and checked by the semantic validator before any engine
+    state is built. A `.json` file keeps the v2.0 loader that legacy tests
+    still exercise, so both formats build the same effective world.
 
     Geometry is validated while the world loads: a bad map raises
     `WorldDataError` instead of being served. A room without a `geometry` key
     stays geometry-less, and the protocol simply omits the field.
     """
     path = Path(data_path)
+    if path.is_dir() or path.suffix.lower() in YAML_SUFFIXES:
+        await _load_yaml_world(engine, path)
+        return
+    await _load_json_world(engine, path)
+
+
+async def _load_yaml_world(engine: Engine, data_path: Path) -> None:
+    """Build the engine from the v2.1 YAML model.
+
+    The content model rejects a missing, malformed, or wrongly shaped file.
+    The semantic validator then rejects a world that does not hold together
+    (duplicate ids, dangling or doubly declared exits, unreachable rooms,
+    container cycles, missing keys, malformed effects, bad geometry). Startup
+    fails with those messages rather than serving a partial world.
+    """
+    loaded = load_content_world(data_path)
+    errors = validate_world(loaded)
+    if errors:
+        raise WorldDataError("\n".join(errors))
+
+    world = loaded.world
+
+    # 1. First pass: create every object, globally. `contains` links by
+    # object id, so a child may be declared in any room and resolved below.
+    entity_map: dict[str, Entity] = {}
+    contained_ids: set[str] = set()
+    for room_data in world.rooms:
+        for obj in room_data.objects:
+            entity = Entity(
+                name=obj.name,
+                description=obj.description,
+                weight=obj.weight,
+                readable=obj.kind == "readable",
+                light_source=obj.light_source,
+                item_id=obj.id,
+                locked=obj.locked,
+                required_key=obj.required_key,
+                lit=obj.lit,
+            )
+            entity.instance_id = obj.id
+            # Kept for the v2.1.3 read/effects seam. The v2.0 adapter reads
+            # `description`, so the YAML carries the same text in both places.
+            entity.readable_text = obj.readable_text or obj.description
+            entity_map[obj.id] = entity
+
+    # 1b. Container contents, after every referenced object exists.
+    for room_data in world.rooms:
+        for obj in room_data.objects:
+            container = entity_map[obj.id]
+            for child_id in obj.contains:
+                contained_ids.add(child_id)
+                container.add_content(entity_map[child_id])
+
+    # 2. Second pass: create all rooms.
+    room_map: dict[str, Room] = {}
+    for room_data in world.rooms:
+        room = Room(
+            name=room_data.name,
+            description=room_data.description,
+            dark=room_data.dark,
+        )
+        room.item_id = room_data.id
+        room_map[room_data.id] = room
+
+    # 3. Exits. The YAML declares each exit once; create the reciprocal here.
+    # `one_way` opts out, and `setdefault` keeps an explicit target if a
+    # later room happens to name the same direction (the validator rejects
+    # that collision before this runs).
+    for room_data in world.rooms:
+        room = room_map[room_data.id]
+        for direction, target in room_data.exits.items():
+            if isinstance(target, Exit):
+                target_id = target.to
+                one_way = target.one_way
+            else:
+                target_id = target
+                one_way = False
+            destination = room_map[target_id]
+            room.exits[direction] = destination
+            opposite = OPPOSITE_EXITS.get(direction)
+            if not one_way and opposite is not None:
+                destination.exits.setdefault(opposite, room)
+
+    # 4. Geometry, now that the effective exit map includes reciprocals.
+    for room_data in world.rooms:
+        if room_data.geometry is None:
+            continue
+        room = room_map[room_data.id]
+        room.geometry = validate_geometry(
+            room_data.id, room_data.geometry, room.exits,
+        )
+
+    # 5. Place objects. A contained object belongs to its container, not to
+    # the room it is declared in.
+    for room_data in world.rooms:
+        room = room_map[room_data.id]
+        for obj in room_data.objects:
+            if obj.id not in contained_ids:
+                room.add_content(entity_map[obj.id])
+
+    # 6. Finalize engine state.
+    for room in room_map.values():
+        engine._rooms[room.name] = room
+    engine._player_location = room_map[world.start_room]
+
+    # Keep the legacy single-player placeholder for backward compatibility;
+    # it is not a real item and must not be added to a room's contents.
+    engine.player = Entity("Adventurer", "A traveler passing through.")
+
+
+async def _load_json_world(engine: Engine, data_path: Path) -> None:
+    """Populate the engine from the v2.0 JSON file.
+
+    Kept for the legacy geometry tests and for worlds written before the
+    YAML format. The product default is YAML (`load_demo_village`).
+    """
+    path = Path(data_path)
     if not path.exists():
         raise FileNotFoundError(f"World data file not found at {path}")
 
-    with open(path, 'r') as f:
-        data = json.load(f)
+    data = json.loads(path.read_text(encoding="utf-8"))
 
     # Maps to hold created objects during construction phase
     item_map = {}
@@ -105,13 +232,10 @@ async def load_world(engine: Engine, data_path: str | Path) -> None:
 
 
 async def load_demo_village(engine: Engine) -> None:
-    """
-    Populates the engine from a JSON definition file.
-    Implements TASK-015: Data-Driven Worlds.
-    """
+    """Populate the engine from the product YAML world."""
     # Find project root relative to this file (src/mud/world/loader.py -> project root)
     current_file = Path(__file__).resolve()
     project_root = current_file.parents[3]
-    data_path = project_root / "data" / "worlds" / "starting_village.json"
+    data_path = project_root / DEFAULT_WORLD
 
     await load_world(engine, data_path)
