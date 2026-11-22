@@ -6,9 +6,11 @@ a failed write raises `StorageWriteError` and leaves both the world and the wire
 unchanged.
 
 `PlayerStore` writes the actor's half — which room the player is in and which
-objects it owns. `WorldStore` reads where any object is. Seeding the world from
-content lives in `src/mud/world/seed.py`; loading a seeded world back into the
-engine is still open. This module only makes each mutation durable.
+objects it owns — and `load()` reads it back for login. `WorldStore` reads
+where any object is. Seeding the world from content lives in
+`src/mud/world/seed.py`. This module is the only path between the engine and
+those rows: mutations go through the write methods, and login goes through
+`PlayerStore.load()`.
 
 Every mutation is one SQLite transaction. A store also creates the rows it
 references when they are missing, because a fresh database has no seed yet; the
@@ -47,6 +49,14 @@ class ObjectLocation:
     room_id: str | None = None
     owner_id: int | None = None
     container_id: str | None = None
+
+
+@dataclass(frozen=True)
+class CharacterState:
+    """A character's durable half: the room it is in and the objects it owns."""
+
+    room_id: str | None
+    items: tuple[str, ...]
 
 
 class WorldStore:
@@ -124,6 +134,15 @@ class PlayerStore:
             (self.name,),
         ).fetchall()
         return tuple(row["id"] for row in rows)
+
+    def load(self) -> CharacterState:
+        """Read the character's durable room and inventory in one call.
+
+        Login restores exactly this: the room key to place the character in and
+        the object keys to find in the freshly loaded world. Both reads are
+        plain queries; nothing here writes or moves a row.
+        """
+        return CharacterState(room_id=self.room_id, items=self.contents())
 
     def move(self, *, room: Any) -> None:
         """Commit that the player is now in `room`."""

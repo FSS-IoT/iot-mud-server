@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import re
+from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 from src.mud.content import Entity, Room, Player
+from src.mud.storage.keys import object_key
 
 if TYPE_CHECKING:
     from src.mud.storage.store import WriteThroughStore
@@ -83,6 +85,61 @@ class Engine:
         if room is None:
             return []
         return [p for p in self._players.values() if p.location is room]
+
+    def _object_slots(self) -> dict[str, tuple[Entity, Entity]]:
+        """Every loaded object keyed by durable id, with the entity holding it.
+
+        The store records object ids, not object identities, so login has to
+        find the entity the freshly loaded world built for that id. Rooms and
+        containers are both `Entity.contents` holders; a player is never walked
+        into, so another character's inventory cannot be mistaken for the
+        world's.
+        """
+        slots: dict[str, tuple[Entity, Entity]] = {}
+
+        def walk(holder: Entity) -> None:
+            for item in holder.contents:
+                if isinstance(item, Player):
+                    continue
+                slots.setdefault(object_key(item), (item, holder))
+                walk(item)
+
+        for room in self._rooms.values():
+            walk(room)
+        return slots
+
+    def restore_player(
+        self,
+        player: Player,
+        *,
+        room: Room | None,
+        item_keys: Iterable[str],
+    ) -> None:
+        """Put a freshly registered player back where the store left it.
+
+        `room` is the durable room, or None when the loaded world no longer has
+        it; the character then stays at the start room. Every key in
+        `item_keys` leaves the room or container the loader authored it into
+        and joins the player's inventory. A key with no loaded object is
+        ignored: a world reset clears inventory, and a missing object must not
+        fail a login.
+        """
+        if room is not None and player.location is not room:
+            if player.location is not None:
+                player.location.remove_content(player)
+            player.location = room
+            room.add_content(player)
+
+        slots = self._object_slots()
+        for key in item_keys:
+            slot = slots.get(key)
+            if slot is None:
+                continue
+            item, holder = slot
+            if item is player or holder is player:
+                continue
+            holder.remove_content(item)
+            player.add_content(item)
 
     async def move_player(self, name: str, direction: str) -> tuple[bool, str]:
         """Move a *registered* player one step in `direction`, if an exit allows.
