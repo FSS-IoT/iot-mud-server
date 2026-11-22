@@ -1,0 +1,682 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Architecture review — iot-mud-server</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="module">
+      import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+      mermaid.initialize({
+        startOnLoad: true,
+        theme: "neutral",
+        securityLevel: "loose",
+        flowchart: { curve: "basis" },
+        sequence: { diagramMarginX: 8, diagramMarginY: 8 },
+      });
+    </script>
+    <style>
+      .seam { stroke-dasharray: 4 4; }
+      .leak { stroke: #dc2626; }
+      .deep { background: linear-gradient(135deg, #0f172a, #1e293b); }
+      .mermaid svg { max-height: 330px; height: auto; }
+      .band { border-left-width: 4px; }
+      .arrow { color: #64748b; }
+    </style>
+  </head>
+  <body class="bg-stone-50 text-slate-900 font-sans antialiased">
+    <main class="max-w-6xl mx-auto px-6 py-12 space-y-12">
+      <header class="space-y-5">
+        <div class="flex flex-wrap items-end justify-between gap-4">
+          <div>
+            <p class="text-xs uppercase tracking-[0.25em] text-slate-500">Architecture review</p>
+            <h1 class="font-serif text-4xl md:text-5xl tracking-tight">iot-mud-server</h1>
+            <p class="text-sm text-slate-500 mt-2">
+              2026-11-22 · <span class="font-mono">main bcdfcb0</span> · v2.1.4 · 8,101 lines in <span class="font-mono">src/mud</span>
+            </p>
+          </div>
+          <div class="text-xs text-slate-500 space-y-1">
+            <div class="flex items-center gap-2"><span class="inline-block w-4 h-4 border-2 border-slate-700 bg-white"></span> module</div>
+            <div class="flex items-center gap-2"><span class="inline-block w-6 border-t-2 border-dashed border-slate-500"></span> seam</div>
+            <div class="flex items-center gap-2"><span class="inline-block w-6 border-t-2 border-red-600"></span> leakage</div>
+            <div class="flex items-center gap-2"><span class="inline-block w-4 h-4 deep"></span> deep module</div>
+          </div>
+        </div>
+        <div class="h-px bg-slate-200"></div>
+      </header>
+
+      <section id="candidates" class="space-y-10">
+
+        <!-- 01 -->
+        <article id="c1" class="scroll-mt-8 rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+          <div class="p-6 space-y-5">
+            <div class="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p class="text-xs uppercase tracking-[0.2em] text-slate-400">01 · command interface</p>
+                <h2 class="font-serif text-2xl md:text-3xl">Return outcomes, not prose</h2>
+              </div>
+              <div class="flex gap-2">
+                <span class="rounded-full bg-emerald-100 text-emerald-800 px-3 py-1 text-xs font-semibold">Strong</span>
+                <span class="rounded-full bg-slate-100 text-slate-600 px-3 py-1 text-xs">in-process</span>
+              </div>
+            </div>
+            <p class="font-mono text-xs text-slate-500 leading-relaxed">
+              src/mud/engine/core.py:1359 · src/mud/protocol/adapter.py:440, 451, 550, 615 · src/mud/net/server.py:132
+            </p>
+
+            <div class="grid md:grid-cols-2 gap-4">
+              <div class="rounded-lg border border-slate-200 bg-stone-50 p-4">
+                <p class="text-[10px] uppercase tracking-[0.2em] text-slate-400 mb-2">Before</p>
+                <pre class="mermaid">
+flowchart TB
+  C[client] --> A[adapter.execute]
+  A -->|parse verb| E[Engine.process_command]
+  E -->|parse verb again| H[23 handlers]
+  H -->|reply: str| E
+  E -->|reply: str| A
+  A -. snapshot + id maps .-> H
+  A -->|reply.startswith / _classify| O[wire events]
+  classDef bad fill:#fee2e2,stroke:#dc2626,color:#991b1b;
+  class A,E,H bad
+                </pre>
+              </div>
+              <div class="rounded-lg border border-slate-200 bg-stone-50 p-4">
+                <p class="text-[10px] uppercase tracking-[0.2em] text-slate-400 mb-2">After</p>
+                <pre class="mermaid">
+flowchart TB
+  C2[client] --> A2[adapter: shape only]
+  A2 -->|execute| E2[Engine.execute]
+  E2 -->|CommandOutcome| A2
+  A2 --> O2[wire events]
+  classDef deepNode fill:#0f172a,stroke:#0f172a,color:#fff;
+  class E2 deepNode
+                </pre>
+              </div>
+            </div>
+
+            <p><span class="font-semibold">Problem.</span> The engine returns a prose string, so the adapter parses the same command again and infers what happened from snapshots and <span class="font-mono text-sm">reply.startswith</span>; a wording change can silently drop an event.</p>
+            <p><span class="font-semibold">Solution.</span> <span class="font-mono text-sm">Engine.execute(actor, text)</span> returns a typed <span class="font-mono text-sm">CommandOutcome</span>; both adapters shape the same outcome, and the v2 adapter stops parsing and diffing.</p>
+            <ul class="grid sm:grid-cols-2 gap-x-6 gap-y-1 text-sm text-slate-700">
+              <li>• One verb, one implementation</li>
+              <li>• Events stop depending on prose</li>
+              <li>• Tests assert outcomes</li>
+              <li>• Adapter shrinks to shaping</li>
+            </ul>
+          </div>
+        </article>
+
+        <!-- 02 -->
+        <article id="c2" class="scroll-mt-8 rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+          <div class="p-6 space-y-5">
+            <div class="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p class="text-xs uppercase tracking-[0.2em] text-slate-400">02 · durability seam</p>
+                <h2 class="font-serif text-2xl md:text-3xl">One durable mutation, not one store method per verb</h2>
+              </div>
+              <div class="flex gap-2">
+                <span class="rounded-full bg-emerald-100 text-emerald-800 px-3 py-1 text-xs font-semibold">Strong</span>
+                <span class="rounded-full bg-slate-100 text-slate-600 px-3 py-1 text-xs">local-substitutable</span>
+              </div>
+            </div>
+            <p class="font-mono text-xs text-slate-500 leading-relaxed">
+              src/mud/storage/store.py:105, 158, 173, 190, 207, 236 · src/mud/engine/core.py:819, 1073 · SPEC.md:58, 78
+            </p>
+
+            <div class="grid md:grid-cols-2 gap-4">
+              <div class="rounded-lg border border-slate-200 bg-stone-50 p-4 min-h-[280px]">
+                <p class="text-[10px] uppercase tracking-[0.2em] text-slate-400 mb-3">Before · verb-shaped store</p>
+                <div class="flex items-stretch gap-3 text-xs">
+                  <div class="flex-1 rounded border-2 border-slate-700 bg-white p-3">
+                    <p class="font-semibold uppercase tracking-wider text-slate-500">Engine</p>
+                    <p class="mt-2">take · drop · move<br/>sleep · wake</p>
+                  </div>
+                  <div class="flex items-center arrow text-xl">→</div>
+                  <div class="flex-1 rounded border-2 border-slate-700 bg-white p-3">
+                    <p class="font-semibold uppercase tracking-wider text-slate-500">PlayerStore</p>
+                    <div class="mt-2 space-y-1 font-mono text-[11px]">
+                      <div class="rounded bg-slate-100 px-2 py-0.5">move(room)</div>
+                      <div class="rounded bg-slate-100 px-2 py-0.5">take(item, room)</div>
+                      <div class="rounded bg-slate-100 px-2 py-0.5">drop(item, room)</div>
+                      <div class="rounded bg-slate-100 px-2 py-0.5">sleep()</div>
+                      <div class="rounded bg-slate-100 px-2 py-0.5">wake()</div>
+                    </div>
+                  </div>
+                </div>
+                <div class="mt-4 rounded border border-red-300 bg-red-50 p-3 text-xs text-red-800">
+                  <span class="font-semibold">put · get from · use</span> mutate memory and never cross the seam. Restart restores the pre-container inventory.
+                </div>
+              </div>
+              <div class="rounded-lg border border-slate-200 bg-stone-50 p-4 min-h-[280px]">
+                <p class="text-[10px] uppercase tracking-[0.2em] text-slate-400 mb-3">After · one commit</p>
+                <div class="flex items-stretch gap-3 text-xs">
+                  <div class="flex-1 rounded border-2 border-slate-700 bg-white p-3">
+                    <p class="font-semibold uppercase tracking-wider text-slate-500">Engine</p>
+                    <p class="mt-2">records changed<br/>locations + flags</p>
+                  </div>
+                  <div class="flex items-center arrow text-xl">→</div>
+                  <div class="flex-1 rounded deep text-white p-3 border-2 border-slate-900">
+                    <p class="font-semibold uppercase tracking-wider text-slate-300">WorldStore</p>
+                    <div class="mt-2 space-y-1 font-mono text-[11px]">
+                      <div class="rounded bg-white/10 px-2 py-0.5">commit(changes)</div>
+                      <div class="rounded bg-white/10 px-2 py-0.5">place(item, at)</div>
+                      <div class="rounded bg-white/10 px-2 py-0.5">set(entity, flag)</div>
+                    </div>
+                  </div>
+                </div>
+                <div class="mt-4 rounded border border-emerald-300 bg-emerald-50 p-3 text-xs text-emerald-900">
+                  Every verb writes once; a new verb cannot forget the store.
+                </div>
+              </div>
+            </div>
+
+            <p><span class="font-semibold">Problem.</span> <span class="font-mono text-sm">PlayerStore</span> mirrors five verbs, so durability is opt-in per handler; <span class="font-mono text-sm">put</span> and <span class="font-mono text-sm">get from</span> change inventory without a write, and a restart loses that move (SPEC v2.1.1 inventory persistence).</p>
+            <p><span class="font-semibold">Solution.</span> The engine records the object locations and flags a command changed and calls one location-shaped <span class="font-mono text-sm">commit(changes)</span>; the store no longer knows the command vocabulary.</p>
+            <ul class="grid sm:grid-cols-2 gap-x-6 gap-y-1 text-sm text-slate-700">
+              <li>• Durability stops depending on the verb</li>
+              <li>• put/get survive a restart</li>
+              <li>• Store interface shrinks</li>
+              <li>• One transaction per command</li>
+            </ul>
+          </div>
+        </article>
+
+        <!-- 03 -->
+        <article id="c3" class="scroll-mt-8 rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+          <div class="p-6 space-y-5">
+            <div class="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p class="text-xs uppercase tracking-[0.2em] text-slate-400">03 · world pipeline</p>
+                <h2 class="font-serif text-2xl md:text-3xl">Compile the world once</h2>
+              </div>
+              <div class="flex gap-2">
+                <span class="rounded-full bg-emerald-100 text-emerald-800 px-3 py-1 text-xs font-semibold">Strong</span>
+                <span class="rounded-full bg-slate-100 text-slate-600 px-3 py-1 text-xs">in-process</span>
+              </div>
+            </div>
+            <p class="font-mono text-xs text-slate-500 leading-relaxed">
+              src/mud/content/models.py:452, 112 · src/mud/content/validator.py:117 · src/mud/world/seed.py:82, 118 · src/mud/world/loader.py:35, 140 · src/mud/protocol/adapter.py:295
+            </p>
+
+            <div class="grid md:grid-cols-2 gap-4">
+              <div class="rounded-lg border border-slate-200 bg-stone-50 p-4">
+                <p class="text-[10px] uppercase tracking-[0.2em] text-slate-400 mb-3">Before · four whole-world walks</p>
+                <div class="space-y-1.5 text-xs">
+                  <div class="band border-slate-400 bg-white px-3 py-2"><span class="font-mono">content.models</span> · parse YAML into Pydantic</div>
+                  <div class="band border-slate-400 bg-white px-3 py-2"><span class="font-mono">validator</span> · re-walk ids, exits, locks, geometry</div>
+                  <div class="band border-amber-500 bg-amber-50 px-3 py-2"><span class="font-mono">world.seed</span> · expand reciprocal exits → rows</div>
+                  <div class="band border-amber-500 bg-amber-50 px-3 py-2"><span class="font-mono">world.loader</span> · expand reciprocal exits → engine</div>
+                  <div class="band border-red-400 bg-red-50 px-3 py-2"><span class="font-mono">adapter</span> · re-derive exit locks and labels</div>
+                </div>
+                <p class="mt-3 text-[11px] text-red-700">The same exit/lock/geometry rules live in four places.</p>
+              </div>
+              <div class="rounded-lg border border-slate-200 bg-stone-50 p-4">
+                <p class="text-[10px] uppercase tracking-[0.2em] text-slate-400 mb-3">After · one normalized value</p>
+                <div class="deep rounded border-2 border-slate-900 text-white px-3 py-3 text-xs">
+                  <p class="font-semibold uppercase tracking-wider text-slate-300">World</p>
+                  <p class="mt-1 text-slate-200">parse · validate · effective exits · shared locks · containment · geometry</p>
+                </div>
+                <div class="grid grid-cols-2 gap-2 mt-3 text-xs">
+                  <div class="rounded border-2 border-slate-700 bg-white p-3"><span class="font-mono">seed</span><br/>DB rows</div>
+                  <div class="rounded border-2 border-slate-700 bg-white p-3"><span class="font-mono">loader</span><br/>engine entities</div>
+                </div>
+                <p class="mt-3 text-[11px] text-slate-600">Both consume one graph; the adapter reads typed state.</p>
+              </div>
+            </div>
+
+            <p><span class="font-semibold">Problem.</span> The effective world is derived three times: the validator, <span class="font-mono text-sm">seed</span>, and <span class="font-mono text-sm">loader</span> each expand reciprocal exits and shared locks; geometry is validated three times and containment placement twice. The seeded rooms/exits/NPCs are write-only at runtime and have no parity test, so the two worlds can drift.</p>
+            <p><span class="font-semibold">Solution.</span> Compile the validated content model once into one <span class="font-mono text-sm">World</span> value — rooms by id, effective exits, shared locks, placements, normalized geometry, typed capabilities; <span class="font-mono text-sm">seed</span> and <span class="font-mono text-sm">loader</span> become thin consumers.</p>
+            <ul class="grid sm:grid-cols-2 gap-x-6 gap-y-1 text-sm text-slate-700">
+              <li>• One exit/lock expansion</li>
+              <li>• Seed and loader agree</li>
+              <li>• Validation travels with the world</li>
+              <li>• Adapter stops re-deriving</li>
+            </ul>
+          </div>
+        </article>
+
+        <!-- 04 -->
+        <article id="c4" class="scroll-mt-8 rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+          <div class="p-6 space-y-5">
+            <div class="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p class="text-xs uppercase tracking-[0.2em] text-slate-400">04 · engine seam</p>
+                <h2 class="font-serif text-2xl md:text-3xl">One actor at the engine seam</h2>
+              </div>
+              <div class="flex gap-2">
+                <span class="rounded-full bg-amber-100 text-amber-800 px-3 py-1 text-xs font-semibold">Worth exploring</span>
+                <span class="rounded-full bg-slate-100 text-slate-600 px-3 py-1 text-xs">ports &amp; adapters</span>
+              </div>
+            </div>
+            <p class="font-mono text-xs text-slate-500 leading-relaxed">
+              src/mud/engine/core.py:29, 30, 1359, 699, 752 · src/mud/net/server.py · 13 test files import MudServer
+            </p>
+
+            <div class="grid md:grid-cols-2 gap-4">
+              <div class="rounded-lg border border-slate-200 bg-stone-50 p-4 min-h-[260px]">
+                <p class="text-[10px] uppercase tracking-[0.2em] text-slate-400 mb-3">Before · two actors inside</p>
+                <div class="rounded border-2 border-slate-700 bg-white p-3 text-xs">
+                  <p class="font-semibold uppercase tracking-wider text-slate-500">Engine</p>
+                  <div class="grid grid-cols-2 gap-2 mt-2">
+                    <div class="rounded bg-red-50 border border-red-300 p-2"><span class="font-mono">self.player</span><br/>single-player</div>
+                    <div class="rounded bg-slate-100 p-2"><span class="font-mono">self._players</span><br/>multiplayer</div>
+                  </div>
+                  <p class="mt-2 text-[11px] text-slate-600">Every handler branches: legacy path or registered player.</p>
+                </div>
+                <div class="mt-3 grid grid-cols-2 gap-2 text-[11px]">
+                  <div class="rounded border border-slate-300 bg-white p-2 text-center">v1 server<br/><span class="text-slate-500">binds the legacy slot</span></div>
+                  <div class="rounded border border-slate-300 bg-white p-2 text-center">v2 server<br/><span class="text-slate-500">binds a session name</span></div>
+                </div>
+              </div>
+              <div class="rounded-lg border border-slate-200 bg-stone-50 p-4 min-h-[260px]">
+                <p class="text-[10px] uppercase tracking-[0.2em] text-slate-400 mb-3">After · one required actor</p>
+                <div class="deep rounded border-2 border-slate-900 text-white p-3 text-xs">
+                  <p class="font-semibold uppercase tracking-wider text-slate-300">Engine.execute(actor, text)</p>
+                  <p class="mt-2 text-slate-200">One <span class="font-mono">Player</span> in; one handler path out.</p>
+                </div>
+                <div class="mt-3 grid grid-cols-2 gap-2 text-[11px]">
+                  <div class="rounded border border-slate-300 bg-white p-2 text-center">v1 adapter<br/><span class="text-slate-500">creates one actor</span></div>
+                  <div class="rounded border border-slate-300 bg-white p-2 text-center">v2 adapter<br/><span class="text-slate-500">uses the authenticated one</span></div>
+                </div>
+                <p class="mt-3 text-[11px] text-emerald-800">23 handlers lose a branch; <span class="font-mono">player_name: Optional</span> disappears.</p>
+              </div>
+            </div>
+
+            <p><span class="font-semibold">Problem.</span> The engine carries <span class="font-mono text-sm">self.player</span> and <span class="font-mono text-sm">self._player_location</span> beside <span class="font-mono text-sm">self._players</span>, so every handler has a legacy branch and the actor is optional through 69 references.</p>
+            <p><span class="font-semibold">Solution.</span> Require an actor at the seam; the v1 adapter creates one for its single session, the v2 adapter passes the authenticated player, and the engine has one path.</p>
+            <ul class="grid sm:grid-cols-2 gap-x-6 gap-y-1 text-sm text-slate-700">
+              <li>• One actor, one path</li>
+              <li>• 23 handlers lose a branch</li>
+              <li>• V1 becomes a thin adapter</li>
+              <li>• Optional leaves the seam</li>
+            </ul>
+            <div class="rounded border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900">
+              Current plan keeps the v1 server for history. This deepens the engine without deleting v1; the deletion is a separate decision (candidate 08).
+            </div>
+          </div>
+        </article>
+
+        <!-- 05 -->
+        <article id="c5" class="scroll-mt-8 rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+          <div class="p-6 space-y-5">
+            <div class="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p class="text-xs uppercase tracking-[0.2em] text-slate-400">05 · server responsibilities</p>
+                <h2 class="font-serif text-2xl md:text-3xl">A Session module owns connection policy</h2>
+              </div>
+              <div class="flex gap-2">
+                <span class="rounded-full bg-amber-100 text-amber-800 px-3 py-1 text-xs font-semibold">Worth exploring</span>
+                <span class="rounded-full bg-slate-100 text-slate-600 px-3 py-1 text-xs">in-process</span>
+              </div>
+            </div>
+            <p class="font-mono text-xs text-slate-500 leading-relaxed">
+              src/mud/net/v2_server.py:210, 265, 349, 378, 750, 790, 819 · tests/test_disconnect_cleanup.py:71 · tests/test_npc_wander.py:314
+            </p>
+
+            <div class="grid md:grid-cols-2 gap-4">
+              <div class="rounded-lg border border-slate-200 bg-stone-50 p-4">
+                <p class="text-[10px] uppercase tracking-[0.2em] text-slate-400 mb-3">Before · one 1,072-line module</p>
+                <div class="rounded border-2 border-slate-700 bg-white p-3">
+                  <p class="font-semibold uppercase tracking-wider text-slate-500 text-xs">V2Server</p>
+                  <div class="grid grid-cols-3 gap-1.5 mt-2 text-[10px] text-center">
+                    <div class="rounded bg-slate-100 p-1.5">transport</div>
+                    <div class="rounded bg-slate-100 p-1.5">hello/auth</div>
+                    <div class="rounded bg-slate-100 p-1.5">session maps</div>
+                    <div class="rounded bg-slate-100 p-1.5">broadcast</div>
+                    <div class="rounded bg-slate-100 p-1.5">tells</div>
+                    <div class="rounded bg-slate-100 p-1.5">sleep/cleanup</div>
+                    <div class="rounded bg-slate-100 p-1.5">idle sweep</div>
+                    <div class="rounded bg-slate-100 p-1.5">NPC tick</div>
+                    <div class="rounded bg-slate-100 p-1.5">bootstrap</div>
+                  </div>
+                </div>
+                <div class="mt-3 rounded border border-red-300 bg-red-50 p-2 text-[11px] text-red-800">
+                  Tests reach into <span class="font-mono">_sessions</span> and <span class="font-mono">_ws_by_name</span> because there is no presence interface.
+                </div>
+              </div>
+              <div class="rounded-lg border border-slate-200 bg-stone-50 p-4">
+                <p class="text-[10px] uppercase tracking-[0.2em] text-slate-400 mb-3">After · three small interfaces</p>
+                <div class="space-y-2 text-[11px]">
+                  <div class="rounded border-2 border-slate-700 bg-white p-2"><span class="font-semibold">V2Server</span> · accept loop · hello · bootstrap</div>
+                  <div class="deep rounded border-2 border-slate-900 text-white p-2"><span class="font-semibold text-slate-300">SessionTable</span> · bind · send · broadcast · forget · expire_idle</div>
+                  <div class="rounded border-2 border-slate-700 bg-white p-2"><span class="font-semibold">Session</span> · phase · auth budget · command bucket · idle</div>
+                  <div class="rounded border border-dashed border-slate-400 bg-white p-2 text-slate-500"><span class="font-semibold">Admin bridge</span> · later, held branch</div>
+                </div>
+              </div>
+            </div>
+
+            <p><span class="font-semibold">Problem.</span> <span class="font-mono text-sm">Session</span> is nine mutable fields with no behavior; <span class="font-mono text-sm">_sessions</span> and <span class="font-mono text-sm">_ws_by_name</span> must stay in lockstep, and four sites repeat the name-to-socket lookup and removal. Auth budget, command bucket, and idle deadline live on the server, so tests reach into private maps.</p>
+            <p><span class="font-semibold">Solution.</span> <span class="font-mono text-sm">Session</span> owns send, close, identity phase, limits, and idle deadline; a small <span class="font-mono text-sm">SessionTable</span> owns both maps and all delivery; <span class="font-mono text-sm">V2Server</span> becomes the accept loop, hello, and bootstrap.</p>
+            <ul class="grid sm:grid-cols-2 gap-x-6 gap-y-1 text-sm text-slate-700">
+              <li>• One place for session maps</li>
+              <li>• Broadcast and cleanup agree</li>
+              <li>• Tests stop touching private maps</li>
+              <li>• Idle and disconnect share a path</li>
+            </ul>
+          </div>
+        </article>
+
+        <!-- 06 -->
+        <article id="c6" class="scroll-mt-8 rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+          <div class="p-6 space-y-5">
+            <div class="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p class="text-xs uppercase tracking-[0.2em] text-slate-400">06 · room view</p>
+                <h2 class="font-serif text-2xl md:text-3xl">One scene, two renderers</h2>
+              </div>
+              <div class="flex gap-2">
+                <span class="rounded-full bg-amber-100 text-amber-800 px-3 py-1 text-xs font-semibold">Worth exploring</span>
+                <span class="rounded-full bg-slate-100 text-slate-600 px-3 py-1 text-xs">ports &amp; adapters</span>
+              </div>
+            </div>
+            <p class="font-mono text-xs text-slate-500 leading-relaxed">
+              src/mud/engine/core.py:641 · src/mud/protocol/adapter.py:76, 90 · src/mud/net/server.py:132
+            </p>
+
+            <div class="grid md:grid-cols-2 gap-4">
+              <div class="rounded-lg border border-slate-200 bg-stone-50 p-4">
+                <p class="text-[10px] uppercase tracking-[0.2em] text-slate-400 mb-2">Before · names, then re-walk</p>
+                <pre class="mermaid">
+sequenceDiagram
+  participant C as client
+  participant A as adapter
+  participant E as engine
+  C->>A: look
+  A->>E: visible_room_state(player)
+  E-->>A: names + dark
+  A->>E: room.contents
+  A->>E: players_in_room
+  A->>E: exit_locks + geometry
+  A-->>C: room.state
+                </pre>
+              </div>
+              <div class="rounded-lg border border-slate-200 bg-stone-50 p-4">
+                <p class="text-[10px] uppercase tracking-[0.2em] text-slate-400 mb-2">After · one view</p>
+                <pre class="mermaid">
+sequenceDiagram
+  participant C as client
+  participant A as adapter
+  participant V as Scene
+  C->>A: look
+  A->>V: for(actor)
+  V-->>A: structured visible scene
+  A-->>C: room.state
+  Note over V: darkness · objects · players · NPCs · exits · geometry
+                </pre>
+              </div>
+            </div>
+
+            <p><span class="font-semibold">Problem.</span> The same room and inventory view is rendered four times — <span class="font-mono text-sm">room.state</span>, <span class="font-mono text-sm">look</span>, movement prose, and the v1 terminal — with separate darkness, sorting, player-exclusion and NPC rules; <span class="font-mono text-sm">visible_room_state</span> returns only names, so the v2 adapter re-walks the room.</p>
+            <p><span class="font-semibold">Solution.</span> One <span class="font-mono text-sm">Scene</span> value from one visibility rule (room, visible objects, occupants, NPCs, exits, geometry, inventory); the prose renderer and the v2 adapter consume it. A third renderer format is not invented.</p>
+            <ul class="grid sm:grid-cols-2 gap-x-6 gap-y-1 text-sm text-slate-700">
+              <li>• Visibility rules live once</li>
+              <li>• Text and JSON share a view</li>
+              <li>• Adapter stops re-walking</li>
+              <li>• Dark-room tests hit one interface</li>
+            </ul>
+          </div>
+        </article>
+
+        <!-- 07 -->
+        <article id="c7" class="scroll-mt-8 rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+          <div class="p-6 space-y-5">
+            <div class="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p class="text-xs uppercase tracking-[0.2em] text-slate-400">07 · test seam</p>
+                <h2 class="font-serif text-2xl md:text-3xl">One server lifecycle and protocol harness</h2>
+              </div>
+              <div class="flex gap-2">
+                <span class="rounded-full bg-amber-100 text-amber-800 px-3 py-1 text-xs font-semibold">Worth exploring</span>
+                <span class="rounded-full bg-slate-100 text-slate-600 px-3 py-1 text-xs">mock</span>
+              </div>
+            </div>
+            <p class="font-mono text-xs text-slate-500 leading-relaxed">
+              tests/golden/harness.py:229, 283 · 82 test files · 67 reach <span class="font-mono">.engine</span> · 11 mention 8765 · 13 import MudServer
+            </p>
+
+            <div class="grid md:grid-cols-2 gap-4">
+              <div class="rounded-lg border border-slate-200 bg-stone-50 p-4">
+                <p class="text-[10px] uppercase tracking-[0.2em] text-slate-400 mb-3">Before · three ways across</p>
+                <div class="space-y-2 text-xs">
+                  <div class="flex items-center gap-2"><span class="w-16 text-right font-mono text-[11px]">82 files</span><div class="h-3 bg-slate-300" style="width: 92%"></div><span class="text-[10px] text-slate-500">test suite</span></div>
+                  <div class="flex items-center gap-2"><span class="w-16 text-right font-mono text-[11px]">67</span><div class="h-3 bg-red-400" style="width: 74%"></div><span class="text-[10px] text-red-700">reach <span class="font-mono">.engine</span></span></div>
+                  <div class="flex items-center gap-2"><span class="w-16 text-right font-mono text-[11px]">11</span><div class="h-3 bg-amber-400" style="width: 22%"></div><span class="text-[10px] text-amber-800">mention 8765</span></div>
+                  <div class="flex items-center gap-2"><span class="w-16 text-right font-mono text-[11px]">13</span><div class="h-3 bg-slate-500" style="width: 26%"></div><span class="text-[10px] text-slate-700">import v1</span></div>
+                </div>
+                <div class="mt-3 rounded border border-red-300 bg-red-50 p-2 text-[11px] text-red-800">
+                  Fixed ports and private state make the suite fail on a busy 8765 and on internal refactors.
+                </div>
+              </div>
+              <div class="rounded-lg border border-slate-200 bg-stone-50 p-4">
+                <p class="text-[10px] uppercase tracking-[0.2em] text-slate-400 mb-3">After · one harness</p>
+                <div class="deep rounded border-2 border-slate-900 text-white p-3 text-xs">
+                  <p class="font-semibold uppercase tracking-wider text-slate-300">ServerHarness</p>
+                  <div class="mt-2 space-y-0.5 font-mono text-[11px] text-slate-200">
+                    <p>start(world, db, port=0)</p>
+                    <p>state(actor) · who() · events()</p>
+                    <p>stop()</p>
+                  </div>
+                </div>
+                <div class="flex items-center gap-2 mt-3 text-xs">
+                  <div class="rounded border border-slate-300 bg-white px-3 py-2">82 test files</div>
+                  <span class="arrow text-xl">→</span>
+                  <div class="rounded border-2 border-slate-700 bg-white px-3 py-2">ServerHarness</div>
+                </div>
+                <p class="mt-3 text-[11px] text-emerald-800">Observable outcomes; no fixed port; v1 tests migrate or retire.</p>
+              </div>
+            </div>
+
+            <p><span class="font-semibold">Problem.</span> Starting a server is a poll-until-<span class="font-mono text-sm">.port</span> race and stopping is a sleep/cancel: ten <span class="font-mono text-sm">_wait_for_bind</span> copies, eight test client classes, and the fixed-8765 suite re-implement lifecycle while tests read <span class="font-mono text-sm">_sessions</span> and <span class="font-mono text-sm">server.engine</span> to observe outcomes.</p>
+            <p><span class="font-semibold">Solution.</span> One awaitable lifecycle — <span class="font-mono text-sm">start()</span> yields the bound endpoint, <span class="font-mono text-sm">close()</span> awaits quiescence — and one test client/harness with observable <span class="font-mono text-sm">state</span>, <span class="font-mono text-sm">who</span>, and <span class="font-mono text-sm">events</span>; migrate the fixed ports and label the mock as a fixture or give it the same scenario contract.</p>
+            <ul class="grid sm:grid-cols-2 gap-x-6 gap-y-1 text-sm text-slate-700">
+              <li>• No test binds 8765</li>
+              <li>• Assertions use the interface</li>
+              <li>• One setup for 82 files</li>
+              <li>• V1 tests migrate or retire</li>
+            </ul>
+          </div>
+        </article>
+
+        <!-- 08 -->
+        <article id="c8" class="scroll-mt-8 rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+          <div class="p-6 space-y-5">
+            <div class="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p class="text-xs uppercase tracking-[0.2em] text-slate-400">08 · protocol surface</p>
+                <h2 class="font-serif text-2xl md:text-3xl">Retire the v1 adapter</h2>
+              </div>
+              <div class="flex gap-2">
+                <span class="rounded-full bg-slate-200 text-slate-700 px-3 py-1 text-xs font-semibold">Speculative</span>
+                <span class="rounded-full bg-slate-100 text-slate-600 px-3 py-1 text-xs">ports &amp; adapters</span>
+              </div>
+            </div>
+            <p class="font-mono text-xs text-slate-500 leading-relaxed">
+              src/mud/net/server.py:1–291 · tests/test_command_input.py · tests/test_command_routing.py · tests/test_lifecycle.py · tests/test_protocol_handshake_red.py · tests/test_server_handshake.py · 8 more v1 imports
+            </p>
+
+            <div class="grid md:grid-cols-2 gap-4">
+              <div class="rounded-lg border border-slate-200 bg-stone-50 p-4 min-h-[250px]">
+                <p class="text-[10px] uppercase tracking-[0.2em] text-slate-400 mb-3">Before · two protocol adapters</p>
+                <div class="flex items-center justify-center gap-3 text-xs">
+                  <div class="rounded border-2 border-slate-400 bg-slate-100 p-3 text-slate-600">
+                    <p class="font-semibold">v1 server</p>
+                    <p class="text-[10px]">291 lines</p>
+                    <p class="text-[10px] text-red-700">13 test files</p>
+                  </div>
+                  <div class="rounded border-2 border-slate-700 bg-white p-3">
+                    <p class="font-semibold">v2 server</p>
+                    <p class="text-[10px]">product</p>
+                  </div>
+                </div>
+                <div class="mt-4 text-center arrow text-xl">↓</div>
+                <div class="rounded border-2 border-slate-700 bg-white p-3 text-xs text-center">
+                  Engine + legacy actor slot
+                </div>
+                <p class="mt-3 text-[11px] text-red-700">The only caller of the v1 path is the test suite.</p>
+              </div>
+              <div class="rounded-lg border border-slate-200 bg-stone-50 p-4 min-h-[250px]">
+                <p class="text-[10px] uppercase tracking-[0.2em] text-slate-400 mb-3">After · one protocol</p>
+                <div class="rounded border-2 border-slate-700 bg-white p-3 text-xs text-center">
+                  <p class="font-semibold">v2 server</p>
+                  <p class="text-[10px]">the only protocol adapter</p>
+                </div>
+                <div class="mt-4 text-center arrow text-xl">↓</div>
+                <div class="deep rounded border-2 border-slate-900 text-white p-3 text-xs text-center">
+                  Engine.execute(actor, text)
+                </div>
+                <div class="mt-3 rounded border border-dashed border-slate-400 bg-white p-2 text-center text-[11px] text-slate-500">
+                  v1, kept as history only
+                </div>
+              </div>
+            </div>
+
+            <p><span class="font-semibold">Problem.</span> The v1 server has no product caller; 13 test files keep it alive, and the engine's legacy actor slot exists mainly for it, so two protocol adapters double the surface that must stay green.</p>
+            <p><span class="font-semibold">Solution.</span> Delete <span class="font-mono text-sm">net/server.py</span> and migrate the behavior assertions to the v2 harness, then remove the legacy engine fields; the v2 adapter is the only protocol seam.</p>
+            <ul class="grid sm:grid-cols-2 gap-x-6 gap-y-1 text-sm text-slate-700">
+              <li>• Delete 291 lines of adapter</li>
+              <li>• One protocol, one adapter</li>
+              <li>• Legacy actor path goes</li>
+              <li>• CI surface shrinks</li>
+            </ul>
+            <div class="rounded border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900">
+              Decision, not a mechanical refactor: the current plan keeps v1 for history. Do candidate 04 first; this is the deletion that follows.
+            </div>
+          </div>
+        </article>
+
+        <!-- 09 -->
+        <article id="c9" class="scroll-mt-8 rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+          <div class="p-6 space-y-5">
+            <div class="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p class="text-xs uppercase tracking-[0.2em] text-slate-400">09 · character lifecycle</p>
+                <h2 class="font-serif text-2xl md:text-3xl">A character admission owner</h2>
+              </div>
+              <div class="flex gap-2">
+                <span class="rounded-full bg-amber-100 text-amber-800 px-3 py-1 text-xs font-semibold">Worth exploring</span>
+                <span class="rounded-full bg-slate-100 text-slate-600 px-3 py-1 text-xs">ports &amp; adapters</span>
+              </div>
+            </div>
+            <p class="font-mono text-xs text-slate-500 leading-relaxed">
+              src/mud/net/v2_server.py:50, 546, 750 · src/mud/auth.py:94, 218, 250 · src/mud/storage/store.py:105, 302 · src/mud/engine/core.py:152 · tests/test_character_persistence.py:33
+            </p>
+
+            <div class="grid md:grid-cols-2 gap-4">
+              <div class="rounded-lg border border-slate-200 bg-stone-50 p-4 min-h-[250px]">
+                <p class="text-[10px] uppercase tracking-[0.2em] text-slate-400 mb-3">Before · transport orchestrates</p>
+                <div class="rounded border-2 border-slate-700 bg-white p-3 text-xs">
+                  <p class="font-semibold uppercase tracking-wider text-slate-500">v2_server</p>
+                  <p class="mt-1 text-slate-600">login · register · sleep · roster</p>
+                </div>
+                <div class="grid grid-cols-3 gap-2 mt-3 text-[10px] text-center">
+                  <div class="rounded border border-slate-300 bg-white p-2">auth</div>
+                  <div class="rounded border border-red-300 bg-red-50 p-2">PlayerStore<br/><span class="text-red-700">re-read</span></div>
+                  <div class="rounded border border-slate-300 bg-white p-2">engine restore</div>
+                </div>
+                <p class="mt-3 text-[11px] text-red-700"><span class="font-mono">Login.room_id</span> is ignored; the transport re-reads the row and calls restore/wake itself.</p>
+              </div>
+              <div class="rounded-lg border border-slate-200 bg-stone-50 p-4 min-h-[250px]">
+                <p class="text-[10px] uppercase tracking-[0.2em] text-slate-400 mb-3">After · one admission seam</p>
+                <div class="rounded border-2 border-slate-700 bg-white p-3 text-xs">
+                  <p class="font-semibold uppercase tracking-wider text-slate-500">v2_server</p>
+                  <p class="mt-1 text-slate-600">binds the returned avatar</p>
+                </div>
+                <div class="mt-2 text-center arrow text-xl">↓</div>
+                <div class="deep rounded border-2 border-slate-900 text-white p-3 text-xs">
+                  <p class="font-semibold uppercase tracking-wider text-slate-300">CharacterAdmission</p>
+                  <p class="mt-1 font-mono text-[11px] text-slate-200">register · resume(key) · suspend(name) · roster()</p>
+                </div>
+                <p class="mt-3 text-[11px] text-emerald-800">Composes auth, store and engine restore; one transaction, one sleep owner.</p>
+              </div>
+            </div>
+
+            <p><span class="font-semibold">Problem.</span> The transport orchestrates a character's durable record and live avatar: login ignores <span class="font-mono text-sm">Login.room_id</span>, re-reads <span class="font-mono text-sm">PlayerStore</span>, then calls <span class="font-mono text-sm">restore_player</span> and <span class="font-mono text-sm">wake_player</span>; register/rekey hand-build credentials; the roster reads a third path.</p>
+            <p><span class="font-semibold">Solution.</span> A <span class="font-mono text-sm">CharacterAdmission</span> module owns <span class="font-mono text-sm">register</span>, <span class="font-mono text-sm">resume(key)</span>, <span class="font-mono text-sm">suspend(name)</span>, and the roster, composing auth, store and engine; the server binds the returned avatar and never reads a row.</p>
+            <ul class="grid sm:grid-cols-2 gap-x-6 gap-y-1 text-sm text-slate-700">
+              <li>• Server stops reading rows</li>
+              <li>• Login uses its own state</li>
+              <li>• Admission one transaction</li>
+              <li>• Sleep path one owner</li>
+            </ul>
+            <div class="rounded border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900">
+              Do 05 (Session) first; admission returns the live avatar the session binds. Do not add an ORM or a general repository.
+            </div>
+          </div>
+        </article>
+
+        <!-- 10 -->
+        <article id="c10" class="scroll-mt-8 rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+          <div class="p-6 space-y-5">
+            <div class="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p class="text-xs uppercase tracking-[0.2em] text-slate-400">10 · identity</p>
+                <h2 class="font-serif text-2xl md:text-3xl">One world index and identity</h2>
+              </div>
+              <div class="flex gap-2">
+                <span class="rounded-full bg-amber-100 text-amber-800 px-3 py-1 text-xs font-semibold">Worth exploring</span>
+                <span class="rounded-full bg-slate-100 text-slate-600 px-3 py-1 text-xs">in-process</span>
+              </div>
+            </div>
+            <p class="font-mono text-xs text-slate-500 leading-relaxed">
+              src/mud/storage/keys.py:15 · src/mud/protocol/adapter.py:49, 141 · src/mud/world/wander.py:29 · src/mud/engine/core.py:28 · src/mud/world/loader.py:173 · src/mud/net/v2_server.py:384 · src/mud/content/validator.py:125
+            </p>
+
+            <div class="grid md:grid-cols-2 gap-4">
+              <div class="rounded-lg border border-slate-200 bg-stone-50 p-4 min-h-[250px]">
+                <p class="text-[10px] uppercase tracking-[0.2em] text-slate-400 mb-3">Before · three identity schemes</p>
+                <div class="grid grid-cols-3 gap-2 text-[10px] text-center">
+                  <div class="rounded border border-slate-300 bg-white p-2"><span class="font-mono">engine</span><br/>room display name</div>
+                  <div class="rounded border border-slate-300 bg-white p-2"><span class="font-mono">adapter</span><br/>lazy instance_id</div>
+                  <div class="rounded border border-slate-300 bg-white p-2"><span class="font-mono">store</span><br/>object_key</div>
+                </div>
+                <div class="mt-3 rounded border border-red-300 bg-red-50 p-2 text-[11px] text-red-800">
+                  Login scans <span class="font-mono">engine.rooms.values()</span>; two rooms with the same display name overwrite each other.
+                </div>
+                <div class="mt-3 text-[11px] text-slate-600">The adapter assigns identity as a side effect of serialization.</div>
+              </div>
+              <div class="rounded-lg border border-slate-200 bg-stone-50 p-4 min-h-[250px]">
+                <p class="text-[10px] uppercase tracking-[0.2em] text-slate-400 mb-3">After · one index</p>
+                <div class="deep rounded border-2 border-slate-900 text-white p-3 text-xs">
+                  <p class="font-semibold uppercase tracking-wider text-slate-300">WorldIndex</p>
+                  <p class="mt-1 font-mono text-[11px] text-slate-200">room(id) · room(name) · entity(id)</p>
+                </div>
+                <div class="grid grid-cols-3 gap-2 mt-3 text-[10px] text-center">
+                  <div class="rounded border border-slate-300 bg-white p-2">engine</div>
+                  <div class="rounded border border-slate-300 bg-white p-2">adapter</div>
+                  <div class="rounded border border-slate-300 bg-white p-2">server</div>
+                </div>
+                <p class="mt-3 text-[11px] text-emerald-800">One key rule; display names stay a command convenience, not a primary key.</p>
+              </div>
+            </div>
+
+            <p><span class="font-semibold">Problem.</span> The running world is keyed by display name while the database and wire are keyed by authored id, so identity is re-derived in five modules, the adapter assigns <span class="font-mono text-sm">instance_id</span> during serialization, login linearly scans rooms, and duplicate display names silently overwrite.</p>
+            <p><span class="font-semibold">Solution.</span> The loader builds one <span class="font-mono text-sm">WorldIndex</span> — room id/name, object and NPC id, one key per entity; the engine, wanderer, adapter and server resolve through it, and display names remain a command convenience.</p>
+            <ul class="grid sm:grid-cols-2 gap-x-6 gap-y-1 text-sm text-slate-700">
+              <li>• One id derivation</li>
+              <li>• Login loses the scan</li>
+              <li>• Duplicate names stop colliding</li>
+              <li>• Lookup in one index</li>
+            </ul>
+            <div class="rounded border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900">
+              Compile the world (03) builds the index; do it before this. Coordinate with 01 because both remove adapter identity maps.
+            </div>
+          </div>
+        </article>
+
+      </section>
+
+      <section id="top-recommendation" class="scroll-mt-8">
+        <div class="deep rounded-2xl border-2 border-slate-900 p-8 text-white shadow-lg">
+          <p class="text-xs uppercase tracking-[0.25em] text-slate-400">Top recommendation</p>
+          <h2 class="font-serif text-3xl mt-2">Start with One durable mutation <a href="#c2" class="text-emerald-300 underline decoration-emerald-500/50">(02)</a></h2>
+          <p class="mt-3 text-slate-300 max-w-3xl">
+            It closes the live <span class="font-mono text-sm text-white">put</span>/<span class="font-mono text-sm text-white">get</span> persistence hole and collapses five verb-shaped store methods into one transaction interface; <a href="#c1" class="text-emerald-300 underline decoration-emerald-500/50">Return outcomes (01)</a> is the larger follow-on.
+          </p>
+        </div>
+      </section>
+
+      <footer class="border-t border-slate-200 pt-6 text-xs text-slate-500 leading-relaxed">
+        No <span class="font-mono">CONTEXT.md</span> or ADRs exist; domain terms come from <span class="font-mono">SPEC.md</span> v2.1.4 and the code. Review scope: <span class="font-mono">main bcdfcb0</span>; the held <span class="font-mono">experimental/admin-console</span> branch is out of scope.
+      </footer>
+    </main>
+  </body>
+</html>
