@@ -43,7 +43,7 @@ frozen v2.1.0 conformance fixture, not the product world.
 | Starting village | `starting_village.yaml` | `gate`, `market`, `tavern`, `shop`, `forest` (5) |
 | South road | `south_road.yaml` | `south_road`, `orchard`, `beehives`, `mill_bridge` (4) |
 | Mill | `mill.yaml` | `mill`, `millpond`, `millrace`, `granary` (4) |
-| Riverside | `riverside.yaml` | `river_path`, `riverbank`, `ford`, `heron_rock`, `reeds`, `ferry_landing` (6) |
+| Riverside | `riverside.yaml` | `river_path`, `riverbank`, `ford`, `river_shallows`, `heron_rock`, `reeds`, `ferry_landing` (7) |
 | North bank | `north_bank.yaml` | `ferry`, `north_bank`, `toll_house`, `watchtower`, `tower_top` (5) |
 | Ruins | `ruins.yaml` | `shrine`, `ruins_gate`, `ruins_court`, `chapel`, `crypt`, `fallen_tower` (6) |
 | Caves | `caves.yaml` | `cave_mouth`, `cave_tunnel`, `crystal_grotto`, `underground_pool` (4) |

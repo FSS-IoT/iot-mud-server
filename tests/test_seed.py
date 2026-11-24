@@ -142,9 +142,9 @@ def test_seed_fills_a_clean_database_with_the_yaml_world(tmp_path):
 
     assert main(["seed", "--db", str(path)]) == 0
 
-    assert _count(path, "rooms") == 34
+    assert _count(path, "rooms") == 35
     assert _count(path, "objects") == 75
-    assert _count(path, "exits") == 70  # 35 declared, 35 reciprocals
+    assert _count(path, "exits") == 72  # 36 declared, 36 reciprocals
     assert _count(path, "npcs") == 11
 
     meta = _meta(path)
@@ -268,7 +268,7 @@ def test_seed_refuses_a_second_seed_without_reset(tmp_path, capsys):
     captured = capsys.readouterr()
     assert "--reset --yes" in captured.err
     assert _meta(path)["epoch"] == epoch
-    assert _count(path, "rooms") == 34
+    assert _count(path, "rooms") == 35
 
 
 def test_seed_reset_requires_yes(tmp_path, capsys):

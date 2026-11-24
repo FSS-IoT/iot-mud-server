@@ -50,9 +50,9 @@ rooms:
 
   - id: ford
     name: The Ford
-    description: Flat stones break the current. The bank rises north; a rock favoured by herons stands east.
+    description: Flat stones break the current. The bank rises north; shallow water runs east to a rock favoured by herons.
     exits:
-      east: heron_rock
+      east: river_shallows
     objects:
       - id: ford_stone
         name: Ford Stone
@@ -61,6 +61,12 @@ rooms:
         readable_text: Cross single file. The stones shift after rain.
         weight: 0.0
         portable: false
+
+  - id: river_shallows
+    name: Shallows
+    description: Shallow water over pale stones. The ford lies west; a heron rock stands east.
+    exits:
+      east: heron_rock
 
   - id: heron_rock
     name: Heron Rock

@@ -4,7 +4,7 @@ The test parses `docs/PROTOCOL.md` and the product world. It runs the whole
 golden catalogue against fresh servers and fails when:
 
 * a documented, client-delivered event type never appears in a client log;
-* a room or area of the 34-room world is never visited;
+* a room or area of the 35-room world is never visited;
 * a scenario silently stops delivering something it used to;
 * a documented-but-undelivered event is observed (the exception is stale).
 

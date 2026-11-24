@@ -167,6 +167,36 @@ def test_world_has_30_to_40_rooms():
     assert 30 <= len(loaded.world.rooms) <= 40
 
 
+def test_riverside_loop_closes_on_the_grid():
+    """Steps around the riverside loop must sum to zero (issue #140).
+
+    A square grid cannot close a loop of odd length, so the five-exit loop
+    (River Path, Riverbank, The Ford, Heron Rock, The Reeds) cannot be drawn
+    without stretching an edge. The Shallows make it six steps.
+    """
+
+    loaded = _loaded()
+    rooms = {room.id for room in loaded.world.rooms}
+    assert "river_shallows" in rooms
+    edges = _edges(loaded.world.rooms)
+    steps = {
+        "north": (0, -1),
+        "south": (0, 1),
+        "east": (1, 0),
+        "west": (-1, 0),
+    }
+    loop = ["river_path", "riverbank", "ford", "river_shallows", "heron_rock", "reeds"]
+    x = y = 0
+    for source, target in pairwise([*loop, loop[0]]):
+        direction = next(
+            d for (src, d), edge in edges.items()
+            if src == source and edge.target == target
+        )
+        dx, dy = steps[direction]
+        x, y = x + dx, y + dy
+    assert (x, y) == (0, 0)
+
+
 def test_start_room_exists():
     loaded = _loaded()
     room_ids = {room.id for room in loaded.world.rooms}
