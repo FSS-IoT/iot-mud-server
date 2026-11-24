@@ -446,6 +446,7 @@ _OUTCOME_VERBS = frozenset({
     "look", "inventory", "who", "show_exits", "help", "hello",
     "examine", "read", "look_in",
     "put", "get", "close", "use",
+    "say", "emote", "tell", "talk", "ask", "light",
 })
 
 
@@ -491,6 +492,31 @@ def _shape_event(engine: Engine, actor: Player, sem) -> list[Outbound]:
             Outbound(kind, {**base, "self": False,
                             "text": data.get("text_room", "")},
                      "room", room_name=room.name, direct=False),
+        ]
+    if kind == "player.told":
+        base = {"from": data["from"], "to": data["to"]}
+        if scope == "player":
+            return [Outbound(kind, {
+                **base, "self": False,
+                "text": data.get("text_actor", ""),
+            }, "player", player_name=data.get("player"), direct=False)]
+        return [Outbound(kind, {
+            **base, "self": True,
+            "text": data.get("text_actor", ""),
+        }, "actor", direct=sem.direct)]
+    if kind == "npc.say":
+        base = {"npc": data["npc"]}
+        if "topic" in data:
+            base["topic"] = data["topic"]
+        room = actor.location
+        return [
+            Outbound(kind, {**base, "self": True,
+                            "text": data.get("text_actor", "")},
+                     "actor", direct=sem.direct),
+            Outbound(kind, {**base, "self": False,
+                            "text": data.get("text_room", "")},
+                     "room", room_name=room.name if room else None,
+                     direct=False),
         ]
     if kind in ("room.leave", "room.enter"):
         room = data["room"]

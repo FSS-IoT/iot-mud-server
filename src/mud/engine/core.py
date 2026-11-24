@@ -1482,11 +1482,22 @@ class Engine:
             "get": self._exec_get,
             "close": self._exec_close,
             "use": self._exec_use,
+            "talk": self._exec_talk,
+            "ask": self._exec_ask,
+            "light": self._exec_light,
+        }
+        raw_handlers = {
+            "say": self._exec_say,
+            "emote": self._exec_emote,
+            "tell": self._exec_tell,
         }
         handler = handlers.get(verb)
-        handled = handler is not None
+        raw_handler = raw_handlers.get(verb)
+        handled = handler is not None or raw_handler is not None
         try:
-            if handler is not None:
+            if raw_handler is not None:
+                await raw_handler(outcome, actor, arg, text)
+            elif handler is not None:
                 await handler(outcome, actor, arg)
         except StorageWriteError:
             # A commit failed, so the engine changed nothing: one typed error,
@@ -2361,6 +2372,220 @@ class Engine:
         self._fail(
             outcome, "locked",
             f"The {key_item.name} does not fit the {lock_item.name}.")
+
+    async def _exec_say(self, outcome: CommandOutcome, actor: Player,
+                        arg: str | None, raw: str) -> None:
+        """`say <text>`: one line to the room, original casing preserved."""
+        pieces = raw.split(maxsplit=1)
+        spoken = pieces[1] if len(pieces) > 1 else ""
+        if not spoken:
+            self._fail(
+                outcome, "unknown_command",
+                "Hmm, I don't understand that. Type `help` for a list of "
+                "commands.")
+            return
+        await self.emit("player_said", {
+            "name": actor.name,
+            "text": spoken,
+            "location": actor.location.name if actor.location else None,
+        })
+        outcome.reply = f'You say, "{spoken}".'
+        outcome.events.append(SemanticEvent(
+            kind="player.said",
+            data={"from": actor.name, "text_actor": outcome.reply,
+                  "text_room": f'{actor.name} says, "{spoken}".'},
+            scope="room",
+        ))
+
+    async def _exec_emote(self, outcome: CommandOutcome, actor: Player,
+                          arg: str | None, raw: str) -> None:
+        """`emote <action>`: a room-local third-person action (#75)."""
+        if not arg:
+            self._fail(
+                outcome, "bad_args", "Emote what? Try `emote <action>`.")
+            return
+        action = raw.split(maxsplit=1)[1].strip()
+        line = f"{actor.name} {action}"
+        if not line.endswith((".", "!", "?")):
+            line += "."
+        await self.emit("player_emoted", {
+            "name": actor.name,
+            "text": action,
+            "location": actor.location.name if actor.location else None,
+        })
+        outcome.reply = line
+        outcome.events.append(SemanticEvent(
+            kind="player.emoted",
+            data={"from": actor.name, "text_actor": line, "text_room": line},
+            scope="room",
+        ))
+
+    async def _exec_tell(self, outcome: CommandOutcome, actor: Player,
+                         arg: str | None, raw: str) -> None:
+        """`tell <player> <text>`: one private line to an awake character."""
+        pieces = raw.split(maxsplit=2)
+        if len(pieces) < 3 or not pieces[2].strip():
+            self._fail(
+                outcome, "bad_args",
+                "Tell whom what? Try `tell <player> <text>`.")
+            return
+        target_arg = pieces[1]
+        message = pieces[2].strip()
+        target = self.find_character(target_arg)
+        if target is not None:
+            if target.asleep:
+                self._fail(
+                    outcome, "not_awake",
+                    f"{target.name} is asleep, turned to stone; a tell "
+                    "cannot reach them.")
+                return
+            await self.emit("player_told", {
+                "from": actor.name, "to": target.name, "text": message})
+            outcome.reply = f'You tell {target.name}, "{message}".'
+            outcome.events.append(SemanticEvent(
+                kind="player.told",
+                data={"from": actor.name, "to": target.name,
+                      "text_actor": outcome.reply},
+                scope="actor",
+            ))
+            outcome.events.append(SemanticEvent(
+                kind="player.told",
+                data={"from": actor.name, "to": target.name,
+                      "player": target.name,
+                      "text_actor": (f'{actor.name} tells you, '
+                                     f'"{message}".')},
+                scope="player", direct=False,
+            ))
+            return
+        entry = self.character_entry(target_arg)
+        if entry is not None:
+            self._fail(
+                outcome, "not_awake",
+                f"{entry['name']} is asleep, turned to stone; a tell cannot "
+                "reach them.")
+            return
+        self._fail(
+            outcome, "not_found",
+            f"There is no one named {target_arg} in the world.")
+
+    async def _exec_talk(self, outcome: CommandOutcome, actor: Player,
+                         arg: str | None) -> None:
+        """`talk <npc>`: the authored greeting or the NPC's default line."""
+        if not arg:
+            self._fail(
+                outcome, "bad_args", "Talk to whom? Try `talk <npc>`.")
+            return
+        room = actor.location
+        npc, ambiguity = self.find_npc(room, arg)
+        if ambiguity:
+            self._fail(outcome, "ambiguous", ambiguity)
+            outcome.error_data = {
+                "candidates": self._candidates(room.contents, arg)
+                if room is not None else []}
+            return
+        if npc is None:
+            self._fail(
+                outcome, "not_found", f"You see no {arg.strip()} here.")
+            return
+        line = npc.greeting or npc.default
+        if not line:
+            self._notice(outcome, f"{npc.name} has nothing to say.")
+            return
+        await self.fire_effects(npc, "on_talk", actor=actor.name, room=room)
+        self._npc_say(outcome, npc, f'{npc.name} says, "{line}"', None)
+
+    async def _exec_ask(self, outcome: CommandOutcome, actor: Player,
+                        arg: str | None) -> None:
+        """`ask <npc> about <topic>`: the topic line or the default fallback."""
+        if not arg:
+            self._fail(
+                outcome, "bad_args",
+                "Ask whom about what? Try `ask <npc> about <topic>`.")
+            return
+        npc_arg, separator, topic = arg.partition(" about ")
+        if not separator:
+            self._fail(
+                outcome, "bad_args",
+                "Ask whom about what? Try `ask <npc> about <topic>`.")
+            return
+        room = actor.location
+        npc, ambiguity = self.find_npc(room, npc_arg)
+        if ambiguity:
+            self._fail(outcome, "ambiguous", ambiguity)
+            outcome.error_data = {
+                "candidates": self._candidates(room.contents, npc_arg)
+                if room is not None else []}
+            return
+        if npc is None:
+            self._fail(
+                outcome, "not_found", f"You see no {npc_arg.strip()} here.")
+            return
+        key = topic.strip().lower()
+        line = npc.topics.get(key) or npc.default
+        if not line:
+            self._notice(outcome, f"{npc.name} has nothing to say.")
+            return
+        await self.fire_effects(npc, "on_talk", actor=actor.name, room=room)
+        topic_out = key if key in npc.topics else None
+        self._npc_say(outcome, npc, f'{npc.name} says, "{line}"', topic_out)
+
+    def _npc_say(self, outcome: CommandOutcome, npc: NPC, reply: str,
+                 topic: str | None) -> None:
+        """Record an NPC line as a room-wide `npc.say` event."""
+        data: dict[str, Any] = {
+            "npc": {
+                "id": getattr(npc, "item_id", None) or slug(npc.name),
+                "name": npc.name,
+            },
+            "text_actor": reply,
+            "text_room": reply,
+        }
+        if topic is not None:
+            data["topic"] = topic
+        outcome.reply = reply
+        outcome.events.append(SemanticEvent(
+            kind="npc.say", data=data, scope="room"))
+
+    async def _exec_light(self, outcome: CommandOutcome, actor: Player,
+                          arg: str | None) -> None:
+        """`light <source>`: ignite a carried light source."""
+        if not arg:
+            self._fail(
+                outcome, "unknown_command",
+                "Hmm, I don't understand that. Type `help` for a list of "
+                "commands.")
+            return
+        held_item, disambig = self._disambiguate(actor.contents, arg)
+        if disambig:
+            self._fail(outcome, "ambiguous", disambig)
+            outcome.error_data = {
+                "candidates": self._candidates(actor.contents, arg)}
+            return
+        if held_item is None:
+            self._fail(
+                outcome, "not_found",
+                f"You don't have a {arg.strip()} to light.")
+            return
+        if not getattr(held_item, "light_source", False):
+            self._notice(outcome, f"You can't light the {held_item.name}.")
+            return
+        if getattr(held_item, "lit", False):
+            self._notice(outcome, f"The {held_item.name} is already lit.")
+            return
+        held_item.lit = True
+        await self.emit("light_ignited", {
+            "item_name": held_item.name.lower()})
+        outcome.reply = (
+            f"You light the {held_item.name}. Its flame casts a warm glow.")
+        obj = self._semantic_object(held_item, actor.contents)
+        obj["lit"] = True
+        outcome.events.append(SemanticEvent(
+            kind="object.lit",
+            data={"object": obj, "by": actor.name,
+                  "text_actor": outcome.reply,
+                  "text_room": f"{actor.name} lights the {held_item.name}."},
+            scope="room",
+        ))
 
     async def process_command(self, command_text: str, player_name: Optional[str] = None) -> str:
         """Translates player input into state mutation or narrative.
