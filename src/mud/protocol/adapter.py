@@ -444,6 +444,7 @@ def _parse(text: str) -> tuple[str, str | None, str]:
 _OUTCOME_VERBS = frozenset({
     "take", "drop", "open", "go",
     "look", "inventory", "who", "show_exits", "help", "hello",
+    "examine", "read", "look_in",
 })
 
 
@@ -466,6 +467,12 @@ def _shape_event(engine: Engine, actor: Player, sem) -> list[Outbound]:
     if kind == "who.list":
         return [Outbound("who.list", {
             "players": engine.who_entries(),
+            "text": data.get("text", ""),
+        }, "actor", direct=sem.direct)]
+    if kind == "object.read":
+        return [Outbound("object.read", {
+            "object": data["object"],
+            "content": data.get("content", ""),
             "text": data.get("text", ""),
         }, "actor", direct=sem.direct)]
     if kind in ("room.leave", "room.enter"):
