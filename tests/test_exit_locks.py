@@ -25,10 +25,10 @@ from src.mud.content import Entity
 from src.mud.content.models import Exit
 from src.mud.content.models import load_world as load_content_world
 from src.mud.content.validator import check_world
+from src.mud.content.world import compile_world
 from src.mud.engine.core import Engine
 from src.mud.protocol.adapter import execute
 from src.mud.world.loader import load_world
-from src.mud.world.seed import _effective_exits
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 JSON_WORLD = REPO_ROOT / "data" / "worlds" / "starting_village.json"
@@ -321,13 +321,18 @@ def test_product_yaml_declares_the_lock_and_key():
 
 
 def test_seeder_carries_the_product_lock_on_both_sides():
-    world = load_content_world(YAML_WORLD).world
-    effective = _effective_exits(world)
+    compiled = compile_world(load_content_world(YAML_WORLD))
+    edges = {(edge.room_id, edge.direction): edge for edge in compiled.exits}
 
-    target, locked, key, _label = effective[("market", "east")]
-    assert (target, locked, key) == ("tavern", True, "key_gold_1")
-    target, locked, key, _label = effective[("tavern", "west")]
-    assert (target, locked, key) == ("market", True, "key_gold_1")
+    east = edges[("market", "east")]
+    assert east.target_id == "tavern"
+    assert east.lock_id is not None
+    assert compiled.locks[east.lock_id].key == "key_gold_1"
+
+    west = edges[("tavern", "west")]
+    assert west.target_id == "market"
+    assert west.lock_id == east.lock_id
+    assert compiled.locks[west.lock_id].key == "key_gold_1"
 
 
 # --- validator: the content rule -------------------------------------------

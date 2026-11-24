@@ -3,9 +3,9 @@ from pathlib import Path
 
 from src.mud.config import DEFAULT_WORLD
 from src.mud.content import NPC, Entity, ExitLock, Room
-from src.mud.content.models import OPPOSITE_EXITS, Exit
 from src.mud.content.models import load_world as load_content_world
 from src.mud.content.validator import validate_world
+from src.mud.content.world import compile_world
 from src.mud.engine.core import Engine
 from src.mud.world.geometry import WorldDataError, validate_geometry
 from src.mud.world.wander import NpcWanderer
@@ -33,26 +33,29 @@ async def load_world(engine: Engine, data_path: str | Path) -> None:
 
 
 async def _load_yaml_world(engine: Engine, data_path: Path) -> None:
-    """Build the engine from the v2.1 YAML model.
+    """Build the engine from the v2.1 YAML model via the compiled world.
 
     The content model rejects a missing, malformed, or wrongly shaped file.
     The semantic validator then rejects a world that does not hold together
     (duplicate ids, dangling or doubly declared exits, unreachable rooms,
     container cycles, missing keys, malformed effects, bad geometry). Startup
     fails with those messages rather than serving a partial world.
+
+    `compile_world` does the construction once: the effective exit graph, the
+    shared lock identity of each two-way door, the containment placements, and
+    the normalized geometry. This function only installs engine entities.
     """
     loaded = load_content_world(data_path)
     errors = validate_world(loaded)
     if errors:
         raise WorldDataError("\n".join(errors))
 
-    world = loaded.world
+    compiled = compile_world(loaded)
 
     # 1. First pass: create every object, globally. `contains` links by
     # object id, so a child may be declared in any room and resolved below.
     entity_map: dict[str, Entity] = {}
-    contained_ids: set[str] = set()
-    for room_data in world.rooms:
+    for room_data in compiled.rooms:
         for obj in room_data.objects:
             entity = Entity(
                 name=obj.name,
@@ -80,17 +83,13 @@ async def _load_yaml_world(engine: Engine, data_path: Path) -> None:
             entity.readable_text = obj.readable_text or obj.description
             entity_map[obj.id] = entity
 
-    # 1b. Container contents, after every referenced object exists.
-    for room_data in world.rooms:
-        for obj in room_data.objects:
-            container = entity_map[obj.id]
-            for child_id in obj.contains:
-                contained_ids.add(child_id)
-                container.add_content(entity_map[child_id])
+    # 1b. Container contents, from the compiled placements.
+    for child_id, container_id in compiled.contained.items():
+        entity_map[container_id].add_content(entity_map[child_id])
 
     # 2. Second pass: create all rooms.
     room_map: dict[str, Room] = {}
-    for room_data in world.rooms:
+    for room_data in compiled.rooms:
         room = Room(
             name=room_data.name,
             description=room_data.description,
@@ -106,7 +105,7 @@ async def _load_yaml_world(engine: Engine, data_path: Path) -> None:
     # never in `contents`, so `take`, `drop`, capacity, and container contents
     # keep their v2.1.2 behavior (#81). The authored dialogue is copied as
     # plain strings; the engine never reads the YAML model directly.
-    for room_data in world.rooms:
+    for room_data in compiled.rooms:
         room = room_map[room_data.id]
         for npc_data in room_data.npcs:
             npc = NPC(
@@ -123,61 +122,43 @@ async def _load_yaml_world(engine: Engine, data_path: Path) -> None:
             npc.instance_id = npc_data.id
             room.npcs.append(npc)
 
-    # 3. Exits. The YAML declares each exit once; create the reciprocal here.
-    # `one_way` opts out, and `setdefault` keeps an explicit target if a
-    # later room happens to name the same direction (the validator rejects
-    # that collision before this runs). A declared lock is one physical door:
-    # the reciprocal shares the same `ExitLock`, so using the key from either
-    # side unlocks both.
-    for room_data in world.rooms:
-        room = room_map[room_data.id]
-        for direction, target in room_data.exits.items():
-            lock = None
-            if isinstance(target, Exit):
-                target_id = target.to
-                one_way = target.one_way
-                if target.locked:
-                    lock = ExitLock(key=target.key, label=target.label)
-            else:
-                target_id = target
-                one_way = False
-            destination = room_map[target_id]
-            room.exits[direction] = destination
-            if lock is not None:
-                room.exit_locks[direction] = lock
-            opposite = OPPOSITE_EXITS.get(direction)
-            if not one_way and opposite is not None:
-                destination.exits.setdefault(opposite, room)
-                if lock is not None:
-                    destination.exit_locks.setdefault(opposite, lock)
+    # 3. Exits from the compiled graph. One `ExitLock` instance per lock id, so
+    # both directions of a door share the same physical lock and label.
+    lock_instances: dict[str, ExitLock] = {}
+    for edge in compiled.exits:
+        room = room_map[edge.room_id]
+        room.exits[edge.direction] = room_map[edge.target_id]
+        if edge.lock_id is not None:
+            lock = lock_instances.get(edge.lock_id)
+            if lock is None:
+                spec = compiled.locks[edge.lock_id]
+                lock = ExitLock(key=spec.key, label=spec.label)
+                lock_instances[edge.lock_id] = lock
+            room.exit_locks[edge.direction] = lock
 
-    # 4. Geometry, now that the effective exit map includes reciprocals.
-    for room_data in world.rooms:
-        if room_data.geometry is None:
-            continue
-        room = room_map[room_data.id]
-        room.geometry = validate_geometry(
-            room_data.id, room_data.geometry, room.exits,
-        )
+    # 4. Geometry, already normalized and validated by the compiler.
+    for room_data in compiled.rooms:
+        if room_data.geometry is not None:
+            room_map[room_data.id].geometry = room_data.geometry
 
     # 5. Place objects. A contained object belongs to its container, not to
     # the room it is declared in.
-    for room_data in world.rooms:
+    for room_data in compiled.rooms:
         room = room_map[room_data.id]
         for obj in room_data.objects:
-            if obj.id not in contained_ids:
+            if obj.id not in compiled.contained:
                 room.add_content(entity_map[obj.id])
 
     # 6. Finalize engine state.
     for room in room_map.values():
         engine._rooms[room.name] = room
-    engine._player_location = room_map[world.start_room]
+    engine._player_location = room_map[compiled.start_room]
 
     # 7. Deterministic world motion (#82). The seed is authored content, not a
     # clock: a reload replays the same NPC paths. The wanderer is built after
     # every room and NPC exists, and moves only `Room.npcs` from here on.
-    engine.rng_seed = world.rng_seed
-    engine.wanderer = NpcWanderer(engine.rooms, world.rng_seed)
+    engine.rng_seed = compiled.rng_seed
+    engine.wanderer = NpcWanderer(engine.rooms, compiled.rng_seed)
 
     # Keep the legacy single-player placeholder for backward compatibility;
     # it is not a real item and must not be added to a room's contents.

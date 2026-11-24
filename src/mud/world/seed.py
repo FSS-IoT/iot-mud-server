@@ -6,6 +6,10 @@ the reciprocal the loader would create), every object with its placement, every
 NPC, and the `world_meta` row set. A reset replaces that world in one
 transaction and changes `world_meta.epoch`.
 
+The rows come from `compile_world`, the same value the engine loader installs,
+so the seeded graph and the engine graph cannot disagree on exits, locks,
+containment, or geometry (#132).
+
 **Fields the schema has no column for** — object weight, light flags, lock
 flags, and authored `state` — go into `objects.state`, a JSON object. That
 keeps the seeded row lossless enough for a later reload without a migration the
@@ -27,15 +31,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from src.mud.content.models import (
-    OPPOSITE_EXITS,
-    Exit,
-    GameObject,
-    World,
-    load_world,
-)
+from src.mud.content.models import GameObject, load_world
 from src.mud.content.validator import validate_world
-from src.mud.world.geometry import validate_geometry
+from src.mud.content.world import CompiledWorld, compile_world
 
 # The tables that hold world content. `players` and `character_keys` are not in
 # this list: a reset replaces the world and keeps the people.
@@ -79,52 +77,6 @@ def is_world_empty(conn: sqlite3.Connection) -> bool:
     return True
 
 
-def _effective_exits(
-    world: World,
-) -> dict[tuple[str, str], tuple[str, bool, str | None, str | None]]:
-    """The exits a player can use: declared edges plus loader reciprocals.
-
-    A locked door locks from both sides: the reciprocal inherits `locked` and
-    `key`. Its `label` is direction-specific ("iron door" faces the room that
-    declared it), so the reciprocal keeps no label.
-    """
-    effective: dict[
-        tuple[str, str], tuple[str, bool, str | None, str | None]
-    ] = {}
-    for room in world.rooms:
-        for direction, value in room.exits.items():
-            if isinstance(value, Exit):
-                target_id = value.to
-                one_way = value.one_way
-                locked = value.locked
-                key = value.key
-                label = value.label
-            else:
-                target_id = value
-                one_way = False
-                locked = False
-                key = None
-                label = None
-
-            effective[(room.id, direction)] = (target_id, locked, key, label)
-            opposite = OPPOSITE_EXITS.get(direction)
-            if not one_way and opposite is not None:
-                effective.setdefault(
-                    (target_id, opposite), (room.id, locked, key, None)
-                )
-    return effective
-
-
-def _exit_maps(
-    effective: dict[tuple[str, str], tuple[str, bool, str | None, str | None]],
-) -> dict[str, dict[str, str]]:
-    """Per-room `direction -> target`, the shape geometry validation wants."""
-    maps: dict[str, dict[str, str]] = {}
-    for (room_id, direction), (target_id, _, _, _) in effective.items():
-        maps.setdefault(room_id, {})[direction] = target_id
-    return maps
-
-
 def _object_state(obj: GameObject) -> str:
     """The schema-less half of an object, as JSON.
 
@@ -149,21 +101,13 @@ def _object_state(obj: GameObject) -> str:
     return json.dumps(state, sort_keys=True)
 
 
-def _room_rows(
-    world: World, exit_maps: dict[str, dict[str, str]]
-) -> list[tuple[Any, ...]]:
+def _room_rows(compiled: CompiledWorld) -> list[tuple[Any, ...]]:
     rows: list[tuple[Any, ...]] = []
-    for room in world.rooms:
-        geometry = None
-        if room.geometry is not None:
-            # Normalize the wire shape once; the validator has already rejected
-            # a map the engine could not walk through.
-            geometry = json.dumps(
-                validate_geometry(
-                    room.id, room.geometry, exit_maps.get(room.id, {})
-                ),
-                sort_keys=True,
-            )
+    for room in compiled.rooms:
+        geometry = (
+            json.dumps(room.geometry, sort_keys=True)
+            if room.geometry is not None else None
+        )
         rows.append(
             (
                 room.id,
@@ -177,23 +121,27 @@ def _room_rows(
     return rows
 
 
-def _exit_rows(
-    effective: dict[tuple[str, str], tuple[str, bool, str | None, str | None]],
-) -> list[tuple[Any, ...]]:
-    return [
-        (room_id, direction, target_id, 1 if locked else 0, key, label)
-        for (room_id, direction), (target_id, locked, key, label)
-        in effective.items()
-    ]
+def _exit_rows(compiled: CompiledWorld) -> list[tuple[Any, ...]]:
+    rows: list[tuple[Any, ...]] = []
+    for edge in compiled.exits:
+        lock = (
+            compiled.locks.get(edge.lock_id)
+            if edge.lock_id is not None else None
+        )
+        rows.append(
+            (
+                edge.room_id,
+                edge.direction,
+                edge.target_id,
+                1 if lock is not None else 0,
+                lock.key if lock is not None else None,
+                lock.label if lock is not None else None,
+            )
+        )
+    return rows
 
 
-def _object_rows(world: World) -> list[tuple[Any, ...]]:
-    contained = {
-        child
-        for room in world.rooms
-        for obj in room.objects
-        for child in obj.contains
-    }
+def _object_rows(compiled: CompiledWorld) -> list[tuple[Any, ...]]:
     # A contained object belongs to its container, not to the room its YAML
     # declares it in. `container_id` is filled in after every row exists so the
     # self-referencing foreign key is satisfied in insertion order.
@@ -205,24 +153,22 @@ def _object_rows(world: World) -> list[tuple[Any, ...]]:
             obj.kind,
             1 if obj.portable else 0,
             obj.readable_text,
-            None if obj.id in contained else room.id,
+            None if obj.id in compiled.contained else room.id,
             _object_state(obj),
         )
-        for room in world.rooms
+        for room in compiled.rooms
         for obj in room.objects
     ]
 
 
-def _containment_rows(world: World) -> list[tuple[str, str]]:
-    return [
-        (child, obj.id)
-        for room in world.rooms
-        for obj in room.objects
-        for child in obj.contains
-    ]
+def _containment_rows(compiled: CompiledWorld) -> list[tuple[str, str]]:
+    return sorted(
+        (child, container)
+        for child, container in compiled.contained.items()
+    )
 
 
-def _npc_rows(world: World) -> list[tuple[Any, ...]]:
+def _npc_rows(compiled: CompiledWorld) -> list[tuple[Any, ...]]:
     return [
         (
             npc.id,
@@ -240,45 +186,45 @@ def _npc_rows(world: World) -> list[tuple[Any, ...]]:
             1 if npc.wander else 0,
             npc.wander_every,
         )
-        for room in world.rooms
+        for room in compiled.rooms
         for npc in room.npcs
     ]
 
 
-def _insert_world(conn: sqlite3.Connection, world: World, epoch: str) -> None:
-    effective = _effective_exits(world)
-
+def _insert_world(
+    conn: sqlite3.Connection, compiled: CompiledWorld, epoch: str
+) -> None:
     conn.executemany(
         "INSERT INTO rooms(id, name, description, area, dark, geometry) "
         "VALUES (?, ?, ?, ?, ?, ?)",
-        _room_rows(world, _exit_maps(effective)),
+        _room_rows(compiled),
     )
     # Objects come before exits: `exits.key_id` references an object.
     conn.executemany(
         "INSERT INTO objects(id, name, description, kind, portable, "
         "readable_text, room_id, state) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        _object_rows(world),
+        _object_rows(compiled),
     )
     conn.executemany(
         "UPDATE objects SET container_id = ? WHERE id = ?",
-        [(container, child) for child, container in _containment_rows(world)],
+        [(container, child) for child, container in _containment_rows(compiled)],
     )
     conn.executemany(
         "INSERT INTO exits(room_id, direction, target_id, locked, key_id, "
         "label) VALUES (?, ?, ?, ?, ?, ?)",
-        _exit_rows(effective),
+        _exit_rows(compiled),
     )
     conn.executemany(
         "INSERT INTO npcs(id, name, description, room_id, dialogue, wander, "
         "wander_every) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        _npc_rows(world),
+        _npc_rows(compiled),
     )
     conn.executemany(
         "INSERT INTO world_meta(key, value) VALUES (?, ?)",
         [
-            ("name", world.name),
-            ("start_room", world.start_room),
-            ("rng_seed", str(world.rng_seed)),
+            ("name", compiled.name),
+            ("start_room", compiled.start_room),
+            ("rng_seed", str(compiled.rng_seed)),
             ("epoch", epoch),
         ],
     )
@@ -296,12 +242,12 @@ def _clear_world(conn: sqlite3.Connection) -> None:
         conn.execute(f"DELETE FROM {table}")
 
 
-def _loaded_world(world_path: str | Path) -> World:
+def _compiled_world(world_path: str | Path) -> CompiledWorld:
     loaded = load_world(world_path)
     errors = validate_world(loaded)
     if errors:
         raise SeedError("\n".join(errors))
-    return loaded.world
+    return compile_world(loaded)
 
 
 def seed_world(
@@ -325,14 +271,14 @@ def seed_world(
             "to replace it"
         )
 
-    world = _loaded_world(world_path)
+    compiled = _compiled_world(world_path)
     new_epoch = epoch or str(uuid.uuid4())
     characters = 0
 
     with conn:
         if reset:
             _clear_world(conn)
-        _insert_world(conn, world, new_epoch)
+        _insert_world(conn, compiled, new_epoch)
 
         characters = int(
             conn.execute("SELECT COUNT(*) FROM players").fetchone()[0]
@@ -342,19 +288,18 @@ def seed_world(
             # Every character — awake or asleep — starts there, and whatever it
             # carried went with the old world.
             conn.execute(
-                "UPDATE players SET room_id = ?", (world.start_room,)
+                "UPDATE players SET room_id = ?", (compiled.start_room,)
             )
 
-    effective = _effective_exits(world)
     return SeedResult(
         world_path=Path(world_path),
-        name=world.name,
-        start_room=world.start_room,
+        name=compiled.name,
+        start_room=compiled.start_room,
         epoch=new_epoch,
-        rooms=len(world.rooms),
-        exits=len(effective),
-        objects=sum(len(room.objects) for room in world.rooms),
-        npcs=sum(len(room.npcs) for room in world.rooms),
+        rooms=len(compiled.rooms),
+        exits=len(compiled.exits),
+        objects=sum(len(room.objects) for room in compiled.rooms),
+        npcs=sum(len(room.npcs) for room in compiled.rooms),
         characters=characters,
         reset=reset,
     )
