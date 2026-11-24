@@ -4,11 +4,12 @@ import asyncio
 import logging
 import re
 from collections.abc import Iterable
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Dict, List, Optional
 from src.mud.content import DEFAULT_CARRY_CAPACITY, NPC, Entity, Player, Room
 from src.mud.content.effects import effect_entries, effect_payload
 from src.mud.content.validator import container_cycles
-from src.mud.storage.keys import object_key, room_key
+from src.mud.protocol.v2 import CommandOutcome, SemanticEvent
+from src.mud.storage.keys import object_key, room_key, slug
 from src.mud.world.wander import NpcMove, NpcWanderer, npc_key
 
 if TYPE_CHECKING:
@@ -1355,6 +1356,334 @@ class Engine:
                         callback(event_type, data)
                 except Exception as e:
                     print(f"Event Error ({event_type}): {e}")
+
+    # --- Typed command outcomes (#130) ---------------------------------------
+
+    # The one alias table. `process_command` keeps its own copy until the
+    # adapter reshape folds that path in; both must stay identical.
+    _ALIASES: ClassVar[dict[str, str]] = {
+        "get": "take", "pick": "take", "grab": "take",
+        "l": "look",
+        "n": "go north", "north": "go north",
+        "s": "go south", "south": "go south",
+        "e": "go east", "east": "go east",
+        "w": "go west", "west": "go west",
+        "u": "go up", "up": "go up",
+        "d": "go down", "down": "go down",
+        "exits": "show_exits",
+        "i": "inventory", "inv": "inventory",
+        "h": "help",
+        "exam": "examine",
+        "me": "emote",
+    }
+
+    @staticmethod
+    def parse_command(text: str) -> tuple[str, str | None, str]:
+        """Resolve one input line to `(verb, arg, raw)`, applying the aliases.
+
+        The single grammar owner (#130): the engine parses the command, and the
+        v2 adapter will stop parsing. A blank line is ``"empty"``; the
+        ``look at`` / ``look in`` rewrites match `process_command`.
+        """
+        raw = text.strip()
+        lowered = raw.lower()
+        if not lowered:
+            return "empty", None, raw
+
+        parts = lowered.split(maxsplit=1)
+        verb = parts[0]
+        arg = parts[1] if len(parts) > 1 else None
+
+        if verb == "look" and arg is not None:
+            first = arg.split(maxsplit=1)[0]
+            if first == "at":
+                rest = arg.split(maxsplit=1)
+                return "examine", rest[1].strip() if len(rest) > 1 else None, raw
+            if first in ("in", "inside"):
+                rest = arg.split(maxsplit=1)
+                return "look_in", rest[1].strip() if len(rest) > 1 else "", raw
+            return "look", arg, raw
+
+        input_str = f"{verb} {arg}".strip() if arg else verb
+        if verb == "get" and arg and " from " in arg:
+            # `get <item> from <container>` is its own verb; a bare `get <item>`
+            # still aliases to `take` below.
+            return "get", arg, raw
+        if input_str in Engine._ALIASES:
+            resolved, _, resolved_arg = Engine._ALIASES[input_str].partition(" ")
+            return resolved, resolved_arg or None, raw
+        if verb in Engine._ALIASES:
+            resolved, _, resolved_arg = Engine._ALIASES[verb].partition(" ")
+            return resolved, resolved_arg or None, raw
+        return verb, arg, raw
+
+    @staticmethod
+    def _semantic_object(entity: Entity,
+                         collection: list[Entity] | None = None) -> dict[str, Any]:
+        """A stable object descriptor for a semantic event.
+
+        Mirrors the adapter's wire `_object_data` (id, kind, name) so the two
+        agree on instance ids, including the `<kind>-<n>` suffix that tells two
+        of the same prototype apart in one collection.
+        """
+        base = getattr(entity, "item_id", None) or slug(entity.name)
+        ident = getattr(entity, "instance_id", None)
+        if not ident:
+            siblings = [
+                candidate for candidate in (collection or [])
+                if (getattr(candidate, "item_id", None)
+                    or slug(candidate.name)) == base
+            ]
+            if len(siblings) > 1:
+                try:
+                    index = siblings.index(entity) + 1
+                except ValueError:
+                    index = 1
+                ident = f"{base}-{index}"
+            else:
+                ident = base
+            entity.instance_id = ident
+        return {"id": ident, "kind": base, "name": entity.name}
+
+    async def execute(self, actor: Player, text: str) -> CommandOutcome:
+        """Run one command for `actor` and return a typed outcome (#130).
+
+        Phase 1 is additive: `process_command` still drives the v1 server and
+        the v2 adapter. The verbs ported so far build their semantic events
+        directly; anything else falls back to `process_command` so the reply
+        stays faithful while the port continues.
+        """
+        verb, arg, _raw = self.parse_command(text)
+        outcome = CommandOutcome()
+        if verb == "empty":
+            outcome.reply = "Silence falls over you."
+            return outcome
+        if verb in ("exit", "quit"):
+            await self.emit("player_quit", {"reason": "user_requested"})
+            outcome.reply = "Goodbye!"
+            return outcome
+
+        handled = True
+        if verb == "take":
+            await self._exec_take(outcome, actor, arg)
+        elif verb == "drop":
+            await self._exec_drop(outcome, actor, arg)
+        elif verb == "open":
+            await self._exec_open(outcome, actor, arg)
+        elif verb == "go":
+            await self._exec_go(outcome, actor, arg)
+        else:
+            handled = False
+
+        if handled:
+            await self.emit("command_processed", {
+                "raw": text, "clean": text.strip().lower(),
+                "reply": outcome.reply,
+            })
+        else:
+            # Not yet ported: keep the outcome truthful via the string engine.
+            outcome.reply = await self.process_command(text, actor.name)
+        return outcome
+
+    @staticmethod
+    def _fail(outcome: CommandOutcome, code: str, reply: str) -> None:
+        """Record a typed failure on `outcome`."""
+        outcome.status = "error"
+        outcome.error_code = code
+        outcome.reply = reply
+
+    async def _exec_take(self, outcome: CommandOutcome, actor: Player,
+                         arg: str | None) -> None:
+        """`take <item>`: move one room item into the actor's pack."""
+        if not arg:
+            self._fail(outcome, "bad_args", "Take what? Try `take <item>`.")
+            return
+        room = actor.location
+        if room is None:
+            self._fail(
+                outcome, "not_here",
+                "There is nowhere here to take anything from.")
+            return
+        before_room_contents = list(room.contents)
+        item, disambig = self._disambiguate(room.contents, arg)
+        if disambig:
+            self._fail(outcome, "ambiguous", disambig)
+            return
+        if item is None:
+            self._fail(outcome, "not_found", f"There is no {arg} here.")
+            return
+        if not self.can_carry(actor, item):
+            self._fail(
+                outcome, "too_heavy",
+                f"You cannot carry the {item.name}; it is too heavy.")
+            return
+        if self.store is not None:
+            self.store.player(actor.name).take(item, room=room)
+        room.remove_content(item)
+        actor.add_content(item)
+        await self.emit("item_taken", {
+            "item_name": item.name.lower(), "owner": actor.name})
+        outcome.reply = f"You picked up the {item.name}."
+        outcome.events.append(SemanticEvent(
+            kind="object.taken",
+            data={
+                "object": self._semantic_object(item, before_room_contents),
+                "by": actor.name,
+                "text_actor": outcome.reply,
+                "text_room": f"{actor.name} picks up the {item.name}.",
+            },
+            scope="room",
+        ))
+
+    async def _exec_drop(self, outcome: CommandOutcome, actor: Player,
+                         arg: str | None) -> None:
+        """`drop <item>`: move one carried item into the actor's room."""
+        if not arg:
+            self._fail(outcome, "bad_args", "Drop what? Try `drop <item>`.")
+            return
+        room = actor.location
+        if room is None:
+            self._fail(
+                outcome, "not_here",
+                "There is nowhere here to drop anything.")
+            return
+        item, disambig = self._disambiguate(actor.contents, arg)
+        if disambig:
+            self._fail(outcome, "ambiguous", disambig)
+            return
+        if item is None:
+            self._fail(
+                outcome, "not_found", f"You aren't carrying any {arg}.")
+            return
+        if self.store is not None:
+            self.store.player(actor.name).drop(item, room=room)
+        actor.remove_content(item)
+        room.add_content(item)
+        await self.emit("item_dropped", {
+            "item_name": item.name.lower(), "location": room.name})
+        outcome.reply = f"You dropped the {item.name}."
+        outcome.events.append(SemanticEvent(
+            kind="object.dropped",
+            data={
+                "object": self._semantic_object(item, room.contents),
+                "by": actor.name,
+                "text_actor": outcome.reply,
+                "text_room": f"{actor.name} drops the {item.name}.",
+            },
+            scope="room",
+        ))
+
+    async def _exec_open(self, outcome: CommandOutcome, actor: Player,
+                         arg: str | None) -> None:
+        """`open <container>`: set the lid open and report the contents."""
+        if not arg:
+            self._fail(outcome, "bad_args", "Open what? Try `open <chest>`.")
+            return
+        room = actor.location
+        if room is None:
+            self._fail(
+                outcome, "not_here",
+                "There is nowhere here to open anything.")
+            return
+        container, disambig = self._disambiguate(room.contents, arg)
+        if disambig:
+            self._fail(outcome, "ambiguous", disambig)
+            return
+        if container is None:
+            self._fail(
+                outcome, "not_found", f"There is no {arg} here to open.")
+            return
+        if getattr(container, "locked", False):
+            self._fail(
+                outcome, "locked",
+                f"The {container.name} is locked. Find a key and "
+                f"`use <key> on {container.name.lower()}`.")
+            return
+        if container.is_container:
+            if container.open:
+                self._fail(
+                    outcome, "already_open",
+                    f"The {container.name} is already open.")
+                return
+            container.open = True
+            await self.fire_effects(
+                container, "on_open", actor=actor.name, room=room)
+
+        loot = list(container.contents)
+        if not loot:
+            outcome.reply = f"The {container.name} is empty."
+        else:
+            await self.emit("chest_opened", {
+                "item_name": container.name.lower(),
+                "location": room.name,
+            })
+            listed = ", ".join(sorted(c.name for c in loot))
+            outcome.reply = (
+                f"You open the {container.name}. Inside you see: {listed}.")
+        outcome.events.append(SemanticEvent(
+            kind="object.opened",
+            data={
+                "object": self._semantic_object(container, room.contents),
+                "by": actor.name,
+                "text_actor": outcome.reply,
+                "text_room": f"{actor.name} opens the {container.name}.",
+            },
+            scope="room",
+        ))
+
+    async def _exec_go(self, outcome: CommandOutcome, actor: Player,
+                       arg: str | None) -> None:
+        """`go <direction>`: move the actor, or refuse a locked/missing way."""
+        if not arg:
+            self._fail(
+                outcome, "bad_args", "Go where? Try `go <direction>`.")
+            return
+        direction = arg.strip()
+        room = actor.location
+        if room is None:
+            self._fail(
+                outcome, "not_here",
+                "You have no presence here to move.")
+            return
+        if room.exit_is_locked(direction):
+            await self.emit("exit_locked", {
+                "direction": direction, "location": room.name})
+            self._fail(outcome, "locked", self._locked_exit_reply(direction))
+            return
+
+        old_room = room
+        moved, result = await self.move_player(actor.name, direction)
+        if not moved:
+            self._fail(outcome, "no_exit", result)
+            return
+
+        outcome.reply = self._describe_movement(
+            actor.location, direction, old_location=old_room)
+        outcome.events.append(SemanticEvent(
+            kind="room.state",
+            data={"actor": actor},
+            scope="actor",
+        ))
+        outcome.events.append(SemanticEvent(
+            kind="room.leave",
+            data={
+                "actor": actor.name,
+                "room": old_room,
+                "direction": direction,
+                "text": f"{actor.name} leaves.",
+            },
+            scope="room_others",
+        ))
+        outcome.events.append(SemanticEvent(
+            kind="room.enter",
+            data={
+                "actor": actor.name,
+                "room": actor.location,
+                "direction": direction,
+                "text": f"{actor.name} arrives.",
+            },
+            scope="room_others",
+        ))
 
     async def process_command(self, command_text: str, player_name: Optional[str] = None) -> str:
         """Translates player input into state mutation or narrative.
