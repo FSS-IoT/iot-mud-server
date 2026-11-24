@@ -144,11 +144,25 @@ async def test_go_through_an_open_exit_is_a_typed_success(vault):
 
 
 @pytest.mark.asyncio
-async def test_unported_verb_still_returns_a_truthful_reply(vault):
-    """Phase 1 leaves most verbs on the string path; the outcome stays faithful."""
+async def test_look_returns_a_room_state_outcome(vault):
+    """`look` produces a room.state event and the engine's reply."""
     engine, player, _room, _chest, _coin = vault
 
     outcome = await engine.execute(player, "look")
 
     assert outcome.status == "success"
-    assert outcome.reply  # still the engine's prose
+    assert outcome.reply
+    assert _kinds(outcome) == ["room.state"]
+
+
+def test_adapter_is_a_pure_shaping_layer():
+    """#130: the adapter no longer owns grammar, prose classification, or a diff."""
+    import inspect
+
+    from src.mud.protocol import adapter
+
+    assert not hasattr(adapter, "_ALIASES")
+    assert not hasattr(adapter, "_classify")
+    source = inspect.getsource(adapter)
+    assert "before_room_contents" not in source
+    assert "before_inventory" not in source

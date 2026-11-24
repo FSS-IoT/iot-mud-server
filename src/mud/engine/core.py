@@ -1449,15 +1449,19 @@ class Engine:
     async def execute(self, actor: Player, text: str) -> CommandOutcome:
         """Run one command for `actor` and return a typed outcome (#130).
 
-        Phase 1 is additive: `process_command` still drives the v1 server and
-        the v2 adapter. The verbs ported so far build their semantic events
-        directly; anything else falls back to `process_command` so the reply
-        stays faithful while the port continues.
+        The single command path: it parses once, dispatches to the verb
+        handler, and the handler records the reply, typed status, and semantic
+        events. The v2 adapter shapes that outcome; `process_command` remains
+        for the legacy single-player caller.
         """
         verb, arg, _raw = self.parse_command(text)
         outcome = CommandOutcome()
         if verb == "empty":
-            outcome.reply = "Silence falls over you."
+            self._notice(outcome, "Silence falls over you.")
+            await self.emit("command_processed", {
+                "raw": text, "clean": text.strip().lower(),
+                "reply": outcome.reply,
+            })
             return outcome
         if verb in ("exit", "quit"):
             await self.emit("player_quit", {"reason": "user_requested"})
@@ -1493,12 +1497,16 @@ class Engine:
         }
         handler = handlers.get(verb)
         raw_handler = raw_handlers.get(verb)
-        handled = handler is not None or raw_handler is not None
         try:
             if raw_handler is not None:
                 await raw_handler(outcome, actor, arg, text)
             elif handler is not None:
                 await handler(outcome, actor, arg)
+            else:
+                self._fail(
+                    outcome, "unknown_command",
+                    "Hmm, I don't understand that. Type `help` for a list of "
+                    "commands.")
         except StorageWriteError:
             # A commit failed, so the engine changed nothing: one typed error,
             # no event for any other client (SPEC v2.1.0 criterion 2).
@@ -1511,14 +1519,10 @@ class Engine:
             outcome.events = []
             return outcome
 
-        if handled:
-            await self.emit("command_processed", {
-                "raw": text, "clean": text.strip().lower(),
-                "reply": outcome.reply,
-            })
-        else:
-            # Not yet ported: keep the outcome truthful via the string engine.
-            outcome.reply = await self.process_command(text, actor.name)
+        await self.emit("command_processed", {
+            "raw": text, "clean": text.strip().lower(),
+            "reply": outcome.reply,
+        })
         return outcome
 
     @staticmethod
