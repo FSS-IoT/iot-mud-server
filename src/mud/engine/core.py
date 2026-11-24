@@ -10,6 +10,7 @@ from src.mud.content.effects import effect_entries, effect_payload
 from src.mud.content.validator import container_cycles
 from src.mud.protocol.v2 import CommandOutcome, SemanticEvent
 from src.mud.storage.keys import object_key, room_key, slug
+from src.mud.storage.store import StorageWriteError
 from src.mud.world.wander import NpcMove, NpcWanderer, npc_key
 
 if TYPE_CHECKING:
@@ -1464,16 +1465,28 @@ class Engine:
             return outcome
 
         handled = True
-        if verb == "take":
-            await self._exec_take(outcome, actor, arg)
-        elif verb == "drop":
-            await self._exec_drop(outcome, actor, arg)
-        elif verb == "open":
-            await self._exec_open(outcome, actor, arg)
-        elif verb == "go":
-            await self._exec_go(outcome, actor, arg)
-        else:
-            handled = False
+        try:
+            if verb == "take":
+                await self._exec_take(outcome, actor, arg)
+            elif verb == "drop":
+                await self._exec_drop(outcome, actor, arg)
+            elif verb == "open":
+                await self._exec_open(outcome, actor, arg)
+            elif verb == "go":
+                await self._exec_go(outcome, actor, arg)
+            else:
+                handled = False
+        except StorageWriteError:
+            # A commit failed, so the engine changed nothing: one typed error,
+            # no event for any other client (SPEC v2.1.0 criterion 2).
+            logger.exception("write-through failed on %r", text)
+            outcome.status = "error"
+            outcome.error_code = "internal"
+            outcome.reply = (
+                "The world could not save that command; nothing changed.")
+            outcome.error_data = {}
+            outcome.events = []
+            return outcome
 
         if handled:
             await self.emit("command_processed", {
@@ -1492,6 +1505,36 @@ class Engine:
         outcome.error_code = code
         outcome.reply = reply
 
+    def _candidates(self, collection: list[Entity],
+                    arg: str | None) -> list[dict[str, Any]]:
+        """The structured ambiguity candidates for `arg` in `collection` (#78).
+
+        Empty when the name resolves uniquely or not at all; an `ambiguous`
+        outcome attaches the list so a client can disambiguate.
+        """
+        if not arg:
+            return []
+        matches = self.target_matches(collection, arg)
+        if len(matches) < 2:
+            return []
+        return [self._semantic_object(item, collection) for item in matches]
+
+    def _set_too_heavy(self, outcome: CommandOutcome, actor: Player,
+                       collection: list[Entity], arg: str | None,
+                       reply: str, item: Entity | None = None) -> None:
+        """Record the typed carry-limit refusal with the numbers behind it (#78)."""
+        self._fail(outcome, "too_heavy", reply)
+        data: dict[str, Any] = {
+            "capacity": round(self.carry_capacity(actor), 3),
+            "used": round(self.carry_used(actor), 3),
+        }
+        found = item if item is not None else self._find_item(collection, arg)
+        if found is not None:
+            data["object"] = self._semantic_object(found, collection)
+            data["weight"] = round(
+                float(getattr(found, "weight", 0.0) or 0.0), 3)
+        outcome.error_data = data
+
     async def _exec_take(self, outcome: CommandOutcome, actor: Player,
                          arg: str | None) -> None:
         """`take <item>`: move one room item into the actor's pack."""
@@ -1508,14 +1551,16 @@ class Engine:
         item, disambig = self._disambiguate(room.contents, arg)
         if disambig:
             self._fail(outcome, "ambiguous", disambig)
+            outcome.error_data = {
+                "candidates": self._candidates(before_room_contents, arg)}
             return
         if item is None:
             self._fail(outcome, "not_found", f"There is no {arg} here.")
             return
         if not self.can_carry(actor, item):
-            self._fail(
-                outcome, "too_heavy",
-                f"You cannot carry the {item.name}; it is too heavy.")
+            self._set_too_heavy(
+                outcome, actor, before_room_contents, arg,
+                f"You cannot carry the {item.name}; it is too heavy.", item)
             return
         if self.store is not None:
             self.store.player(actor.name).take(item, room=room)
@@ -1550,6 +1595,8 @@ class Engine:
         item, disambig = self._disambiguate(actor.contents, arg)
         if disambig:
             self._fail(outcome, "ambiguous", disambig)
+            outcome.error_data = {
+                "candidates": self._candidates(actor.contents, arg)}
             return
         if item is None:
             self._fail(
@@ -1588,6 +1635,8 @@ class Engine:
         container, disambig = self._disambiguate(room.contents, arg)
         if disambig:
             self._fail(outcome, "ambiguous", disambig)
+            outcome.error_data = {
+                "candidates": self._candidates(room.contents, arg)}
             return
         if container is None:
             self._fail(
@@ -1649,6 +1698,17 @@ class Engine:
             await self.emit("exit_locked", {
                 "direction": direction, "location": room.name})
             self._fail(outcome, "locked", self._locked_exit_reply(direction))
+            # The room sees the attempt; the actor gets the typed refusal above.
+            outcome.events.append(SemanticEvent(
+                kind="exit.locked",
+                data={
+                    "actor": actor.name,
+                    "room": room,
+                    "direction": direction,
+                    "target": room.exits.get(direction),
+                },
+                scope="room_others",
+            ))
             return
 
         old_room = room

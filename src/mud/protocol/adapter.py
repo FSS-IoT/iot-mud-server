@@ -437,6 +437,73 @@ def _parse(text: str) -> tuple[str, str | None, str]:
     return verb, arg, raw
 
 
+# Verbs whose semantic events the engine already produces. The adapter shapes
+# these from a `CommandOutcome` instead of re-parsing and diffing state (#130).
+# The set grows as verbs move to the typed path; the old branches below cover
+# the rest until then.
+_OUTCOME_VERBS = frozenset({"take", "drop", "open", "go"})
+
+
+def _shape_event(engine: Engine, actor: Player, sem) -> list[Outbound]:
+    """Map one semantic event to its wire outbound(s)."""
+    kind, data, scope = sem.kind, sem.data, sem.scope
+    if kind == "room.state":
+        player = data.get("actor", actor)
+        return [Outbound("room.state", build_room_state(engine, player),
+                         "actor", direct=sem.direct)]
+    if kind in ("room.leave", "room.enter"):
+        room = data["room"]
+        return [Outbound(kind, {
+            "room": {"id": _room_id(room), "name": room.name},
+            "actor": {"name": data["actor"]},
+            "direction": data["direction"],
+            "reason": "move",
+            "text": data["text"],
+        }, "room", room_name=room.name, direct=False)]
+    if kind == "exit.locked":
+        room = data["room"]
+        target = data.get("target")
+        return [Outbound("exit.locked", {
+            "exit": {
+                "direction": data["direction"],
+                "to": _room_id(target) if target is not None else None,
+            },
+            "room": {"id": _room_id(room), "name": room.name},
+            "by": data["actor"],
+            "self": False,
+            "text": (f"{data['actor']} tries the way {data['direction']}; "
+                     "it is locked."),
+        }, "room", room_name=room.name, direct=False)]
+    # Object events carry a shared body plus one text per perspective.
+    base = {key: value for key, value in data.items()
+            if key not in ("text_actor", "text_room")}
+    actor_event = Outbound(
+        kind, {**base, "self": True, "text": data.get("text_actor", "")},
+        "actor", direct=sem.direct)
+    if scope == "actor":
+        return [actor_event]
+    room_event = Outbound(
+        kind, {**base, "self": False, "text": data.get("text_room", "")},
+        "room", direct=False)
+    if scope == "room_others":
+        return [room_event]
+    return [actor_event, room_event]
+
+
+def _shape_outcome(engine: Engine, actor: Player, outcome) -> CommandResult:
+    """Turn a typed `CommandOutcome` into the wire events it should produce."""
+    events: list[Outbound] = []
+    if outcome.status == "error":
+        data: dict[str, Any] = {
+            "code": outcome.error_code, "message": outcome.reply,
+        }
+        data.update(outcome.error_data)
+        events.append(Outbound("error", data))
+    for sem in outcome.events:
+        events.extend(_shape_event(engine, actor, sem))
+    return CommandResult(events)
+
+
 async def execute(engine: Engine, player_name: str,
                   command_text: str) -> CommandResult:
     """Run one command and return the v2 events it should produce."""
@@ -447,6 +514,10 @@ async def execute(engine: Engine, player_name: str,
     verb, arg, raw = _parse(command_text)
     if verb in ("exit", "quit"):
         return CommandResult([])
+
+    if verb in _OUTCOME_VERBS:
+        outcome = await engine.execute(player, command_text)
+        return _shape_outcome(engine, player, outcome)
 
     before_room = player.location
     before_room_contents = list(before_room.contents) if before_room else []
