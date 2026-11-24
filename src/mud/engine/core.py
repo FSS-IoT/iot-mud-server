@@ -1478,6 +1478,10 @@ class Engine:
             "examine": self._exec_examine,
             "read": self._exec_read,
             "look_in": self._exec_look_in,
+            "put": self._exec_put,
+            "get": self._exec_get,
+            "close": self._exec_close,
+            "use": self._exec_use,
         }
         handler = handlers.get(verb)
         handled = handler is not None
@@ -2000,6 +2004,363 @@ class Engine:
              if (room is None or p.location is room) and p.name.lower() == key),
             None,
         )
+
+    async def _exec_put(self, outcome: CommandOutcome, actor: Player,
+                        arg: str | None) -> None:
+        """`put <item> in <container>`: move a carried item into a container."""
+        normalized = (arg or "").replace(" into ", " in ")
+        if " in " not in normalized:
+            self._fail(
+                outcome, "bad_args",
+                "Put what where? Try `put <item> in <container>`.")
+            return
+        item_arg, _, container_arg = normalized.rpartition(" in ")
+        item_arg = item_arg.strip()
+        container_arg = container_arg.strip()
+        if not item_arg or not container_arg:
+            self._fail(
+                outcome, "bad_args",
+                "Put what where? Try `put <item> in <container>`.")
+            return
+        room = actor.location
+        if room is None:
+            self._notice(outcome, "There is nowhere here to put anything.")
+            return
+        before_room_contents = list(room.contents)
+        before_inventory = list(actor.contents)
+        held, item_disambig = self._disambiguate(
+            actor.contents, item_arg)
+        container, cont_disambig = self._disambiguate(
+            room.contents, container_arg)
+        if item_disambig:
+            self._fail(outcome, "ambiguous", item_disambig)
+            outcome.error_data = {
+                "candidates": self._candidates(before_inventory, item_arg)}
+            return
+        if cont_disambig:
+            self._fail(outcome, "ambiguous", cont_disambig)
+            outcome.error_data = {
+                "candidates": self._candidates(
+                    before_room_contents, container_arg)}
+            return
+        if held is None:
+            self._fail(
+                outcome, "not_found",
+                f"You aren't carrying any {item_arg}.")
+            return
+        if container is None:
+            self._fail(
+                outcome, "not_found",
+                f"There is no {container_arg} here to put it in.")
+            return
+        if getattr(container, "locked", False):
+            self._fail(
+                outcome, "locked",
+                f"The {container.name} is locked. Find a key and "
+                f"`use <key> on {container.name.lower()}`.")
+            return
+        if self._containment_cycle(container, held):
+            self._fail(
+                outcome, "container_cycle",
+                f"You cannot put the {held.name} in the {container.name}; "
+                "a container cannot contain itself, directly or transitively.")
+            outcome.error_data = {
+                "object": self._semantic_object(held, before_inventory),
+                "container": self._semantic_object(
+                    container, before_room_contents),
+            }
+            return
+        actor.remove_content(held)
+        container.add_content(held)
+        await self.emit("item_put", {
+            "item_name": held.name.lower(),
+            "container": container.name.lower(),
+            "location": room.name,
+        })
+        outcome.reply = f"You put the {held.name} in the {container.name}."
+        obj = self._semantic_object(held, container.contents)
+        cont = self._semantic_object(container, before_room_contents)
+        room_text = (
+            f"{actor.name} puts the {held.name} in the {container.name}.")
+        outcome.events.append(SemanticEvent(
+            kind="object.put",
+            data={"object": obj, "container": cont, "by": actor.name,
+                  "text_actor": outcome.reply},
+            scope="actor",
+        ))
+        outcome.events.append(SemanticEvent(
+            kind="player.inventory", data={"actor": actor},
+            scope="actor", direct=False))
+        outcome.events.append(SemanticEvent(
+            kind="object.put",
+            data={"object": obj, "container": cont, "by": actor.name,
+                  "text_room": room_text},
+            scope="room_others",
+        ))
+
+    async def _exec_get(self, outcome: CommandOutcome, actor: Player,
+                        arg: str | None) -> None:
+        """`get <item> from <container>`: pull one item into the pack."""
+        if not arg:
+            self._fail(
+                outcome, "bad_args",
+                "Get what from what? Try `get <item> from <container>`.")
+            return
+        if " from " not in arg:
+            # The engine leaves a `get` without `from` to its "Get what from
+            # what?" reply, which the adapter surfaces as a notice.
+            self._notice(
+                outcome,
+                "Get what from what? Try `get <item> from <container>`.")
+            return
+        item_arg, _, container_arg = arg.rpartition(" from ")
+        item_arg = item_arg.strip()
+        container_arg = container_arg.strip()
+        if not item_arg or not container_arg:
+            self._notice(
+                outcome,
+                "Get what from what? Try `get <item> from <container>`.")
+            return
+        room = actor.location
+        if room is None:
+            self._notice(outcome, "There is nowhere here to get anything from.")
+            return
+        before_room_contents = list(room.contents)
+        container, cont_disambig = self._disambiguate(
+            room.contents, container_arg)
+        if cont_disambig:
+            self._fail(outcome, "ambiguous", cont_disambig)
+            outcome.error_data = {
+                "candidates": self._candidates(
+                    before_room_contents, container_arg)}
+            return
+        if container is None:
+            self._fail(
+                outcome, "not_found", f"There is no {container_arg} here.")
+            return
+        if not container.is_container:
+            self._fail(
+                outcome, "bad_args",
+                f"The {container.name} is not a container.")
+            return
+        if not container.open:
+            self._fail(
+                outcome, "container_closed",
+                f"The {container.name} is closed. Open it first.")
+            return
+        item, item_disambig = self._disambiguate(
+            container.contents, item_arg)
+        if item_disambig:
+            self._fail(outcome, "ambiguous", item_disambig)
+            outcome.error_data = {
+                "candidates": self._candidates(
+                    container.contents, item_arg)}
+            return
+        if item is None:
+            self._fail(
+                outcome, "not_here",
+                f"The {item_arg} is not in the {container.name}.")
+            return
+        if not getattr(item, "portable", True):
+            self._fail(
+                outcome, "not_portable",
+                f"The {item.name} is fixed in place and cannot be put in "
+                "your pack.")
+            return
+        if not self.can_carry(actor, item):
+            self._set_too_heavy(
+                outcome, actor, container.contents, item_arg,
+                f"You cannot carry the {item.name}; it is too heavy.", item)
+            return
+        container.remove_content(item)
+        actor.add_content(item)
+        await self.emit("item_got", {
+            "item_name": item.name.lower(),
+            "container": container.name.lower(),
+            "location": room.name,
+        })
+        outcome.reply = (
+            f"You get the {item.name} from the {container.name}.")
+        obj = self._semantic_object(item, actor.contents)
+        cont = self._semantic_object(container, before_room_contents)
+        room_text = (
+            f"{actor.name} gets the {item.name} from the {container.name}.")
+        outcome.events.append(SemanticEvent(
+            kind="object.got",
+            data={"object": obj, "container": cont, "by": actor.name,
+                  "text_actor": outcome.reply},
+            scope="actor",
+        ))
+        outcome.events.append(SemanticEvent(
+            kind="player.inventory", data={"actor": actor},
+            scope="actor", direct=False))
+        outcome.events.append(SemanticEvent(
+            kind="object.got",
+            data={"object": obj, "container": cont, "by": actor.name,
+                  "text_room": room_text},
+            scope="room_others",
+        ))
+
+    async def _exec_close(self, outcome: CommandOutcome, actor: Player,
+                          arg: str | None) -> None:
+        """`close <container>`: put the lid back down; contents stay."""
+        if not arg:
+            self._fail(
+                outcome, "bad_args", "Close what? Try `close <chest>`.")
+            return
+        room = actor.location
+        if room is None:
+            self._notice(outcome, "There is nowhere here to close anything.")
+            return
+        before_room_contents = list(room.contents)
+        container, disambig = self._disambiguate(room.contents, arg)
+        if disambig:
+            self._fail(outcome, "ambiguous", disambig)
+            outcome.error_data = {
+                "candidates": self._candidates(before_room_contents, arg)}
+            return
+        if container is None:
+            self._fail(
+                outcome, "not_found", f"There is no {arg} here to close.")
+            return
+        if not container.is_container:
+            self._fail(
+                outcome, "bad_args",
+                f"The {container.name} is not something you can close.")
+            return
+        if not container.open:
+            self._fail(
+                outcome, "already_closed",
+                f"The {container.name} is already closed.")
+            return
+        container.open = False
+        await self.emit("container_closed", {
+            "item_name": container.name.lower(),
+            "location": room.name,
+        })
+        outcome.reply = f"You close the {container.name}."
+        outcome.events.append(SemanticEvent(
+            kind="object.closed",
+            data={"object": self._semantic_object(
+                      container, before_room_contents),
+                  "by": actor.name,
+                  "text_actor": outcome.reply,
+                  "text_room": f"{actor.name} closes the {container.name}."},
+            scope="room",
+        ))
+
+    async def _exec_use(self, outcome: CommandOutcome, actor: Player,
+                        arg: str | None) -> None:
+        """`use <key> on <lock|exit>`: turn a key to unlock a door or lid."""
+        if not arg:
+            self._fail(
+                outcome, "bad_args",
+                "Use what on what? Try `use <key> on <lock>`.")
+            return
+        if " on " not in arg:
+            self._fail(
+                outcome, "bad_args",
+                "Use a key on something: `use <key> on <lock|exit>`.")
+            return
+        key_name, lock_name = arg.split(" on ", 1)
+        room = actor.location
+        if room is None:
+            self._notice(outcome, "There is nowhere here to use a key.")
+            return
+        before_room_contents = list(room.contents)
+        before_inventory = list(actor.contents)
+        key_item, key_disambig = self._disambiguate(
+            actor.contents, key_name)
+        lock_item, lock_disambig = self._disambiguate(
+            room.contents, lock_name)
+        if key_disambig:
+            self._fail(outcome, "ambiguous", key_disambig)
+            outcome.error_data = {
+                "candidates": self._candidates(
+                    before_inventory, key_name.strip())}
+            return
+        if lock_disambig:
+            self._fail(outcome, "ambiguous", lock_disambig)
+            outcome.error_data = {
+                "candidates": self._candidates(
+                    before_room_contents, lock_name.strip())}
+            return
+        if key_item is None:
+            self._fail(
+                outcome, "not_found",
+                f"You don't have a {key_name.strip()} to use.")
+            return
+        if lock_item is None:
+            found = self._find_exit(room, lock_name)
+            if found is None:
+                self._fail(
+                    outcome, "not_found",
+                    f"There is no {lock_name.strip()} here to use a "
+                    f"{key_name.strip()} on.")
+                return
+            direction, target, lock = found
+            if lock is None or not lock.locked:
+                self._fail(
+                    outcome, "already_open",
+                    f"The way {direction} is already open.")
+                return
+            if (not lock.key
+                    or getattr(key_item, "item_id", None) != lock.key):
+                self._fail(
+                    outcome, "locked",
+                    f"The {key_item.name} does not fit the lock on the way "
+                    f"{direction}.")
+                return
+            lock.locked = False
+            await self.emit("exit_unlocked", {
+                "direction": direction,
+                "from": room.name,
+                "to": target.name,
+                "key": key_item.name.lower(),
+            })
+            door = lock.label or f"way {direction}"
+            outcome.reply = (
+                f"You turn the {key_item.name}; the {door} unlocks.")
+            outcome.events.append(SemanticEvent(
+                kind="exit.unlocked",
+                data={"actor": actor.name, "room": room,
+                      "direction": direction, "target": target,
+                      "text_actor": outcome.reply,
+                      "text_room": (f"{actor.name} unlocks the way "
+                                    f"{direction}.")},
+                scope="room",
+            ))
+            return
+        if not getattr(lock_item, "locked", False):
+            self._fail(
+                outcome, "already_open",
+                f"The {lock_item.name} is already open.")
+            return
+        if (getattr(lock_item, "required_key", None)
+                and getattr(key_item, "item_id", None)
+                == lock_item.required_key):
+            lock_item.locked = False
+            await self.emit("item_unlocked", {
+                "item_name": lock_item.name.lower(),
+                "location": room.name,
+            })
+            outcome.reply = (
+                f"You turn the {key_item.name} and the {lock_item.name} "
+                "clicks open.")
+            outcome.events.append(SemanticEvent(
+                kind="object.unlocked",
+                data={"object": self._semantic_object(
+                          lock_item, before_room_contents),
+                      "by": actor.name,
+                      "text_actor": outcome.reply,
+                      "text_room": (f"{actor.name} unlocks the "
+                                    f"{lock_item.name}.")},
+                scope="room",
+            ))
+            return
+        self._fail(
+            outcome, "locked",
+            f"The {key_item.name} does not fit the {lock_item.name}.")
 
     async def process_command(self, command_text: str, player_name: Optional[str] = None) -> str:
         """Translates player input into state mutation or narrative.

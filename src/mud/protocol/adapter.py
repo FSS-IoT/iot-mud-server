@@ -445,6 +445,7 @@ _OUTCOME_VERBS = frozenset({
     "take", "drop", "open", "go",
     "look", "inventory", "who", "show_exits", "help", "hello",
     "examine", "read", "look_in",
+    "put", "get", "close", "use",
 })
 
 
@@ -475,6 +476,22 @@ def _shape_event(engine: Engine, actor: Player, sem) -> list[Outbound]:
             "content": data.get("content", ""),
             "text": data.get("text", ""),
         }, "actor", direct=sem.direct)]
+    if kind == "exit.unlocked":
+        room = data["room"]
+        base = {
+            "exit": {"direction": data["direction"],
+                     "to": _room_id(data["target"])},
+            "room": {"id": _room_id(room), "name": room.name},
+            "by": data["actor"],
+        }
+        return [
+            Outbound(kind, {**base, "self": True,
+                            "text": data.get("text_actor", "")},
+                     "actor", direct=sem.direct),
+            Outbound(kind, {**base, "self": False,
+                            "text": data.get("text_room", "")},
+                     "room", room_name=room.name, direct=False),
+        ]
     if kind in ("room.leave", "room.enter"):
         room = data["room"]
         return [Outbound(kind, {
