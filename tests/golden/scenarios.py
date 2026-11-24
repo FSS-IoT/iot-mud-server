@@ -58,7 +58,7 @@ async def session(directory: Path) -> GoldenRun:
 
 
 async def full_tour(directory: Path) -> GoldenRun:
-    """Walk all 34 rooms and exercise every object, lock, and dialogue event.
+    """Walk all 35 rooms and exercise every object, lock, and dialogue event.
 
     Ada carries the key progression; Ben is the room observer for the two
     lock events and the room copies of speech, then leaves. The route is
@@ -211,7 +211,8 @@ async def full_tour(directory: Path) -> GoldenRun:
             await command(ada, "read river notice", "object.read")
             await walk(run, ada, engine, "riverbank", "ford")
             await command(ada, "read ford stone", "object.read")
-            await walk(run, ada, engine, "ford", "heron_rock")
+            await walk(run, ada, engine, "ford", "river_shallows")
+            await walk(run, ada, engine, "river_shallows", "heron_rock")
             await command(ada, "open heron cache", "object.opened")
             await command(ada, "get brass button from heron cache", "object.got")
             await command(ada, "close heron cache", "object.closed")
