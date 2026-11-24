@@ -57,8 +57,9 @@ tab's `sessionStorage`.
 | `src/components/Login.svelte` | Static unauthenticated token screen |
 | `src/components/StatusPanel.svelte` | Commit, world/paths, counts, features, limits |
 | `src/components/PlayersPanel.svelte` | Roster, live overlay, one-time rekey |
-| `src/components/WorldEditor.svelte` | Document state, validation, save/apply, area tree, map + inspector split |
-| `src/components/WorldMap.svelte` | SVG map, pan/zoom/fit, node drag, connect handles, palette drops |
+| `src/components/WorldEditor.svelte` | Document state, validation, save/apply, area tree, Tiles/Connections toggle, inspector |
+| `src/components/WorldTiles.svelte` | Spatial tile map, derived levels, conflicts, palette drops, grid generation |
+| `src/components/WorldMap.svelte` | Connections graph, pan/zoom/fit, node drag, connect handles, palette drops |
 | `src/components/RoomEditor.svelte` | Room fields, tabs, and the section editors |
 | `src/components/GeometryEditor.svelte` | SVG cell grid, spawn points, props |
 | `src/components/ExitsEditor.svelte` | Direction, target, lock, key, label, one-way |
@@ -67,7 +68,8 @@ tab's `sessionStorage`.
 | `src/components/EffectsEditor.svelte` | Trigger groups and JSON-safe effect params |
 | `src/lib/api.ts` | Bearer fetch wrapper and typed API errors |
 | `src/lib/types.ts` | Wire types, normalization, default geometry, YAML payload |
-| `src/lib/layout.ts` | Deterministic auto-layout and layout bounds |
+| `src/lib/layout.ts` | Deterministic auto-layout and layout bounds for Connections |
+| `src/lib/worldTiles.ts` | Pure footprint/placement model for the Tiles view |
 
 The UI intentionally keeps no defeated "backup" or "reset" actions: backups are
 automatic on save, and destructive database operations stay in the offline CLI.
@@ -99,34 +101,68 @@ JSON out.
 }
 ```
 
-## Map interactions
+## Map views
 
-- **Select** — click a node or a tree entry. The right-hand inspector keeps its
-  current tab; an edge click jumps to that room's Exits tab.
+The toggle above the map chooses **Tiles** (default) or **Connections**. Both
+views select the same room, so the tree and inspector stay in sync.
+
+### Tiles
+
+- **Derived placement** — each room's footprint is its authored `geometry`, or
+  `defaultGeometry(room)` when missing. Cardinal exits align the two door cells
+  and share a boundary row/column; one-way exits still place the target.
+  `up`/`down` stack levels; `in`/`out` and unknown directions are portal badges.
+- **Draw** — walls, floors, doors, stairs, props, and spawn points. Authored
+  rooms have a solid outline; generated footprints are dashed. Area colour tints
+  floors and outlines; labels carry name, id, object/NPC counts, `START`, and
+  validation badges.
+- **Warnings** — a conflict banner lists non-closing cycles, overlapping rooms,
+  missing source doors, and similar placement problems. Detached rooms go into
+  a separate level 0 band. Portal links are listed under a details block.
+- **Generate missing grids** — asks for confirmation, writes the default 9×7
+  grid into every room without geometry **in the draft**, marks it dirty, and
+  leaves saving to the existing Save button. The grid includes reciprocal
+  doors/stairs implied by neighbouring exits (the content validator checks the
+  effective exit map). The view never mutates content itself. The per-room
+  `Add default grid` button also uses the reciprocal directions.
+- **Controls** — click a tile/room to select it; drag a palette chip onto a room
+  or arm a chip and click. Drag empty canvas to pan; wheel/`+`/`−` zoom; **Fit**
+  frames all levels.
+- **No manual positions** — derived placement ignores `layout.json`. Switch to
+  Connections for free dragging and exit handles.
+
+### Connections
+
+- **Select** — click a node or a tree entry. An edge click jumps to that room's
+  Exits tab.
 - **Move** — drag a node. **Pan** empty canvas. **Zoom** with the wheel, `+`, or
   `−`. The map opens centered on `start_room`; `Fit` frames every room;
   `Auto-layout` also rewrites positions and marks the draft dirty.
 - **Add room** — `Add room`, then click empty canvas. The small form takes area,
-  id, and name. The form is also the only place a chosen id is entered; the tree
-  `+ room` still generates one.
+  id, and name. The tree `+ room` still generates one.
 - **Connect** — drag a node's `N`/`E`/`S`/`W` handle onto another node. The
   checkbox chooses one-way or the usual implicit reciprocal. A click on a handle
   arms the same connection for keyboard/touch, then click the target.
 - **Palette** — drag `Item`, `Container`, `Readable`, or `NPC` onto a node, or
-  click the chip once and then the room. The new entity is selected on the
-  matching inspector tab.
+  click the chip once and then the room.
 
-Positions live in `layout.json` at the world root. Save sanitizes it, writes it
-atomically, and backs up the previous copy; the backup `manifest.json` lists it.
-Malformed or missing layout files become an empty layout; the frontend then
-auto-layouts deterministically. The layout is editor metadata only and never
-enters YAML or the wire protocol.
+Connections positions live in `layout.json` at the world root. Save sanitizes it,
+writes it atomically, and backs up the previous copy; the backup `manifest.json`
+lists it. Malformed or missing layout files become an empty layout; the frontend
+then auto-layouts deterministically. Tiles never writes positions.
 
 ## Behavior notes
 
-- **One draft** — the tree, map, palette, and inspector all edit the same
-  `WorldDoc`. Moving a node or dropping a chip marks the document dirty exactly
-  like a form field does.
+- **One draft** — the tree, both map views, palette, and inspector all edit the
+  same `WorldDoc`. Moving a node, dropping a chip, or generating grids marks the
+  document dirty exactly like a form field does.
+- **Tiles placement** — derived from exits and geometry, never from
+  `layout.json`. Generated rooms are dashed until `Generate missing grids`
+  writes their default grid into the draft. Levels stack; detached rooms have
+  their own band.
+- **Placement conflicts** — the Tiles banner lists the rooms and edges involved
+  (non-closing cycle, overlap, missing source door). Rooms are not moved or
+  hidden.
 - **Unsaved changes** — every edit marks the document dirty; the World tab shows
   a dot and the browser warns on unload. Apply is disabled until Save.
 - **Validation errors** — the top panel lists all errors; errors naming the
@@ -142,9 +178,10 @@ enters YAML or the wire protocol.
   `one_way` is set; declaring both directions is a validation error. The map's
   connect gesture follows that rule and shows both arrowheads for the implicit
   reciprocal.
-- **Layout** — `layout.json` is sanitized and written atomically with Save. If it
-  is absent or malformed, the map auto-layouts from `start_room` and the
-  reachable exit graph, then a grid for disconnected rooms.
+- **Layout (Connections)** — `layout.json` is sanitized and written atomically
+  with Save. If it is absent or malformed, Connections auto-layouts from
+  `start_room` and the reachable exit graph, then a grid for disconnected rooms.
+  Tiles ignores it.
 - **Canonical YAML** — Save writes canonical YAML and loses authored comments.
   That is documented in `../ADMIN.md`; the server keeps a timestamped backup.
 - **Apply** — reloads from the saved YAML, closes MUD clients with `1001`, and

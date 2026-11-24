@@ -1160,6 +1160,35 @@ td select {
 
 .map-column {
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.map-mode-toggle {
+  display: inline-flex;
+  align-self: flex-start;
+  gap: 0.2rem;
+  padding: 0.18rem;
+  background: var(--bg-soft);
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+}
+
+.map-mode-toggle button {
+  background: transparent;
+  border-color: transparent;
+  color: var(--muted);
+}
+
+.map-mode-toggle button.active {
+  background: rgba(45, 212, 191, 0.12);
+  border-color: rgba(45, 212, 191, 0.38);
+  color: var(--text);
+}
+
+.map-and-inspector {
+  min-width: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(320px, 380px);
   gap: 0.8rem;
@@ -1709,6 +1738,211 @@ td select {
 }
 
 /* ------------------------------------------------------------------ */
+/* Spatial tile map                                                   */
+/* ------------------------------------------------------------------ */
+
+.tiles-panel .tiles-canvas {
+  height: clamp(480px, 70vh, 820px);
+}
+
+.world-map.tiles-map {
+  cursor: grab;
+}
+
+.tile {
+  stroke: rgba(0, 0, 0, 0.18);
+  stroke-width: 0.35;
+  shape-rendering: crispEdges;
+}
+
+.tile-glyph {
+  fill: #e0f2fe;
+  font-size: 10px;
+  font-weight: 700;
+  text-anchor: middle;
+  pointer-events: none;
+}
+
+.level-heading {
+  fill: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.level-rule {
+  stroke: var(--line-soft);
+  stroke-width: 1;
+}
+
+.detached-divider {
+  stroke: var(--warn);
+  stroke-width: 1;
+  stroke-dasharray: 6 5;
+  opacity: 0.8;
+}
+
+.detached-heading {
+  fill: var(--warn);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.room-outline {
+  stroke-width: 1.2;
+  opacity: 0.62;
+  pointer-events: none;
+}
+
+.room-outline.generated {
+  stroke-dasharray: 5 3;
+}
+
+.room-outline.selected {
+  stroke: var(--accent);
+  stroke-width: 2.8;
+  opacity: 1;
+  filter: drop-shadow(0 0 7px rgba(45, 212, 191, 0.28));
+}
+
+.room-outline.conflict {
+  stroke: var(--danger);
+  stroke-width: 2.5;
+  opacity: 1;
+}
+
+.room-outline.selected.conflict {
+  stroke: var(--accent);
+  stroke-width: 3;
+  filter: drop-shadow(0 0 7px rgba(248, 113, 113, 0.45));
+}
+
+.room-outline.drop-target {
+  stroke: var(--ok);
+  stroke-width: 3;
+  opacity: 1;
+}
+
+.room-hit {
+  cursor: pointer;
+  outline: none;
+}
+
+.room-hit rect {
+  pointer-events: all;
+}
+
+.room-hit:focus-visible rect {
+  stroke: var(--accent);
+  stroke-width: 2.5;
+}
+
+.tile-label {
+  pointer-events: none;
+}
+
+.tile-label-bg {
+  fill: rgba(13, 17, 23, 0.84);
+  stroke: var(--line-soft);
+  stroke-width: 0.7;
+}
+
+.tile-name {
+  fill: var(--text);
+  font-size: 10.5px;
+  font-weight: 650;
+}
+
+.tile-meta {
+  fill: var(--muted);
+  font-family: var(--mono);
+  font-size: 8px;
+}
+
+.prop-tile {
+  fill: var(--warn);
+  opacity: 0.9;
+  pointer-events: none;
+}
+
+.spawn-dot {
+  fill: var(--accent);
+  stroke: #06141a;
+  stroke-width: 0.8;
+  pointer-events: none;
+}
+
+.tile-badge rect {
+  fill: rgba(17, 24, 32, 0.88);
+  stroke: var(--line);
+  stroke-width: 0.7;
+}
+
+.tile-badge text {
+  fill: var(--muted);
+  font-size: 8px;
+  font-weight: 700;
+  text-anchor: middle;
+  pointer-events: none;
+}
+
+.placement-conflicts {
+  max-height: 120px;
+  overflow: auto;
+  font-size: 0.76rem;
+}
+
+.placement-conflicts ul {
+  margin: 0.35rem 0 0;
+  padding-left: 1.1rem;
+}
+
+.placement-conflicts li {
+  margin: 0.15rem 0;
+}
+
+.conflict-jump {
+  flex-wrap: wrap;
+  margin-top: 0.35rem;
+}
+
+.conflict-jump button {
+  font-size: 0.68rem;
+  padding: 0.15rem 0.4rem;
+}
+
+.detached-note {
+  margin: 0 0 0.45rem;
+}
+
+.portal-note {
+  margin: 0 0 0.5rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.portal-note summary {
+  cursor: pointer;
+}
+
+.portal-note ul {
+  margin: 0.35rem 0 0;
+  padding-left: 1.1rem;
+}
+
+.portal-note li {
+  margin: 0.12rem 0;
+}
+
+.tiles-legend-note {
+  color: var(--faint);
+  font-style: italic;
+}
+
+/* ------------------------------------------------------------------ */
 /* Responsive                                                         */
 /* ------------------------------------------------------------------ */
 
@@ -1770,13 +2004,13 @@ td select {
     grid-template-columns: 220px minmax(0, 1fr);
   }
 
-  .map-column {
+  .map-and-inspector {
     grid-template-columns: minmax(0, 1fr) minmax(310px, 360px);
   }
 }
 
 @media (max-width: 1180px) {
-  .map-column {
+  .map-and-inspector {
     grid-template-columns: 1fr;
   }
 

@@ -5,10 +5,11 @@
   interface Props {
     geometry: Geometry | null;
     room: Room;
+    extraDirections?: string[];
     onchange: (geometry: Geometry | null) => void;
   }
 
-  let { geometry, room, onchange }: Props = $props();
+  let { geometry, room, extraDirections = [], onchange }: Props = $props();
   const CELL = 32;
   const PAD = 10;
 
@@ -48,7 +49,7 @@
   }
 
   function addMap(): void {
-    onchange(defaultGeometry(room));
+    onchange(defaultGeometry(room, extraDirections));
     spawnDirection = '';
   }
 
@@ -57,7 +58,7 @@
     if (!window.confirm('Replace this map with a grid derived from the exits?')) {
       return;
     }
-    onchange(defaultGeometry(room));
+    onchange(defaultGeometry(room, extraDirections));
     spawnDirection = '';
   }
 

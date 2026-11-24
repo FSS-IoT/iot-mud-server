@@ -15,6 +15,7 @@
     WorldDoc,
   } from '../lib/types';
   import {
+    defaultGeometry,
     filesize,
     newRoom,
     normalizeWorldDoc,
@@ -23,8 +24,10 @@
     worldPayload,
   } from '../lib/types';
   import { autoLayout, positionForNewRoom } from '../lib/layout';
+  import { effectiveDirections } from '../lib/worldTiles';
   import RoomEditor from './RoomEditor.svelte';
   import WorldMap from './WorldMap.svelte';
+  import WorldTiles from './WorldTiles.svelte';
 
   interface Props {
     token: string;
@@ -57,6 +60,7 @@
   let roomTab = $state<RoomTab>('room');
   let focusObjectId = $state<string | null>(null);
   let focusNpcId = $state<string | null>(null);
+  let mapMode = $state<'tiles' | 'connections'>('tiles');
 
   const allRooms = $derived(doc ? doc.areas.flatMap((area) => area.rooms) : []);
   const allIds = $derived.by(() => {
@@ -301,6 +305,46 @@
     if (!doc) return;
     doc = { ...doc, layout: next };
     markDirty();
+  }
+
+  function generateMissingGrids(): void {
+    if (!doc) return;
+    const missing = allRooms.filter((room) => !room.geometry);
+    if (missing.length === 0) {
+      message = 'Every room already has a geometry grid.';
+      return;
+    }
+    if (
+      !window.confirm(
+        `Generate the default 9×7 grid for ${missing.length} room${
+          missing.length === 1 ? '' : 's'
+        } without geometry? This updates the browser draft; Save writes the YAML.`,
+      )
+    ) {
+      return;
+    }
+    const directions = effectiveDirections(allRooms);
+    doc = {
+      ...doc,
+      areas: doc.areas.map((section) => ({
+        ...section,
+        rooms: section.rooms.map((room) =>
+          room.geometry
+            ? room
+            : {
+                ...room,
+                geometry: defaultGeometry(
+                  room,
+                  directions[room.id] ?? Object.keys(room.exits),
+                ),
+              },
+        ),
+      })),
+    };
+    markDirty();
+    message = `Generated default grids for ${missing.length} room${
+      missing.length === 1 ? '' : 's'
+    }. Save to write them to YAML.`;
   }
 
   function replaceRooms(changes: Record<string, Room>): void {
@@ -808,40 +852,69 @@
       </aside>
 
       <div class="map-column">
-        <WorldMap
-          rooms={allRooms}
-          layout={doc.layout}
-          startRoom={doc.world.start_room}
-          selectedId={selectedRoom?.id ?? null}
-          roomErrors={roomErrorCounts}
-          {areaChoices}
-          defaultAreaIndex={selection?.area ?? 0}
-          {suggestedRoomId}
-          onselect={selectRoomById}
-          onlayout={updateLayout}
-          oncreateroom={createRoomFromMap}
-          onpalette={addPaletteItem}
-          onconnect={connectRooms}
-        />
+        <div class="map-mode-toggle" role="group" aria-label="World map view">
+          <button
+            type="button"
+            class={mapMode === 'tiles' ? 'small active' : 'small'}
+            aria-pressed={mapMode === 'tiles'}
+            onclick={() => (mapMode = 'tiles')}>Tiles</button
+          >
+          <button
+            type="button"
+            class={mapMode === 'connections' ? 'small active' : 'small'}
+            aria-pressed={mapMode === 'connections'}
+            onclick={() => (mapMode = 'connections')}>Connections</button
+          >
+        </div>
 
-        <div class="room-panel inspector-panel">
-          {#if selectedRoom}
-            <RoomEditor
-              room={selectedRoom}
+        <div class="map-and-inspector">
+          {#if mapMode === 'tiles'}
+            <WorldTiles
               rooms={allRooms}
-              {areaNames}
-              {allIds}
-              {objectIds}
-              errors={roomErrors}
-              bind:tab={roomTab}
-              focusObjectId={focusObjectId}
-              focusNpcId={focusNpcId}
-              onchange={updateSelectedRoom}
-              onremove={removeRoom}
+              startRoom={doc.world.start_room}
+              selectedId={selectedRoom?.id ?? null}
+              roomErrors={roomErrorCounts}
+              onselect={selectRoomById}
+              onpalette={addPaletteItem}
+              ongenerategrids={generateMissingGrids}
             />
           {:else}
-            <p class="empty">Select a room from the tree or the map.</p>
+            <WorldMap
+              rooms={allRooms}
+              layout={doc.layout}
+              startRoom={doc.world.start_room}
+              selectedId={selectedRoom?.id ?? null}
+              roomErrors={roomErrorCounts}
+              {areaChoices}
+              defaultAreaIndex={selection?.area ?? 0}
+              {suggestedRoomId}
+              onselect={selectRoomById}
+              onlayout={updateLayout}
+              oncreateroom={createRoomFromMap}
+              onpalette={addPaletteItem}
+              onconnect={connectRooms}
+            />
           {/if}
+
+          <div class="room-panel inspector-panel">
+            {#if selectedRoom}
+              <RoomEditor
+                room={selectedRoom}
+                rooms={allRooms}
+                {areaNames}
+                {allIds}
+                {objectIds}
+                errors={roomErrors}
+                bind:tab={roomTab}
+                focusObjectId={focusObjectId}
+                focusNpcId={focusNpcId}
+                onchange={updateSelectedRoom}
+                onremove={removeRoom}
+              />
+            {:else}
+              <p class="empty">Select a room from the tree or the map.</p>
+            {/if}
+          </div>
         </div>
       </div>
     </div>

@@ -21,12 +21,53 @@ and no router. The backend is the Python standard library
 (`ThreadingHTTPServer`); there is no new Python dependency and no aiohttp or
 FastAPI. The map is hand-rolled SVG; there is no graph library.
 
-## The world map
+## The world editor views
 
 The World tab opens on a three-pane editor: the area tree, the map, and the room
-inspector. The inspector has tabs for Room, Geometry, Exits, Objects, NPCs, and
-Effects. Geometry remains the per-room tile editor; the map is the room-level
-overview.
+inspector. A `Tiles` / `Connections` toggle above the map chooses the view;
+`Tiles` is the default. The inspector has tabs for Room, Geometry, Exits,
+Objects, NPCs, and Effects. Geometry remains the per-room tile editor.
+
+### Tiles (spatial world)
+
+Tiles builds one continuous floor plan per level from each room's `geometry`
+and exits. It does not use `layout.json`.
+
+- **Footprints** — authored geometry is used exactly. A room without geometry
+  gets the same deterministic 9×7 `defaultGeometry(room)` the Geometry tab
+  offers. It is drawn with a dashed outline and counted by `Generate missing
+  grids`.
+- **Placement** — cardinal exits align the two door cells and share the
+  boundary wall: east/west join on a shared column, north/south on a shared row.
+  One-way exits still place the target. `up`/`down` place the target on a
+  different level and the levels stack vertically with headings. `in`/`out` and
+  unknown directions are portal badges, not 2D placement.
+- **Missing maps** — `Generate missing grids` asks once, writes the default
+  9×7 grid into every room that lacks geometry in the browser draft, marks it
+  dirty, and lets Save write the YAML. The grid includes the reciprocal
+  doors/stairs that neighbouring exits imply, because the content geometry
+  validator checks the effective exit map. The view itself never mutates
+  content. The per-room Geometry tab still has `Add default grid`.
+- **Warnings** — the view reports placement conflicts (a cycle whose geometry
+  cannot close, overlapping rooms, missing source doors), detached rooms (no
+  cardinal path from the start, shown in a separate level 0 band), and portal
+  links. Conflicts do not hide or move rooms.
+- **Selection and palette** — click any tile or room label to select that room
+  in the inspector. Drag an `Item`, `Container`, `Readable`, or `NPC` chip onto
+  a footprint, or arm a chip and click it, to add the entity to that room.
+- **Camera** — drag empty canvas to pan, wheel to zoom at the pointer, and use
+  `+`, `−`, and `Fit`. `Fit` frames all levels, headings, and the detached band.
+
+For `club_world`, the five authored rooms place the start village
+spatially: Mysterious Forest above the Marketplace, the Alchemist Shop west,
+the Old Tavern east, and the Village Gate below; the South Road continues
+south. Rooms without geometry are generated around them by their exits.
+
+### Connections (graph)
+
+The Connections view is the earlier hand-positioned graph. It uses
+`layout.json`/auto-layout and is the place for manual room placement and exit
+handles.
 
 - **Rooms** are nodes coloured by area, with the name, id, object/NPC counts, a
   `START` marker for `world.start_room`, and a red badge/border for validation
@@ -54,7 +95,7 @@ overview.
   sensible defaults, and the inspector switches to the right tab with the new
   entity selected.
 
-The map is another view of the same browser draft. Save, Validate, Apply, the
+Both views edit the same browser draft. Save, Validate, Apply, the
 unsaved-change indicator, player confirmation, backups, and all existing
 property editing are unchanged.
 
@@ -145,8 +186,8 @@ tradeoff; use the backup or the previous commit when the comments matter.
 
 ## Editor layout: `layout.json`
 
-Map positions are editor metadata, not world content. They live beside the
-world at:
+Connections positions are editor metadata, not world content. They live beside
+the world at:
 
 ```text
 data/worlds/club_world/layout.json
@@ -154,9 +195,10 @@ data/worlds/club_world/layout.json
 
 The file is a plain room-id map: `{"gate": {"x": 60, "y": 60}, ...}`. It is not
 part of the YAML content model and never reaches the v2 wire protocol. If the
-file is absent, the map computes a deterministic layout: rooms reachable from
-`start_room` are layered by exit distance, and disconnected rooms/areas fall
-into a grid below. `Auto-layout` recomputes positions only when clicked.
+file is absent, Connections computes a deterministic layout: rooms reachable
+from `start_room` are layered by exit distance, and disconnected rooms/areas
+fall into a grid below. `Auto-layout` recomputes positions only when clicked.
+Tiles ignores this file.
 
 Save sanitizes the layout (finite `x`/`y`, known room ids only), writes it
 atomically, and includes it in the backup when an old copy exists. A malformed
@@ -178,6 +220,15 @@ atomically, and includes it in the backup when an old copy exists. A malformed
 - The map's connect handles cover `north`, `east`, `south`, and `west`. Use the
   Exits tab for `up`, `down`, `in`, and `out`, locks, keys, labels, and editing an
   existing one-way flag.
+- Tiles derives every position from geometry and exits; it has no manual room
+  dragging. Use Connections for free placement and `layout.json`.
+- `Generate missing grids` writes reciprocal doors/stairs as well as each
+  room's declared exits. The content geometry validator uses the effective exit
+  map, so a target without its own authored reciprocal would fail Save. The 5
+  authored `club_world` rooms already have their reciprocal doors and are never
+  rewritten.
+- Placement conflicts are reported, not repaired. Overlapping rooms and
+  non-closing cycles stay visible under the conflict banner.
 - The map declares an exit once; the loader creates the reciprocal. It never
   writes both directions into YAML, because the content validator rejects the
   duplicate. `One-way connect` sets `one_way: true` on the source exit.

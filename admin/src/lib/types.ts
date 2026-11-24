@@ -594,35 +594,38 @@ export function newRoom(area: string | null, ids: Set<string>): Room {
   };
 }
 
-export function defaultGeometry(room: Room): Geometry {
+export function defaultGeometry(
+  room: Room,
+  extraDirections: string[] = [],
+): Geometry {
   const cells: string[][] = Array.from({ length: 7 }, (_, y) =>
     Array.from({ length: 9 }, (_, x) =>
       x === 0 || y === 0 || x === 8 || y === 6 ? '#' : '.',
     ),
   );
   const spawn: Record<string, [number, number]> = {};
-  const exits = Object.keys(room.exits);
-  if (exits.includes('north')) {
+  const exits = new Set([...Object.keys(room.exits), ...extraDirections]);
+  if (exits.has('north')) {
     cells[0][4] = '+';
     spawn.north = [4, 1];
   }
-  if (exits.includes('south')) {
+  if (exits.has('south')) {
     cells[6][4] = '+';
     spawn.south = [4, 5];
   }
-  if (exits.includes('west')) {
+  if (exits.has('west')) {
     cells[3][0] = '+';
     spawn.west = [1, 3];
   }
-  if (exits.includes('east')) {
+  if (exits.has('east')) {
     cells[3][8] = '+';
     spawn.east = [7, 3];
   }
-  if (exits.includes('up')) {
+  if (exits.has('up')) {
     cells[3][3] = '^';
     spawn.up = [3, 3];
   }
-  if (exits.includes('down')) {
+  if (exits.has('down')) {
     cells[3][5] = 'v';
     spawn.down = [5, 3];
   }

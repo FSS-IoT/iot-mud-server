@@ -13,6 +13,7 @@
     Room,
     RoomTab,
   } from '../lib/types';
+  import { effectiveDirections } from '../lib/worldTiles';
 
   interface Props {
     room: Room;
@@ -50,6 +51,9 @@
     { id: 'npcs', label: 'NPCs' },
     { id: 'effects', label: 'Effects' },
   ];
+  const geometryDirections = $derived(
+    effectiveDirections(rooms)[room.id] ?? [],
+  );
 
   function patch(changes: Partial<Room>): void {
     onchange({ ...room, ...changes });
@@ -178,6 +182,7 @@
     <GeometryEditor
       geometry={room.geometry}
       {room}
+      extraDirections={geometryDirections}
       onchange={updateGeometry}
     />
   {:else if tab === 'exits'}
