@@ -1984,7 +1984,8 @@ class Engine:
             return
         room = actor.location
         if room is None:
-            self._notice(outcome, "There is nowhere here to look inside.")
+            self._fail(
+                outcome, "not_here", "There is nowhere here to look inside.")
             return
         container, disambig = self._disambiguate(room.contents, arg)
         if disambig:
@@ -2039,7 +2040,8 @@ class Engine:
             return
         room = actor.location
         if room is None:
-            self._notice(outcome, "There is nowhere here to put anything.")
+            self._fail(
+                outcome, "not_here", "There is nowhere here to put anything.")
             return
         before_room_contents = list(room.contents)
         before_inventory = list(actor.contents)
@@ -2138,7 +2140,9 @@ class Engine:
             return
         room = actor.location
         if room is None:
-            self._notice(outcome, "There is nowhere here to get anything from.")
+            self._fail(
+                outcome, "not_here",
+                "There is nowhere here to get anything from.")
             return
         before_room_contents = list(room.contents)
         container, cont_disambig = self._disambiguate(
@@ -2225,7 +2229,8 @@ class Engine:
             return
         room = actor.location
         if room is None:
-            self._notice(outcome, "There is nowhere here to close anything.")
+            self._fail(
+                outcome, "not_here", "There is nowhere here to close anything.")
             return
         before_room_contents = list(room.contents)
         container, disambig = self._disambiguate(room.contents, arg)
@@ -2280,7 +2285,8 @@ class Engine:
         key_name, lock_name = arg.split(" on ", 1)
         room = actor.location
         if room is None:
-            self._notice(outcome, "There is nowhere here to use a key.")
+            self._fail(
+                outcome, "not_here", "There is nowhere here to use a key.")
             return
         before_room_contents = list(room.contents)
         before_inventory = list(actor.contents)
