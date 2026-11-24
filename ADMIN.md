@@ -37,26 +37,37 @@ and exits. It does not use `layout.json`.
   gets the same deterministic 9×7 `defaultGeometry(room)` the Geometry tab
   offers. It is drawn with a dashed outline and counted by `Generate missing
   grids`.
-- **Placement** — cardinal exits align the two door cells and share the
+- **Exact placement** — cardinal exits align the two door cells and share the
   boundary wall: east/west join on a shared column, north/south on a shared row.
   One-way exits still place the target. `up`/`down` place the target on a
   different level and the levels stack vertically with headings. `in`/`out` and
   unknown directions are portal badges, not 2D placement.
+- **Portals** — the first placement is exact and never moved. If a room would
+  overlap an exact room or repeat a position, its dependent component is
+  relocated to a nearby free slot when one exists within six cells; otherwise
+  it moves to a clearly separated Portals band. A dashed connector with a
+  direction and target label marks every exit that became a portal. Subtree
+  geometry stays local; up/down portal levels remain separate (`Portals ·
+  Ground`, `Portals · Level -1`, ...). The exact map and the start village never
+  move.
 - **Missing maps** — `Generate missing grids` asks once, writes the default
   9×7 grid into every room that lacks geometry in the browser draft, marks it
   dirty, and lets Save write the YAML. The grid includes the reciprocal
   doors/stairs that neighbouring exits imply, because the content geometry
   validator checks the effective exit map. The view itself never mutates
   content. The per-room Geometry tab still has `Add default grid`.
-- **Warnings** — the view reports placement conflicts (a cycle whose geometry
-  cannot close, overlapping rooms, missing source doors), detached rooms (no
-  cardinal path from the start, shown in a separate level 0 band), and portal
-  links. Conflicts do not hide or move rooms.
+- **Warnings** — a `portals · cannot tile in 2D` banner lists every portal exit
+  with source/target buttons and the reason (`relocated` or `cycle`). Genuine
+  authoring errors (missing source door/stairs, self-link, unknown room) stay
+  in a separate data-error box. Detached rooms have their own band. No room
+  footprint overlaps another; exact/exact and same-component shared walls are
+  intentional.
 - **Selection and palette** — click any tile or room label to select that room
   in the inspector. Drag an `Item`, `Container`, `Readable`, or `NPC` chip onto
   a footprint, or arm a chip and click it, to add the entity to that room.
 - **Camera** — drag empty canvas to pan, wheel to zoom at the pointer, and use
-  `+`, `−`, and `Fit`. `Fit` frames all levels, headings, and the detached band.
+  `+`, `−`, and `Fit`. `Fit` frames all levels, the Portals bands, and the
+  Detached band.
 
 For `club_world`, the five authored rooms place the start village
 spatially: Mysterious Forest above the Marketplace, the Alchemist Shop west,
@@ -227,8 +238,12 @@ atomically, and includes it in the backup when an old copy exists. A malformed
   map, so a target without its own authored reciprocal would fail Save. The 5
   authored `club_world` rooms already have their reciprocal doors and are never
   rewritten.
-- Placement conflicts are reported, not repaired. Overlapping rooms and
-  non-closing cycles stay visible under the conflict banner.
+- When a component cannot close in 2D, its rooms move to the Portals band; a
+  residual internal cycle is reported as a data error and gridded in the band.
+- Portal relocation prefers a free slot within six cells. Further-away space is
+  left to the clearly separated Portals band instead of scattering rooms.
+- The exact map never moves a first placement; a portal link is the record of
+  the edge that could not be a shared wall.
 - The map declares an exit once; the loader creates the reciprocal. It never
   writes both directions into YAML, because the content validator rejects the
   duplicate. `One-way connect` sets `one_way: true` on the source exit.

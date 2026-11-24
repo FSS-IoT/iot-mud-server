@@ -3,14 +3,15 @@ import { defaultGeometry, OPPOSITE_EXITS } from './types';
 
 export type Cardinal = 'north' | 'east' | 'south' | 'west';
 export type LinkKind = 'cardinal' | 'vertical' | 'portal';
+export type PlacementKind = 'exact' | 'free' | 'band' | 'detached';
+export type PortalReason = 'relocated' | 'cycle' | 'alternate';
 export type ConflictReason =
-  | 'position'
   | 'missing-source-door'
   | 'missing-source-stairs'
   | 'missing-room'
   | 'self-link'
-  | 'overlap'
-  | 'start-room';
+  | 'start-room'
+  | 'unplaceable';
 
 export interface GridPoint {
   x: number;
@@ -33,9 +34,13 @@ export interface PlacedRoom {
   room: Room;
   footprint: RoomFootprint;
   level: number;
+  intendedLevel: number;
   x: number;
   y: number;
   detached: boolean;
+  exact: boolean;
+  placement: PlacementKind;
+  component: number;
 }
 
 export interface TileCell {
@@ -64,6 +69,16 @@ export interface PlacementLink {
   fromDetached: boolean;
 }
 
+export interface PlacementPortal {
+  sourceId: string;
+  targetId: string;
+  direction: string;
+  reason: PortalReason;
+  oneWay: boolean;
+  source: PlacedRoom;
+  target: PlacedRoom;
+}
+
 export interface PlacementConflict {
   reason: ConflictReason;
   rooms: string[];
@@ -76,20 +91,25 @@ export interface PlacementConflict {
 
 export interface LevelLayout {
   level: number;
+  label: string;
+  kind: 'level' | 'portals' | 'detached';
   rooms: PlacedRoom[];
   cells: TileCell[];
   bounds: TileBounds;
-  detachedIds: string[];
-  detachedBounds: TileBounds | null;
 }
 
 export interface WorldPlacement {
   levels: LevelLayout[];
   placed: PlacedRoom[];
+  exactRooms: PlacedRoom[];
+  portalRooms: PlacedRoom[];
+  portalPlacements: Map<string, PlacedRoom>;
   detached: PlacedRoom[];
-  conflicts: PlacementConflict[];
-  portals: PlacementLink[];
+  portals: PlacementPortal[];
+  inOutPortals: PlacementLink[];
+  errors: PlacementConflict[];
   links: PlacementLink[];
+  portalBands: LevelLayout[];
   startId: string | null;
 }
 
@@ -133,6 +153,10 @@ export const EXIT_RANK: Record<string, number> = {
 export const DETACHED_COLUMNS = 4;
 export const DETACHED_GAP = 6;
 export const DETACHED_COLUMN_GAP = 4;
+export const PORTAL_BAND_BASE = -1000;
+export const DETACHED_BAND_LEVEL = -2000;
+export const PORTAL_BAND_GAP = 6;
+export const FREE_SLOT_RADIUS = 6;
 
 /**
  * Directions each room must draw to satisfy the content geometry validator:
@@ -481,63 +505,236 @@ function placementConflictKey(conflict: PlacementConflict): string {
   ].join('|');
 }
 
+function rectanglesOverlap(
+  ax: number,
+  ay: number,
+  aw: number,
+  ah: number,
+  bx: number,
+  by: number,
+  bw: number,
+  bh: number,
+  allowSharedBoundary: boolean,
+): boolean {
+  const overlapX = Math.min(ax + aw, bx + bw) - Math.max(ax, bx);
+  const overlapY = Math.min(ay + ah, by + bh) - Math.max(ay, by);
+  if (overlapX <= 0 || overlapY <= 0) return false;
+  if (allowSharedBoundary) return overlapX > 1 && overlapY > 1;
+  return true;
+}
+
+function findFreeSlot(
+  desired: GridPoint,
+  preferred: string | undefined,
+  isFree: (x: number, y: number) => boolean,
+): GridPoint | null {
+  if (isFree(desired.x, desired.y)) return { ...desired };
+  for (let radius = 1; radius <= FREE_SLOT_RADIUS; radius += 1) {
+    const candidates: GridPoint[] = [];
+    for (let dx = -radius; dx <= radius; dx += 1) {
+      for (let dy = -radius; dy <= radius; dy += 1) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== radius) continue;
+        candidates.push({ x: dx, y: dy });
+      }
+    }
+    const prefersPositiveX = preferred === 'east';
+    const prefersNegativeX = preferred === 'west';
+    const prefersNegativeY = preferred === 'north';
+    const prefersPositiveY = preferred === 'south';
+    candidates.sort((left, right) => {
+      const score = (candidate: GridPoint): number => {
+        if (prefersPositiveX) return candidate.x > 0 ? 0 : 1;
+        if (prefersNegativeX) return candidate.x < 0 ? 0 : 1;
+        if (prefersNegativeY) return candidate.y < 0 ? 0 : 1;
+        if (prefersPositiveY) return candidate.y > 0 ? 0 : 1;
+        return 0;
+      };
+      const scoreDiff = score(left) - score(right);
+      if (scoreDiff !== 0) return scoreDiff;
+      if (prefersPositiveX || prefersNegativeX) {
+        if (Math.abs(left.y) !== Math.abs(right.y)) {
+          return Math.abs(left.y) - Math.abs(right.y);
+        }
+      } else if (prefersNegativeY || prefersPositiveY) {
+        if (Math.abs(left.x) !== Math.abs(right.x)) {
+          return Math.abs(left.x) - Math.abs(right.x);
+        }
+      }
+      if (left.x !== right.x) return left.x - right.x;
+      return left.y - right.y;
+    });
+    for (const candidate of candidates) {
+      const x = desired.x + candidate.x;
+      const y = desired.y + candidate.y;
+      if (isFree(x, y)) return { x, y };
+    }
+  }
+  return null;
+}
+
+interface ExpectedPlacement {
+  x: number;
+  y: number;
+  level: number;
+  sourceMissing: boolean;
+  targetMissing: boolean;
+}
+
+interface BlockedEdge {
+  sourceId: string;
+  targetId: string;
+  direction: string;
+  expected: ExpectedPlacement;
+  oneWay: boolean;
+  index: number;
+}
+
+interface ComponentTreeEdge {
+  roomId: string;
+  parentId: string | null;
+  direction: string | null;
+}
+
 /**
- * Place every room in one continuous cell grid per level.
+ * Place every room in a continuous cell grid per level.
  *
- * Cardinal exits align the two door cells and make the boundary wall a shared
- * column or row. Up/down exits stack levels and align stairs when both rooms
- * have them. In/out and unknown directions are portal links only.
+ * Exact placements keep the first spatial position and are never moved. A room
+ * that cannot take its exact position is relocated with its dependent tree to
+ * a nearby free slot, or to a separate Portals band. Edges that stop being
+ * shared walls become explicit portal links.
  */
 export function placeWorld(rooms: Room[], startRoom: string): WorldPlacement {
   const byId = new Map(rooms.map((room) => [room.id, room]));
   const footprints = new Map(
     rooms.map((room) => [room.id, footprintFor(room)]),
   );
-  const placed = new Map<string, PlacedRoom>();
-  const conflicts: PlacementConflict[] = [];
-  const conflictKeys = new Set<string>();
-  const links: PlacementLink[] = [];
-  const portals: PlacementLink[] = [];
-  const order = new Map(
+  const roomOrder = new Map(
     rooms.map((room, index) => [room.id, index] as const),
   );
+  const exact = new Map<string, PlacedRoom>();
+  const placed = new Map<string, PlacedRoom>();
+  const errors: PlacementConflict[] = [];
+  const errorKeys = new Set<string>();
+  const blocked: BlockedEdge[] = [];
+  const bandComponents: {
+    componentId: number;
+    component: Set<string>;
+    tree: ComponentTreeEdge[];
+    rootEdge?: BlockedEdge;
+  }[] = [];
 
-  function addConflict(conflict: PlacementConflict): void {
+  function addError(conflict: PlacementConflict): void {
     const key = placementConflictKey(conflict);
-    if (conflictKeys.has(key)) return;
-    conflictKeys.add(key);
-    conflicts.push(conflict);
+    if (errorKeys.has(key)) return;
+    errorKeys.add(key);
+    errors.push(conflict);
   }
 
-  function addPortal(link: PlacementLink): void {
-    links.push(link);
-    portals.push(link);
+  function footprint(room: Room): RoomFootprint {
+    return footprints.get(room.id) ?? footprintFor(room);
+  }
+
+  function expectedFor(
+    source: PlacedRoom,
+    target: Room,
+    direction: string,
+  ): ExpectedPlacement | null {
+    const targetFootprint = footprint(target);
+    if (isCardinal(direction)) {
+      const expected = cardinalOrigin(source, targetFootprint, direction);
+      return {
+        x: expected.x,
+        y: expected.y,
+        level: source.level,
+        sourceMissing: expected.sourceMissing,
+        targetMissing: expected.targetMissing,
+      };
+    }
+    if (direction === 'up' || direction === 'down') {
+      const expected = verticalOrigin(
+        source,
+        targetFootprint,
+        direction,
+      );
+      return {
+        x: expected.x,
+        y: expected.y,
+        level: expected.level,
+        sourceMissing: expected.sourceMissing,
+        targetMissing: expected.targetMissing,
+      };
+    }
+    return null;
+  }
+
+  function exactCollision(
+    target: RoomFootprint,
+    level: number,
+    x: number,
+    y: number,
+  ): PlacedRoom | null {
+    for (const other of exact.values()) {
+      if (other.level !== level) continue;
+      if (
+        rectanglesOverlap(
+          other.x,
+          other.y,
+          other.footprint.width,
+          other.footprint.height,
+          x,
+          y,
+          target.width,
+          target.height,
+          true,
+        )
+      ) {
+        return other;
+      }
+    }
+    return null;
+  }
+
+  function makeExact(
+    room: Room,
+    level: number,
+    x: number,
+    y: number,
+  ): PlacedRoom {
+    return {
+      room,
+      footprint: footprint(room),
+      level,
+      intendedLevel: level,
+      x,
+      y,
+      detached: false,
+      exact: true,
+      placement: 'exact',
+      component: 0,
+    };
   }
 
   const start = byId.get(startRoom);
   if (!start) {
-    addConflict({
+    addError({
       reason: 'start-room',
       rooms: [],
       message: `Start room '${startRoom}' is not declared; every room is detached.`,
     });
   } else {
-    placed.set(start.id, {
-      room: start,
-      footprint: footprints.get(start.id) ?? footprintFor(start),
-      level: 0,
-      x: 0,
-      y: 0,
-      detached: false,
-    });
+    const placedStart = makeExact(start, 0, 0, 0);
+    exact.set(start.id, placedStart);
+    placed.set(start.id, placedStart);
   }
 
+  // Phase 1: first/exact placements. A target whose exact cell would overlap
+  // is recorded as blocked and not moved here.
   const queue = start ? [start.id] : [];
   let queueIndex = 0;
   while (queueIndex < queue.length) {
     const currentId = queue[queueIndex];
     queueIndex += 1;
-    const current = currentId ? placed.get(currentId) : undefined;
+    const current = currentId ? exact.get(currentId) : undefined;
     if (!current) continue;
     const exits = Object.entries(current.room.exits).sort(
       ([left], [right]) =>
@@ -547,7 +744,7 @@ export function placeWorld(rooms: Room[], startRoom: string): WorldPlacement {
       if (!exit.to) continue;
       const target = byId.get(exit.to);
       if (!target) {
-        addConflict({
+        addError({
           reason: 'missing-room',
           rooms: [current.room.id],
           direction,
@@ -557,7 +754,7 @@ export function placeWorld(rooms: Room[], startRoom: string): WorldPlacement {
         continue;
       }
       if (target.id === current.room.id) {
-        addConflict({
+        addError({
           reason: 'self-link',
           rooms: [current.room.id],
           direction,
@@ -566,242 +763,762 @@ export function placeWorld(rooms: Room[], startRoom: string): WorldPlacement {
         });
         continue;
       }
-
-      const targetFootprint =
-        footprints.get(target.id) ?? footprintFor(target);
-      if (isCardinal(direction)) {
-        const opposite = OPPOSITE_EXITS[direction] as Cardinal | undefined;
-        const placedTarget = placed.get(target.id);
-        const targetForPlacement =
-          !placedTarget && opposite
-            ? ensureTargetDoor(targetFootprint, opposite)
-            : targetFootprint;
-        const expected = cardinalOrigin(
-          current,
-          targetForPlacement,
-          direction,
+      if (direction === 'in' || direction === 'out') continue;
+      const expected = expectedFor(current, target, direction);
+      if (!expected) continue;
+      if (exact.has(target.id)) continue;
+      const collision = exactCollision(
+        footprint(target),
+        expected.level,
+        expected.x,
+        expected.y,
+      );
+      if (!collision) {
+        const candidate = makeExact(
+          target,
+          expected.level,
+          expected.x,
+          expected.y,
         );
-        const link: PlacementLink = {
-          sourceId: current.room.id,
-          targetId: target.id,
-          direction,
-          kind: 'cardinal',
-          oneWay: exit.one_way,
-          levelDelta: 0,
-          fromDetached: false,
-        };
-        links.push(link);
-        if (expected.sourceMissing) {
-          addConflict({
-            reason: 'missing-source-door',
-            rooms: [current.room.id],
-            direction,
-            level: current.level,
-            expected: { x: expected.x, y: expected.y },
-            message: `Room '${current.room.id}' has no ${direction} door for its ${direction} exit; aligned by the side centre.`,
-          });
-        }
-        const existing = placed.get(target.id);
-        if (existing) {
-          if (existing.level !== current.level ||
-              existing.x !== expected.x ||
-              existing.y !== expected.y) {
-            addConflict({
-              reason: 'position',
-              rooms: [current.room.id, target.id],
-              direction,
-              level: current.level,
-              expected: { x: expected.x, y: expected.y },
-              actual: { x: existing.x, y: existing.y },
-              message: `Room '${target.id}' is already at (${existing.x}, ${existing.y}) on level ${existing.level}; ${direction} from '${current.room.id}' expects (${expected.x}, ${expected.y}) on level ${current.level}.`,
-            });
-          }
-          continue;
-        }
-        placed.set(target.id, {
-          room: target,
-          footprint: targetForPlacement,
-          level: current.level,
-          x: expected.x,
-          y: expected.y,
-          detached: false,
-        });
+        exact.set(target.id, candidate);
+        placed.set(target.id, candidate);
         queue.push(target.id);
         continue;
       }
-
-      if (direction === 'up' || direction === 'down') {
-        const expected = verticalOrigin(current, targetFootprint, direction);
-        const link: PlacementLink = {
-          sourceId: current.room.id,
-          targetId: target.id,
-          direction,
-          kind: 'vertical',
-          oneWay: exit.one_way,
-          levelDelta: direction === 'up' ? 1 : -1,
-          fromDetached: false,
-        };
-        links.push(link);
-        if (expected.sourceMissing) {
-          addConflict({
-            reason: 'missing-source-stairs',
-            rooms: [current.room.id],
-            direction,
-            level: current.level,
-            message: `Room '${current.room.id}' has no ${direction === 'up' ? 'up' : 'down'} stair for its ${direction} exit; kept the same cell origin.`,
-          });
-        }
-        const existing = placed.get(target.id);
-        if (existing) {
-          if (
-            existing.level !== expected.level ||
-            existing.x !== expected.x ||
-            existing.y !== expected.y
-          ) {
-            addConflict({
-              reason: 'position',
-              rooms: [current.room.id, target.id],
-              direction,
-              level: current.level,
-              expected: { x: expected.x, y: expected.y },
-              actual: { x: existing.x, y: existing.y },
-              message: `Room '${target.id}' is already at (${existing.x}, ${existing.y}) on level ${existing.level}; ${direction} from '${current.room.id}' expects (${expected.x}, ${expected.y}) on level ${expected.level}.`,
-            });
-          }
-          continue;
-        }
-        placed.set(target.id, {
-          room: target,
-          footprint: targetFootprint,
-          level: expected.level,
-          x: expected.x,
-          y: expected.y,
-          detached: false,
-        });
-        queue.push(target.id);
-        continue;
-      }
-
-      addPortal({
+      blocked.push({
         sourceId: current.room.id,
         targetId: target.id,
         direction,
-        kind: 'portal',
+        expected,
         oneWay: exit.one_way,
-        levelDelta: 0,
-        fromDetached: false,
+        index: blocked.length,
       });
     }
   }
 
-  const unplaced = rooms
-    .filter((room) => !placed.has(room.id))
-    .sort((left, right) => roomOrderKey(left).localeCompare(roomOrderKey(right)));
-  const detached: PlacedRoom[] = [];
-  if (unplaced.length > 0) {
-    const levelZero = [...placed.values()].filter(
-      (placedRoom) => placedRoom.level === 0 && !placedRoom.detached,
-    );
-    const mainBounds = tileBounds(buildCells(levelZero));
-    const footprintsToPlace = unplaced.map((room) => ({
-      room,
-      footprint: footprints.get(room.id) ?? footprintFor(room),
-    }));
-    const maxWidth = Math.max(
-      1,
-      ...footprintsToPlace.map((item) => item.footprint.width),
-    );
-    const maxHeight = Math.max(
-      1,
-      ...footprintsToPlace.map((item) => item.footprint.height),
-    );
-    const baseX = mainBounds ? mainBounds.minX : 0;
-    const baseY = mainBounds ? mainBounds.maxY + DETACHED_GAP : 0;
-    footprintsToPlace.forEach(({ room, footprint }, index) => {
-      const column = index % DETACHED_COLUMNS;
-      const row = Math.floor(index / DETACHED_COLUMNS);
-      const placedRoom: PlacedRoom = {
-        room,
-        footprint,
-        level: 0,
-        x: baseX + column * (maxWidth + DETACHED_COLUMN_GAP),
-        y: baseY + row * (maxHeight + DETACHED_GAP),
-        detached: true,
-      };
-      placed.set(room.id, placedRoom);
-      detached.push(placedRoom);
-      for (const [direction, exit] of Object.entries(room.exits)) {
+  // Logical reachability uses every exit, including in/out. It only decides
+  // whether an unplaced room belongs in the Portals band or the Detached band.
+  const reachableAny = new Set<string>();
+  if (start) {
+    const reachQueue = [start.id];
+    reachableAny.add(start.id);
+    let index = 0;
+    while (index < reachQueue.length) {
+      const currentId = reachQueue[index];
+      index += 1;
+      const current = byId.get(currentId);
+      if (!current) continue;
+      for (const exit of Object.values(current.exits)) {
         if (!exit.to || !byId.has(exit.to)) continue;
-        const kind: LinkKind = isCardinal(direction)
-          ? 'cardinal'
-          : direction === 'up' || direction === 'down'
-            ? 'vertical'
-            : 'portal';
-        const link: PlacementLink = {
-          sourceId: room.id,
-          targetId: exit.to,
-          direction,
-          kind,
-          oneWay: exit.one_way,
-          levelDelta:
-            direction === 'up' ? 1 : direction === 'down' ? -1 : 0,
-          fromDetached: true,
-        };
-        if (kind === 'portal') addPortal(link);
-        else links.push(link);
+        if (reachableAny.has(exit.to)) continue;
+        reachableAny.add(exit.to);
+        reachQueue.push(exit.to);
       }
+    }
+  }
+
+  const unplacedReachable = rooms
+    .filter((room) => !exact.has(room.id) && reachableAny.has(room.id))
+    .sort((left, right) =>
+      roomOrderKey(left).localeCompare(roomOrderKey(right)),
+    );
+  const unplacedDetached = rooms
+    .filter((room) => !exact.has(room.id) && !reachableAny.has(room.id))
+    .sort((left, right) =>
+      roomOrderKey(left).localeCompare(roomOrderKey(right)),
+    );
+  const unplacedSet = new Set(unplacedReachable.map((room) => room.id));
+
+  // Undirected adjacency for split-off components, with a direction that can
+  // be used to place a parent -> child locally.
+  const undirected = new Map<
+    string,
+    { id: string; direction: string }[]
+  >();
+  for (const room of unplacedReachable) {
+    for (const [direction, exit] of Object.entries(room.exits)) {
+      if (!unplacedSet.has(exit.to)) continue;
+      const forward = undirected.get(room.id) ?? [];
+      forward.push({ id: exit.to, direction });
+      undirected.set(room.id, forward);
+      const opposite = OPPOSITE_EXITS[direction] ?? direction;
+      const backward = undirected.get(exit.to) ?? [];
+      backward.push({ id: room.id, direction: opposite });
+      undirected.set(exit.to, backward);
+    }
+  }
+  for (const list of undirected.values()) {
+    list.sort((left, right) => {
+      const orderDiff =
+        (roomOrder.get(left.id) ?? 0) - (roomOrder.get(right.id) ?? 0);
+      return orderDiff || left.direction.localeCompare(right.direction);
     });
   }
 
-  for (const [level, levelRooms] of [...placed.values()].reduce(
-    (grouped, placedRoom) => {
-      const list = grouped.get(placedRoom.level) ?? [];
-      list.push(placedRoom);
-      grouped.set(placedRoom.level, list);
-      return grouped;
-    },
-    new Map<number, PlacedRoom[]>(),
-  )) {
-    for (let left = 0; left < levelRooms.length; left += 1) {
-      for (let right = left + 1; right < levelRooms.length; right += 1) {
-        const a = levelRooms[left];
-        const b = levelRooms[right];
-        if (!a || !b) continue;
-        const overlapX =
-          Math.min(a.x + a.footprint.width, b.x + b.footprint.width) -
-          Math.max(a.x, b.x);
-        const overlapY =
-          Math.min(a.y + a.footprint.height, b.y + b.footprint.height) -
-          Math.max(a.y, b.y);
-        if (overlapX > 1 && overlapY > 1) {
-          addConflict({
-            reason: 'overlap',
-            rooms: [a.room.id, b.room.id],
-            level,
-            actual: { x: b.x, y: b.y },
-            message: `Rooms '${a.room.id}' and '${b.room.id}' overlap on level ${level}; their geometry does not close.`,
+  const blockedByTarget = new Map<string, BlockedEdge>();
+  for (const edge of blocked) {
+    const existing = blockedByTarget.get(edge.targetId);
+    if (!existing || edge.index < existing.index) {
+      blockedByTarget.set(edge.targetId, edge);
+    }
+  }
+
+  const components: {
+    rooms: Set<string>;
+    root: string;
+    rootEdge?: BlockedEdge;
+    tree: ComponentTreeEdge[];
+  }[] = [];
+  const componentVisited = new Set<string>();
+  for (const room of unplacedReachable) {
+    if (componentVisited.has(room.id)) continue;
+    const component = new Set<string>();
+    const componentQueue = [room.id];
+    componentVisited.add(room.id);
+    let index = 0;
+    while (index < componentQueue.length) {
+      const currentId = componentQueue[index];
+      index += 1;
+      component.add(currentId);
+      for (const edge of undirected.get(currentId) ?? []) {
+        if (componentVisited.has(edge.id)) continue;
+        componentVisited.add(edge.id);
+        componentQueue.push(edge.id);
+      }
+    }
+    const boundaryEdges = [...component]
+      .map((id) => blockedByTarget.get(id))
+      .filter((edge): edge is BlockedEdge => Boolean(edge))
+      .sort((left, right) => left.index - right.index);
+    const rootEdge = boundaryEdges[0];
+    const root = rootEdge
+      ? rootEdge.targetId
+      : [...component].sort(
+          (left, right) =>
+            (roomOrder.get(left) ?? 0) - (roomOrder.get(right) ?? 0),
+        )[0];
+    if (!root) continue;
+
+    const tree: ComponentTreeEdge[] = [
+      { roomId: root, parentId: null, direction: null },
+    ];
+    const treeVisited = new Set([root]);
+    let treeIndex = 0;
+    while (treeIndex < tree.length) {
+      const node = tree[treeIndex];
+      treeIndex += 1;
+      for (const edge of undirected.get(node.roomId) ?? []) {
+        if (!component.has(edge.id) || treeVisited.has(edge.id)) continue;
+        treeVisited.add(edge.id);
+        tree.push({
+          roomId: edge.id,
+          parentId: node.roomId,
+          direction: edge.direction,
+        });
+      }
+    }
+    for (const id of component) {
+      if (treeVisited.has(id)) continue;
+      tree.push({ roomId: id, parentId: null, direction: null });
+    }
+    components.push({ rooms: component, root, rootEdge, tree });
+  }
+  components.sort((left, right) => {
+    const leftEdge = left.rootEdge?.index ?? Number.MAX_SAFE_INTEGER;
+    const rightEdge = right.rootEdge?.index ?? Number.MAX_SAFE_INTEGER;
+    if (leftEdge !== rightEdge) return leftEdge - rightEdge;
+    return (
+      (roomOrder.get(left.root) ?? 0) - (roomOrder.get(right.root) ?? 0)
+    );
+  });
+
+  let nextComponent = 1;
+
+  function relocatedCollision(
+    target: RoomFootprint,
+    level: number,
+    x: number,
+    y: number,
+    componentId: number,
+    temp: PlacedRoom[],
+  ): boolean {
+    for (const other of placed.values()) {
+      if (other.level !== level) continue;
+      if (
+        rectanglesOverlap(
+          other.x,
+          other.y,
+          other.footprint.width,
+          other.footprint.height,
+          x,
+          y,
+          target.width,
+          target.height,
+          false,
+        )
+      ) {
+        return true;
+      }
+    }
+    for (const other of temp) {
+      if (other.level !== level) continue;
+      if (
+        rectanglesOverlap(
+          other.x,
+          other.y,
+          other.footprint.width,
+          other.footprint.height,
+          x,
+          y,
+          target.width,
+          target.height,
+          other.component === componentId,
+        )
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function tryFreeComponent(
+    component: Set<string>,
+    tree: ComponentTreeEdge[],
+    rootEdge: BlockedEdge | undefined,
+    componentId: number,
+  ): boolean {
+    if (!rootEdge) return false;
+    const source = placed.get(rootEdge.sourceId);
+    if (!source) return false;
+    const rootRoom = byId.get(rootEdge.targetId);
+    if (!rootRoom) return false;
+    const rootFootprint = footprint(rootRoom);
+    const expected = expectedFor(
+      source,
+      rootRoom,
+      rootEdge.direction,
+    );
+    if (!expected) return false;
+    const temp: PlacedRoom[] = [];
+    const rootSlot = findFreeSlot(
+      { x: expected.x, y: expected.y },
+      rootEdge.direction,
+      (x, y) =>
+        !relocatedCollision(
+          rootFootprint,
+          expected.level,
+          x,
+          y,
+          componentId,
+          temp,
+        ),
+    );
+    if (!rootSlot) return false;
+    temp.push({
+      room: rootRoom,
+      footprint: rootFootprint,
+      level: expected.level,
+      intendedLevel: expected.level,
+      x: rootSlot.x,
+      y: rootSlot.y,
+      detached: false,
+      exact: false,
+      placement: 'free',
+      component: componentId,
+    });
+
+    for (const node of tree) {
+      if (node.roomId === rootEdge.targetId) continue;
+      if (!node.parentId || !node.direction) return false;
+      const parent = temp.find(
+        (candidate) => candidate.room.id === node.parentId,
+      );
+      const room = byId.get(node.roomId);
+      if (!parent || !room) return false;
+      const expectedChild = expectedFor(
+        parent,
+        room,
+        node.direction,
+      );
+      if (!expectedChild) return false;
+      const childFootprint = footprint(room);
+      const slot = findFreeSlot(
+        { x: expectedChild.x, y: expectedChild.y },
+        node.direction,
+        (x, y) =>
+          !relocatedCollision(
+            childFootprint,
+            expectedChild.level,
+            x,
+            y,
+            componentId,
+            temp,
+          ),
+      );
+      if (!slot) return false;
+      temp.push({
+        room,
+        footprint: childFootprint,
+        level: expectedChild.level,
+        intendedLevel: expectedChild.level,
+        x: slot.x,
+        y: slot.y,
+        detached: false,
+        exact: false,
+        placement: 'free',
+        component: componentId,
+      });
+    }
+
+    for (const candidate of temp) placed.set(candidate.room.id, candidate);
+    return true;
+  }
+
+  for (const component of components) {
+    const componentId = nextComponent;
+    nextComponent += 1;
+    if (
+      !tryFreeComponent(
+        component.rooms,
+        component.tree,
+        component.rootEdge,
+        componentId,
+      )
+    ) {
+      bandComponents.push({
+        componentId,
+        component: component.rooms,
+        tree: component.tree,
+        rootEdge: component.rootEdge,
+      });
+    }
+  }
+
+  // Phase 2: components that cannot sit near their exact parent go to the
+  // clearly separated Portals band. The band keeps each component's local
+  // relative layout where it fits.
+  const bandRooms: PlacedRoom[] = [];
+  let bandNextX = 0;
+
+  function bandLevelFor(intendedLevel: number): number {
+    return PORTAL_BAND_BASE + intendedLevel;
+  }
+
+  function bandCollision(
+    target: RoomFootprint,
+    level: number,
+    x: number,
+    y: number,
+    componentId: number,
+    temp: PlacedRoom[],
+  ): boolean {
+    for (const other of bandRooms) {
+      if (other.level !== level) continue;
+      if (
+        rectanglesOverlap(
+          other.x,
+          other.y,
+          other.footprint.width,
+          other.footprint.height,
+          x,
+          y,
+          target.width,
+          target.height,
+          false,
+        )
+      ) {
+        return true;
+      }
+    }
+    for (const other of temp) {
+      if (other.level !== level) continue;
+      if (
+        rectanglesOverlap(
+          other.x,
+          other.y,
+          other.footprint.width,
+          other.footprint.height,
+          x,
+          y,
+          target.width,
+          target.height,
+          other.component === componentId,
+        )
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function placeBandComponent(
+    componentId: number,
+    component: Set<string>,
+    tree: ComponentTreeEdge[],
+    rootEdge: BlockedEdge | undefined,
+  ): void {
+    const rootId =
+      rootEdge?.targetId ??
+      [...component].sort(
+        (left, right) =>
+          (roomOrder.get(left) ?? 0) - (roomOrder.get(right) ?? 0),
+      )[0];
+    const rootRoom = rootId ? byId.get(rootId) : undefined;
+    if (!rootRoom) return;
+    const temp: PlacedRoom[] = [];
+    const rootFootprint = footprint(rootRoom);
+    const rootIntended = rootEdge?.expected.level ?? 0;
+    const rootLevel = bandLevelFor(rootIntended);
+    const rootSlot = findFreeSlot(
+      { x: bandNextX, y: 0 },
+      undefined,
+      (x, y) =>
+        !bandCollision(
+          rootFootprint,
+          rootLevel,
+          x,
+          y,
+          componentId,
+          temp,
+        ),
+    );
+    if (!rootSlot) {
+      addError({
+        reason: 'unplaceable',
+        rooms: [...component],
+        message: `Rooms ${[...component].join(', ')} could not be placed in the Portals band without overlap.`,
+      });
+      return;
+    }
+    temp.push({
+      room: rootRoom,
+      footprint: rootFootprint,
+      level: rootLevel,
+      intendedLevel: rootIntended,
+      x: rootSlot.x,
+      y: rootSlot.y,
+      detached: false,
+      exact: false,
+      placement: 'band',
+      component: componentId,
+    });
+
+    for (const node of tree) {
+      if (node.roomId === rootId) continue;
+      if (!node.parentId || !node.direction) {
+        temp.length = 0;
+        break;
+      }
+      const parent = temp.find(
+        (candidate) => candidate.room.id === node.parentId,
+      );
+      const room = byId.get(node.roomId);
+      if (!parent || !room) {
+        temp.length = 0;
+        break;
+      }
+      const expected = expectedFor(
+        { ...parent, level: parent.intendedLevel },
+        room,
+        node.direction,
+      );
+      if (!expected) {
+        temp.length = 0;
+        break;
+      }
+      const childFootprint = footprint(room);
+      const childLevel = bandLevelFor(expected.level);
+      const slot = findFreeSlot(
+        { x: expected.x, y: expected.y },
+        node.direction,
+        (x, y) =>
+          !bandCollision(
+            childFootprint,
+            childLevel,
+            x,
+            y,
+            componentId,
+            temp,
+          ),
+      );
+      if (!slot) {
+        temp.length = 0;
+        break;
+      }
+      temp.push({
+        room,
+        footprint: childFootprint,
+        level: childLevel,
+        intendedLevel: expected.level,
+        x: slot.x,
+        y: slot.y,
+        detached: false,
+        exact: false,
+        placement: 'band',
+        component: componentId,
+      });
+    }
+
+    if (temp.length === 0) {
+      // A cyclic component can still be shown; grid its rooms rather than
+      // dropping them, and report the genuine layout failure.
+      addError({
+        reason: 'unplaceable',
+        rooms: [...component],
+        message: `Rooms ${[...component].join(', ')} do not close in 2D; placed separately in the Portals band.`,
+      });
+      const fallbackY = new Map<number, number>();
+      for (const id of [...component].sort(
+        (left, right) =>
+          (roomOrder.get(left) ?? 0) - (roomOrder.get(right) ?? 0),
+      )) {
+        const room = byId.get(id);
+        if (!room) continue;
+        const roomFootprint = footprint(room);
+        const intended = id === rootId ? rootIntended : 0;
+        const level = bandLevelFor(intended);
+        const y = fallbackY.get(level) ?? 0;
+        const candidate: PlacedRoom = {
+          room,
+          footprint: roomFootprint,
+          level,
+          intendedLevel: intended,
+          x: bandNextX,
+          y,
+          detached: false,
+          exact: false,
+          placement: 'band',
+          component: componentId,
+        };
+        placed.set(room.id, candidate);
+        bandRooms.push(candidate);
+        fallbackY.set(level, y + roomFootprint.height + 2);
+      }
+      bandNextX =
+        Math.max(
+          bandNextX,
+          ...bandRooms.map((room) => room.x + room.footprint.width),
+        ) + PORTAL_BAND_GAP;
+      return;
+    }
+
+    for (const candidate of temp) {
+      placed.set(candidate.room.id, candidate);
+      bandRooms.push(candidate);
+    }
+    bandNextX =
+      Math.max(
+        bandNextX,
+        ...temp.map((room) => room.x + room.footprint.width),
+      ) + PORTAL_BAND_GAP;
+  }
+
+  for (const component of bandComponents) {
+    placeBandComponent(
+      component.componentId,
+      component.component,
+      component.tree,
+      component.rootEdge,
+    );
+  }
+
+
+  // Unreachable rooms keep the old detached-grid treatment, as a separate
+  // band after the levels and portals.
+  const detachedRooms: PlacedRoom[] = [];
+  if (unplacedDetached.length > 0) {
+    const maxWidth = Math.max(
+      1,
+      ...unplacedDetached.map((room) => footprint(room).width),
+    );
+    const maxHeight = Math.max(
+      1,
+      ...unplacedDetached.map((room) => footprint(room).height),
+    );
+    unplacedDetached.forEach((room, index) => {
+      const column = index % DETACHED_COLUMNS;
+      const row = Math.floor(index / DETACHED_COLUMNS);
+      const candidate: PlacedRoom = {
+        room,
+        footprint: footprint(room),
+        level: DETACHED_BAND_LEVEL,
+        intendedLevel: 0,
+        x: column * (maxWidth + DETACHED_COLUMN_GAP),
+        y: row * (maxHeight + DETACHED_GAP),
+        detached: true,
+        exact: false,
+        placement: 'detached',
+        component: 0,
+      };
+      placed.set(room.id, candidate);
+      detachedRooms.push(candidate);
+    });
+  }
+
+  // Missing doors/stairs are genuine authoring errors, not portal relocations.
+  for (const source of placed.values()) {
+    for (const [direction, exit] of Object.entries(source.room.exits)) {
+      if (!exit.to) continue;
+      if (isCardinal(direction)) {
+        const door = pickDoor(source.footprint, direction);
+        if (door.missing) {
+          addError({
+            reason: 'missing-source-door',
+            rooms: [source.room.id],
+            direction,
+            level: source.level,
+            message: `Room '${source.room.id}' has no ${direction} door for its ${direction} exit.`,
+          });
+        }
+      } else if (direction === 'up' || direction === 'down') {
+        const stairs =
+          direction === 'up'
+            ? source.footprint.stairs.up
+            : source.footprint.stairs.down;
+        if (stairs.length === 0) {
+          addError({
+            reason: 'missing-source-stairs',
+            rooms: [source.room.id],
+            direction,
+            level: source.level,
+            message: `Room '${source.room.id}' has no ${direction} stair for its ${direction} exit.`,
           });
         }
       }
     }
   }
 
+  // Record all declared links for badges.
+  const links: PlacementLink[] = [];
+  for (const source of placed.values()) {
+    const exits = Object.entries(source.room.exits).sort(
+      ([left], [right]) =>
+        (EXIT_RANK[left] ?? 99) - (EXIT_RANK[right] ?? 99),
+    );
+    for (const [direction, exit] of exits) {
+      const target = placed.get(exit.to);
+      if (!target) continue;
+      const kind: LinkKind = isCardinal(direction)
+        ? 'cardinal'
+        : direction === 'up' || direction === 'down'
+          ? 'vertical'
+          : 'portal';
+      links.push({
+        sourceId: source.room.id,
+        targetId: target.room.id,
+        direction,
+        kind,
+        oneWay: exit.one_way,
+        levelDelta: target.intendedLevel - source.intendedLevel,
+        fromDetached: source.detached,
+      });
+    }
+  }
+
+  // Every edge that stopped being a shared-wall tile connection is a portal.
+  const portals: PlacementPortal[] = [];
+  for (const source of placed.values()) {
+    const exits = Object.entries(source.room.exits).sort(
+      ([left], [right]) =>
+        (EXIT_RANK[left] ?? 99) - (EXIT_RANK[right] ?? 99),
+    );
+    for (const [direction, exit] of exits) {
+      if (direction === 'in' || direction === 'out') continue;
+      const target = placed.get(exit.to);
+      if (!target) continue;
+      const expected = expectedFor(source, target.room, direction);
+      if (!expected) continue;
+      const samePlacement =
+        expected.level === target.level &&
+        expected.x === target.x &&
+        expected.y === target.y;
+      const sameComponent =
+        !source.exact &&
+        !target.exact &&
+        !source.detached &&
+        !target.detached &&
+        source.component === target.component;
+      let reason: PortalReason | null = null;
+      if (source.exact && !target.exact) reason = 'relocated';
+      else if (source.exact && target.exact && !samePlacement) reason = 'cycle';
+      else if (!source.exact && target.exact) reason = 'alternate';
+      else if (sameComponent) reason = null;
+      else if (!source.exact && !target.exact) reason = 'alternate';
+      if (!reason) continue;
+      portals.push({
+        sourceId: source.room.id,
+        targetId: target.room.id,
+        direction,
+        reason,
+        oneWay: exit.one_way,
+        source,
+        target,
+      });
+    }
+  }
+
+  // The invariant the owner asked for: no interior overlap between rooms that
+  // are not a shared-wall exact pair or a local relocated subtree.
+  const placedRooms = [...placed.values()];
+  for (let left = 0; left < placedRooms.length; left += 1) {
+    for (let right = left + 1; right < placedRooms.length; right += 1) {
+      const a = placedRooms[left];
+      const b = placedRooms[right];
+      if (!a || !b || a.level !== b.level) continue;
+      const allowSharedBoundary =
+        (a.exact && b.exact) ||
+        (a.component !== 0 &&
+          a.component === b.component &&
+          !a.exact &&
+          !b.exact);
+      if (
+        rectanglesOverlap(
+          a.x,
+          a.y,
+          a.footprint.width,
+          a.footprint.height,
+          b.x,
+          b.y,
+          b.footprint.width,
+          b.footprint.height,
+          allowSharedBoundary,
+        )
+      ) {
+        addError({
+          reason: 'unplaceable',
+          rooms: [a.room.id, b.room.id],
+          level: a.level,
+          message: `Rooms '${a.room.id}' and '${b.room.id}' still overlap on level ${a.level}; use the tree to inspect them.`,
+        });
+      }
+    }
+  }
+
+  const portalRooms = placedRooms.filter(
+    (room) => !room.exact && !room.detached,
+  );
+  const portalPlacements = new Map(
+    portalRooms.map((room) => [room.room.id, room] as const),
+  );
+  const exactRooms = placedRooms.filter((room) => room.exact);
+  const detached = placedRooms.filter((room) => room.detached);
+  const inOutPortals = links.filter((link) => link.kind === 'portal');
+
   const levels: LevelLayout[] = [];
-  for (const [level, levelRooms] of [...placed.values()].reduce(
-    (grouped, placedRoom) => {
-      const list = grouped.get(placedRoom.level) ?? [];
-      list.push(placedRoom);
-      grouped.set(placedRoom.level, list);
-      return grouped;
-    },
-    new Map<number, PlacedRoom[]>(),
-  )) {
+  const mainByLevel = new Map<number, PlacedRoom[]>();
+  for (const room of placedRooms) {
+    if (room.detached || room.placement === 'band') continue;
+    const group = mainByLevel.get(room.level) ?? [];
+    group.push(room);
+    mainByLevel.set(room.level, group);
+  }
+  for (const [level, levelRooms] of mainByLevel) {
     const cells = buildCells(levelRooms);
     const bounds = tileBounds(cells);
-    const detachedRooms = levelRooms.filter((room) => room.detached);
-    const detachedBounds = tileBounds(buildCells(detachedRooms));
     levels.push({
       level,
+      label: levelLabel(level),
+      kind: 'level',
       rooms: sortRooms(levelRooms),
       cells,
       bounds: bounds ?? {
@@ -812,28 +1529,87 @@ export function placeWorld(rooms: Room[], startRoom: string): WorldPlacement {
         width: 1,
         height: 1,
       },
-      detachedIds: detachedRooms.map((room) => room.room.id),
-      detachedBounds,
     });
   }
   levels.sort((left, right) => right.level - left.level);
 
+  const portalBands: LevelLayout[] = [];
+  const bandByIntended = new Map<number, PlacedRoom[]>();
+  for (const room of bandRooms) {
+    const group = bandByIntended.get(room.intendedLevel) ?? [];
+    group.push(room);
+    bandByIntended.set(room.intendedLevel, group);
+  }
+  for (const [intended, rooms] of [...bandByIntended].sort(
+    (left, right) => right[0] - left[0],
+  )) {
+    const cells = buildCells(rooms);
+    const bounds = tileBounds(cells);
+    const label =
+      intended === 0
+        ? 'Portals · Ground'
+        : `Portals · Level ${intended > 0 ? '+' : ''}${intended}`;
+    const band: LevelLayout = {
+      level: bandLevelFor(intended),
+      label,
+      kind: 'portals',
+      rooms: sortRooms(rooms),
+      cells,
+      bounds: bounds ?? {
+        minX: 0,
+        minY: 0,
+        maxX: 0,
+        maxY: 0,
+        width: 1,
+        height: 1,
+      },
+    };
+    portalBands.push(band);
+    levels.push(band);
+  }
+
+  if (detachedRooms.length > 0) {
+    const cells = buildCells(detachedRooms);
+    const bounds = tileBounds(cells);
+    levels.push({
+      level: DETACHED_BAND_LEVEL,
+      label: 'Detached',
+      kind: 'detached',
+      rooms: sortRooms(detachedRooms),
+      cells,
+      bounds: bounds ?? {
+        minX: 0,
+        minY: 0,
+        maxX: 0,
+        maxY: 0,
+        width: 1,
+        height: 1,
+      },
+    });
+  }
+
   return {
     levels,
-    placed: [...placed.values()].sort(
+    placed: placedRooms.sort(
       (left, right) =>
-        left.level - right.level ||
-        left.y - right.y ||
-        left.x - right.x ||
+        (left.intendedLevel - right.intendedLevel) ||
+        (left.y - right.y) ||
+        (left.x - right.x) ||
         left.room.id.localeCompare(right.room.id),
     ),
+    exactRooms,
+    portalRooms,
+    portalPlacements,
     detached,
-    conflicts,
     portals,
+    inOutPortals,
+    errors,
     links,
+    portalBands,
     startId: start ? start.id : null,
   };
 }
+
 
 export function levelLabel(level: number): string {
   if (level === 0) return 'Level 0 · Ground';

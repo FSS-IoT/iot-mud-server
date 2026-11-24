@@ -1,10 +1,11 @@
 <script lang="ts">
   import type { PaletteKind, Room, RoomTab } from '../lib/types';
+  import { OPPOSITE_EXITS } from '../lib/types';
   import {
     fitCamera,
-    levelLabel,
     placeWorld,
     tileMetrics,
+    type PlacementPortal,
     type TileCamera,
     type TileMetricsLevel,
   } from '../lib/worldTiles';
@@ -76,15 +77,17 @@
   const detachedNames = $derived(
     placement.detached.map((room) => room.room.name || room.room.id),
   );
-  const conflictRooms = $derived.by(() => {
+  const errorRooms = $derived.by(() => {
     const ids: string[] = [];
-    for (const conflict of placement.conflicts) {
-      for (const id of conflict.rooms) {
+    for (const error of placement.errors) {
+      for (const id of error.rooms) {
         if (!ids.includes(id)) ids.push(id);
       }
     }
     return ids;
   });
+  const portalCount = $derived(placement.portals.length);
+  const portalRoomCount = $derived(placement.portalRooms.length);
   const areaLegend = $derived.by(() => {
     const names: string[] = [];
     const entries: { name: string; color: string }[] = [];
@@ -175,6 +178,116 @@
       x: rect.left + rect.width / 2,
       y: rect.top + rect.height / 2,
     };
+  }
+
+  function sideCenter(
+    width: number,
+    height: number,
+    side: string,
+  ): { x: number; y: number } {
+    if (side === 'north') return { x: Math.floor((width - 1) / 2), y: 0 };
+    if (side === 'south') {
+      return { x: Math.floor((width - 1) / 2), y: height - 1 };
+    }
+    if (side === 'west') return { x: 0, y: Math.floor((height - 1) / 2) };
+    return { x: width - 1, y: Math.floor((height - 1) / 2) };
+  }
+
+  function doorPoint(
+    placedId: string,
+    side: string,
+  ): { x: number; y: number } | null {
+    const placed = placement.placed.find(
+      (candidate) => candidate.room.id === placedId,
+    );
+    const view = placed ? levelView(placed.level) : undefined;
+    if (!placed || !view) return null;
+    const door =
+      side === 'north' ||
+      side === 'east' ||
+      side === 'south' ||
+      side === 'west'
+        ? placed.footprint.doors[side][0]
+        : undefined;
+    const cell =
+      door ??
+      sideCenter(
+        placed.footprint.width,
+        placed.footprint.height,
+        side,
+      );
+    return {
+      x: cellX(placed.x + cell.x) + CELL / 2,
+      y: cellY(placed.y + cell.y, view) + CELL / 2,
+    };
+  }
+
+  function stairPoint(
+    placedId: string,
+    side: string,
+  ): { x: number; y: number } | null {
+    const placed = placement.placed.find(
+      (candidate) => candidate.room.id === placedId,
+    );
+    const view = placed ? levelView(placed.level) : undefined;
+    if (!placed || !view) return null;
+    const cell =
+      side === 'up'
+        ? placed.footprint.stairs.up[0]
+        : side === 'down'
+          ? placed.footprint.stairs.down[0]
+          : undefined;
+    if (!cell) return roomCenter(placedId);
+    return {
+      x: cellX(placed.x + cell.x) + CELL / 2,
+      y: cellY(placed.y + cell.y, view) + CELL / 2,
+    };
+  }
+
+  function portalPoints(portal: PlacementPortal): {
+    x1: number;
+    y1: number;
+    x2: number;
+    y2: number;
+    labelX: number;
+    labelY: number;
+  } | null {
+    const source =
+      portal.direction === 'up' || portal.direction === 'down'
+        ? stairPoint(portal.sourceId, portal.direction)
+        : doorPoint(portal.sourceId, portal.direction);
+    const opposite = OPPOSITE_EXITS[portal.direction] ?? '';
+    const target =
+      portal.direction === 'up' || portal.direction === 'down'
+        ? stairPoint(portal.targetId, opposite)
+        : doorPoint(portal.targetId, opposite);
+    if (!source || !target) return null;
+    return {
+      x1: source.x,
+      y1: source.y,
+      x2: target.x,
+      y2: target.y,
+      labelX: (source.x + target.x) / 2,
+      labelY: (source.y + target.y) / 2,
+    };
+  }
+
+  function portalLabel(portal: PlacementPortal): string {
+    return `${portal.direction} → ${portal.target.room.name || portal.targetId}`;
+  }
+
+  function placementLabel(placed: {
+    detached: boolean;
+    placement: string;
+    intendedLevel: number;
+  }): string {
+    if (placed.detached) return 'detached';
+    if (placed.placement === 'band') {
+      return `portals level ${placed.intendedLevel}`;
+    }
+    return placed.intendedLevel === 0
+      ? 'ground'
+      : `level ${placed.intendedLevel}`;
   }
 
   function initialCamera(
@@ -345,6 +458,9 @@
         add(link.direction);
       }
     }
+    if (placement.portals.some((portal) => portal.sourceId === roomId)) {
+      add('portal');
+    }
     return badges.slice(0, 3);
   }
 
@@ -451,21 +567,51 @@
 
   <p class="map-notice" aria-live="polite">{notice}</p>
 
-  {#if placement.conflicts.length > 0}
+  {#if portalCount > 0}
+    <div class="portal-banner" role="status">
+      <strong>
+        {portalCount} portal{portalCount === 1 ? '' : 's'} · cannot tile in 2D
+      </strong>
+      <p class="fine-print">
+        {portalRoomCount} relocated room{portalRoomCount === 1 ? '' : 's'} keep
+        the exact map intact; dashed links mark the exits that became portals.
+      </p>
+      <ul>
+        {#each placement.portals as portal, index (index)}
+          <li>
+            <button
+              type="button"
+              class="small"
+              onclick={() => onselect(portal.sourceId)}
+            >{portal.source.room.name || portal.sourceId}</button>
+            <span class="portal-direction">{portal.direction} →</span>
+            <button
+              type="button"
+              class="small"
+              onclick={() => onselect(portal.targetId)}
+            >{portal.target.room.name || portal.targetId}</button>
+            <span class="badge stone">{portal.reason}</span>
+            {#if portal.oneWay}<span class="badge warn">one-way</span>{/if}
+          </li>
+        {/each}
+      </ul>
+    </div>
+  {/if}
+
+  {#if placement.errors.length > 0}
     <div class="error-box placement-conflicts" role="alert">
       <strong>
-        {placement.conflicts.length} placement conflict{placement.conflicts
-          .length === 1
+        {placement.errors.length} data error{placement.errors.length === 1
           ? ''
           : 's'}
       </strong>
       <ul>
-        {#each placement.conflicts as conflict, index (index)}
-          <li>{conflict.message}</li>
+        {#each placement.errors as error, index (index)}
+          <li>{error.message}</li>
         {/each}
       </ul>
       <div class="inline-actions conflict-jump">
-        {#each conflictRooms as id (id)}
+        {#each errorRooms as id (id)}
           <button
             type="button"
             class="small"
@@ -479,20 +625,21 @@
   {#if placement.detached.length > 0}
     <p class="fine-print detached-note">
       <strong>Detached:</strong>
-      {detachedNames.join(', ')} — no cardinal path from the start room; shown
-      in the level 0 detached band.
+      {detachedNames.join(', ')} — no path from the start room; shown in the
+      Detached band.
     </p>
   {/if}
 
-  {#if placement.portals.length > 0}
+  {#if placement.inOutPortals.length > 0}
     <details class="portal-note">
       <summary>
-        {placement.portals.length} portal link{placement.portals.length === 1
+        {placement.inOutPortals.length} in/out link{placement.inOutPortals
+          .length === 1
           ? ''
-          : 's'} (not placed in 2D)
+          : 's'} (portal badges, not 2D)
       </summary>
       <ul>
-        {#each placement.portals as portal, index (index)}
+        {#each placement.inOutPortals as portal, index (index)}
           <li>
             <span class="mono tiny">{portal.sourceId}</span>
             {portal.direction} →
@@ -537,8 +684,12 @@
 
         <g transform={`translate(${panX} ${panY}) scale(${zoom})`}>
           {#each metrics.levels as view (view.level.level)}
-            <text class="level-heading" x={PAD} y={view.headingY}>
-              {levelLabel(view.level.level)}
+            <text
+              class={`level-heading level-${view.level.kind}`}
+              x={PAD}
+              y={view.headingY}
+            >
+              {view.level.label}
             </text>
             <line
               class="level-rule"
@@ -547,21 +698,6 @@
               x2={metrics.width - PAD}
               y2={view.headingY + 7}
             ></line>
-
-            {#if view.level.level === 0 && view.level.detachedBounds}
-              {@const detachedY =
-                cellY(view.level.detachedBounds.minY, view) - 8}
-              <line
-                class="detached-divider"
-                x1={PAD}
-                y1={detachedY}
-                x2={metrics.width - PAD}
-                y2={detachedY}
-              ></line>
-              <text class="detached-heading" x={PAD} y={detachedY - 5}>
-                Detached
-              </text>
-            {/if}
 
             {#each view.level.cells as cell (cell.x + ',' + cell.y)}
               {@const x = cellX(cell.x)}
@@ -590,14 +726,15 @@
               {@const rect = roomRect(room.id)}
               {@const color = areaColor(room.area)}
               {@const errors = roomErrors[room.id] ?? 0}
-              {@const conflict = conflictRooms.includes(room.id)}
+              {@const dataError = errorRooms.includes(room.id)}
+              {@const portalRoom = !placed.exact && !placed.detached}
               {@const lines = labelLines(room)}
               {@const badges = linkBadges(room.id)}
               {@const isStart = room.id === placement.startId}
               {@const labelWidth = placed.footprint.width * CELL - 8}
               {#if rect}
                 <rect
-                  class={`room-outline ${placed.footprint.authored ? '' : 'generated'} ${selectedId === room.id ? 'selected' : ''} ${conflict ? 'conflict' : ''} ${dropTarget === room.id ? 'drop-target' : ''}`}
+                  class={`room-outline ${placed.footprint.authored ? '' : 'generated'} ${selectedId === room.id ? 'selected' : ''} ${dataError ? 'conflict' : ''} ${portalRoom ? 'portal-room' : ''} ${dropTarget === room.id ? 'drop-target' : ''}`}
                   x={rect.left + 0.5}
                   y={rect.top + 0.5}
                   width={rect.width - 1}
@@ -691,7 +828,7 @@
                   role="button"
                   tabindex="0"
                   aria-pressed={selectedId === room.id}
-                  aria-label={`${room.name} (${room.id}), ${placed.level === 0 ? 'ground' : `level ${placed.level}`}, ${room.objects.length} objects, ${room.npcs.length} NPCs`}
+                  aria-label={`${room.name} (${room.id}), ${placementLabel(placed)}, ${room.objects.length} objects, ${room.npcs.length} NPCs`}
                   onpointerdown={(event) => event.stopPropagation()}
                   onclick={() => activateRoom(room.id)}
                   onkeydown={(event) => onRoomKeydown(event, room.id)}
@@ -709,6 +846,38 @@
                 </g>
               {/if}
             {/each}
+          {/each}
+
+          {#each placement.portals as portal, index (index)}
+            {@const points = portalPoints(portal)}
+            {#if points}
+              <g class={`portal-link ${portal.reason}`}>
+                <line
+                  class="portal-line"
+                  x1={points.x1}
+                  y1={points.y1}
+                  x2={points.x2}
+                  y2={points.y2}
+                ></line>
+                <circle
+                  class="portal-end"
+                  cx={points.x1}
+                  cy={points.y1}
+                  r="3"
+                ></circle>
+                <circle
+                  class="portal-end target"
+                  cx={points.x2}
+                  cy={points.y2}
+                  r="3.5"
+                ></circle>
+                <text
+                  class="portal-label"
+                  x={points.labelX}
+                  y={points.labelY}
+                >{portalLabel(portal)}</text>
+              </g>
+            {/if}
           {/each}
         </g>
       </svg>
@@ -731,6 +900,8 @@
         </span>
       {/each}
       <span class="tiles-legend-note">dashed outline = generated grid</span>
+      <span class="tiles-legend-note">dashed connector = portal, not a shared wall</span>
+      <span class="tiles-legend-note">Portals band = relocated rooms</span>
     </footer>
   </div>
 </section>

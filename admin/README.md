@@ -112,13 +112,20 @@ views select the same room, so the tree and inspector stay in sync.
   `defaultGeometry(room)` when missing. Cardinal exits align the two door cells
   and share a boundary row/column; one-way exits still place the target.
   `up`/`down` stack levels; `in`/`out` and unknown directions are portal badges.
+- **Exact first, portals second** — the first placement never moves. A component
+  that would overlap or repeat a position is relocated to a nearby free slot
+  (within six cells) or to a separate Portals band. A dashed connector from the
+  exact door/edge labels every portal. Subtree geometry and its up/down levels
+  stay local; no footprints overlap.
 - **Draw** — walls, floors, doors, stairs, props, and spawn points. Authored
   rooms have a solid outline; generated footprints are dashed. Area colour tints
   floors and outlines; labels carry name, id, object/NPC counts, `START`, and
   validation badges.
-- **Warnings** — a conflict banner lists non-closing cycles, overlapping rooms,
-  missing source doors, and similar placement problems. Detached rooms go into
-  a separate level 0 band. Portal links are listed under a details block.
+- **Warnings** — a `portals · cannot tile in 2D` banner lists each portal exit
+  with source/target buttons and the reason (`relocated`/`cycle`). Genuine data
+  errors (missing source doors/stairs, self-link, unknown room) have their own
+  error box. Detached rooms have a separate band; `in`/`out` links are listed
+  under a details block.
 - **Generate missing grids** — asks for confirmation, writes the default 9×7
   grid into every room without geometry **in the draft**, marks it dirty, and
   leaves saving to the existing Save button. The grid includes reciprocal
@@ -127,7 +134,7 @@ views select the same room, so the tree and inspector stay in sync.
   `Add default grid` button also uses the reciprocal directions.
 - **Controls** — click a tile/room to select it; drag a palette chip onto a room
   or arm a chip and click. Drag empty canvas to pan; wheel/`+`/`−` zoom; **Fit**
-  frames all levels.
+  frames all levels, the Portals bands, and the Detached band.
 - **No manual positions** — derived placement ignores `layout.json`. Switch to
   Connections for free dragging and exit handles.
 
@@ -160,9 +167,10 @@ then auto-layouts deterministically. Tiles never writes positions.
   `layout.json`. Generated rooms are dashed until `Generate missing grids`
   writes their default grid into the draft. Levels stack; detached rooms have
   their own band.
-- **Placement conflicts** — the Tiles banner lists the rooms and edges involved
-  (non-closing cycle, overlap, missing source door). Rooms are not moved or
-  hidden.
+- **Portals** — exact map edges that cannot be shared walls are listed with
+  source/target buttons and dashed connectors. Relocated components keep their
+  local geometry and levels in the Portals band. No room footprint overlaps
+  another; a residual internal 2D cycle is reported as a data error.
 - **Unsaved changes** — every edit marks the document dirty; the World tab shows
   a dot and the browser warns on unload. Apply is disabled until Save.
 - **Validation errors** — the top panel lists all errors; errors naming the
@@ -171,9 +179,9 @@ then auto-layouts deterministically. Tiles never writes positions.
 - **Inspector tabs** — Room, Geometry, Exits, Objects, NPCs, Effects. Geometry
   is still the per-room tile grid; tabs only change which section is displayed.
 - **Geometry** — clicking a cell cycles `#` → `.` → `+` → `^` → `v`. The default
-  grid derives doors and stairs from the room's exits. Save validates the map,
-  so a door without an exit (or a missing door) is reported, not silently
-  written.
+  grid derives doors and stairs from the room's declared exits and the implied
+  reciprocals of its neighbours. Save validates the map, so a door without an
+  exit (or a missing door) is reported, not silently written.
 - **Exits** — declare each way once. The loader creates the reciprocal unless
   `one_way` is set; declaring both directions is a validation error. The map's
   connect gesture follows that rule and shows both arrowheads for the implicit

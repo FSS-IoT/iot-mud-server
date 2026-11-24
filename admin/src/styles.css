@@ -1924,6 +1924,83 @@ td select {
   font-size: 0.75rem;
 }
 
+.portal-banner {
+  margin: 0 0 0.55rem;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid rgba(196, 181, 253, 0.38);
+  border-radius: 8px;
+  background: rgba(196, 181, 253, 0.08);
+  color: var(--text);
+  font-size: 0.76rem;
+  max-height: 180px;
+  overflow: auto;
+}
+
+.portal-banner ul {
+  margin: 0.35rem 0 0;
+  padding-left: 1.1rem;
+}
+
+.portal-banner li {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  margin: 0.18rem 0;
+}
+
+.portal-direction {
+  color: #c4b5fd;
+  font-family: var(--mono);
+}
+
+.portal-link {
+  pointer-events: none;
+}
+
+.portal-line {
+  stroke: #c4b5fd;
+  stroke-width: 1.6;
+  stroke-dasharray: 6 4;
+  fill: none;
+  opacity: 0.9;
+}
+
+.portal-end {
+  fill: #c4b5fd;
+}
+
+.portal-end.target {
+  fill: var(--bg-soft);
+  stroke: #c4b5fd;
+  stroke-width: 1.6;
+}
+
+.portal-label {
+  fill: #ddd1ff;
+  font-size: 9px;
+  font-weight: 650;
+  text-anchor: middle;
+  dominant-baseline: middle;
+  paint-order: stroke;
+  stroke: var(--bg);
+  stroke-width: 4px;
+  stroke-linejoin: round;
+}
+
+.room-outline.portal-room {
+  stroke-dasharray: 3 3;
+  opacity: 0.88;
+}
+
+.level-heading.level-portals {
+  fill: #c4b5fd;
+}
+
+.level-heading.level-detached {
+  fill: var(--warn);
+}
+
 .portal-note summary {
   cursor: pointer;
 }
