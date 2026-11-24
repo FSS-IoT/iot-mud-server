@@ -1464,18 +1464,23 @@ class Engine:
             outcome.reply = "Goodbye!"
             return outcome
 
-        handled = True
+        handlers = {
+            "take": self._exec_take,
+            "drop": self._exec_drop,
+            "open": self._exec_open,
+            "go": self._exec_go,
+            "look": self._exec_look,
+            "inventory": self._exec_inventory,
+            "who": self._exec_who,
+            "show_exits": self._exec_show_exits,
+            "help": self._exec_help,
+            "hello": self._exec_hello,
+        }
+        handler = handlers.get(verb)
+        handled = handler is not None
         try:
-            if verb == "take":
-                await self._exec_take(outcome, actor, arg)
-            elif verb == "drop":
-                await self._exec_drop(outcome, actor, arg)
-            elif verb == "open":
-                await self._exec_open(outcome, actor, arg)
-            elif verb == "go":
-                await self._exec_go(outcome, actor, arg)
-            else:
-                handled = False
+            if handler is not None:
+                await handler(outcome, actor, arg)
         except StorageWriteError:
             # A commit failed, so the engine changed nothing: one typed error,
             # no event for any other client (SPEC v2.1.0 criterion 2).
@@ -1744,6 +1749,112 @@ class Engine:
             },
             scope="room_others",
         ))
+
+    async def _exec_look(self, outcome: CommandOutcome, actor: Player,
+                         arg: str | None) -> None:
+        """`look`: render the actor's room; the adapter builds `room.state`."""
+        room = actor.location
+        if room is None:
+            outcome.reply = "You feel lost in a void."
+        elif not self._room_is_lit(actor, room):
+            outcome.reply = "It is too dark to see anything."
+        else:
+            outcome.reply = room.description
+            items = [c for c in room.contents if not isinstance(c, Player)]
+            if items:
+                listed = ", ".join(sorted(c.name for c in items))
+                outcome.reply += f"\n\nHere you see: {listed}."
+            if room.npcs:
+                listed = ", ".join(
+                    npc.name for npc in sorted(
+                        room.npcs, key=lambda npc: npc.name.lower()))
+                outcome.reply += f"\n\nAlso here: {listed}."
+            occupants = [
+                p for p in self._players.values()
+                if p.location is room and p.name != actor.name
+            ]
+            if occupants:
+                listed = ", ".join(
+                    p.name for p in sorted(
+                        occupants, key=lambda p: p.name.lower()))
+                outcome.reply += f"\n\nOthers in the room: {listed}."
+        outcome.events.append(SemanticEvent(
+            kind="room.state", data={"actor": actor}, scope="actor"))
+
+    async def _exec_inventory(self, outcome: CommandOutcome, actor: Player,
+                              arg: str | None) -> None:
+        """`inventory`: the actor's pack, rendered by the adapter."""
+        held = self._held_items(actor)
+        outcome.reply = (
+            f"You are carrying: {', '.join(held)}."
+            if held else "You are not carrying anything.")
+        outcome.events.append(SemanticEvent(
+            kind="player.inventory",
+            data={"actor": actor, "text": outcome.reply},
+            scope="actor",
+        ))
+
+    async def _exec_who(self, outcome: CommandOutcome, actor: Player,
+                        arg: str | None) -> None:
+        """`who`: the server-wide roster, awake and asleep (#72/#75)."""
+        roster = self.who_entries()
+        if not roster:
+            outcome.reply = "There is no one in the world."
+        else:
+            listed = []
+            for entry in roster:
+                state = (
+                    "asleep, turned to stone"
+                    if entry["asleep"] else "awake")
+                where = entry["room_id"] or "nowhere"
+                listed.append(f"{entry['name']} ({where}, {state})")
+            outcome.reply = (
+                "Characters in the world: " + "; ".join(listed) + ".")
+        outcome.events.append(SemanticEvent(
+            kind="who.list",
+            data={"actor": actor, "text": outcome.reply},
+            scope="actor",
+        ))
+
+    async def _exec_show_exits(self, outcome: CommandOutcome, actor: Player,
+                               arg: str | None) -> None:
+        """`exits`: the actor's room exits, with locked ones marked."""
+        room = actor.location
+        if room is None:
+            outcome.reply = "You have no context for exits here."
+        elif not room.exits:
+            outcome.reply = "There are no exits here."
+        else:
+            names = self._exit_labels(room)
+            outcome.reply = f"Available exits: {', '.join(names)}."
+        self._notice(outcome, outcome.reply)
+
+    async def _exec_help(self, outcome: CommandOutcome, actor: Player,
+                         arg: str | None) -> None:
+        """`help`: the command list."""
+        outcome.reply = (
+            "Commands: look (l), go <direction>, exits, take <item>, "
+            "get <item> from <container>, drop <item>, put <item> in <container>, "
+            "open <container>, close <container>, use <key> on <container|exit>, "
+            "examine <thing> (exam), read <thing> (signs, books), look in <chest>, "
+            "light <torch/lantern>, inventory (i), who, "
+            "say <text>, emote <action> (me), tell <player> <text>, "
+            "talk <npc>, ask <npc> about <topic>, hello. Try `look` first."
+        )
+        self._notice(outcome, outcome.reply)
+
+    async def _exec_hello(self, outcome: CommandOutcome, actor: Player,
+                          arg: str | None) -> None:
+        """`hello`: the greeting line."""
+        outcome.reply = "The world listens..."
+        self._notice(outcome, outcome.reply)
+
+    @staticmethod
+    def _notice(outcome: CommandOutcome, text: str) -> None:
+        """Record a plain informational notice."""
+        outcome.reply = text
+        outcome.events.append(SemanticEvent(
+            kind="notice", data={"text": text}, scope="actor"))
 
     async def process_command(self, command_text: str, player_name: Optional[str] = None) -> str:
         """Translates player input into state mutation or narrative.

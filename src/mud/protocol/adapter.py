@@ -441,7 +441,10 @@ def _parse(text: str) -> tuple[str, str | None, str]:
 # these from a `CommandOutcome` instead of re-parsing and diffing state (#130).
 # The set grows as verbs move to the typed path; the old branches below cover
 # the rest until then.
-_OUTCOME_VERBS = frozenset({"take", "drop", "open", "go"})
+_OUTCOME_VERBS = frozenset({
+    "take", "drop", "open", "go",
+    "look", "inventory", "who", "show_exits", "help", "hello",
+})
 
 
 def _shape_event(engine: Engine, actor: Player, sem) -> list[Outbound]:
@@ -451,6 +454,20 @@ def _shape_event(engine: Engine, actor: Player, sem) -> list[Outbound]:
         player = data.get("actor", actor)
         return [Outbound("room.state", build_room_state(engine, player),
                          "actor", direct=sem.direct)]
+    if kind == "notice":
+        return [Outbound("notice", {"text": data.get("text", ""),
+                                    "level": "info"},
+                         "actor", direct=sem.direct)]
+    if kind == "player.inventory":
+        return [Outbound("player.inventory",
+                         _inventory_data(engine, data["actor"],
+                                         text=data.get("text")),
+                         "actor", direct=sem.direct)]
+    if kind == "who.list":
+        return [Outbound("who.list", {
+            "players": engine.who_entries(),
+            "text": data.get("text", ""),
+        }, "actor", direct=sem.direct)]
     if kind in ("room.leave", "room.enter"):
         room = data["room"]
         return [Outbound(kind, {
