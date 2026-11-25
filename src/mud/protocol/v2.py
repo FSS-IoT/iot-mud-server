@@ -96,7 +96,6 @@ class SemanticEvent:
     * ``actor`` — only the command's sender.
     * ``room`` — the sender and everyone else in the room.
     * ``room_others`` — everyone in the room except the sender (a leave/enter).
-    * ``server`` — every connected character.
     * ``player`` — the sender and the one character named in ``data["player"]``.
 
     ``data`` is the game content: object/actor references, the presentation
@@ -106,7 +105,7 @@ class SemanticEvent:
 
     kind: str
     data: dict[str, Any] = field(default_factory=dict)
-    scope: Literal["actor", "room", "room_others", "server", "player"] = "actor"
+    scope: Literal["actor", "room", "room_others", "player"] = "actor"
     # False for an unsolicited push that is not a reply to the request id (the
     # inventory relist after a put/get). The adapter passes this to `Outbound`.
     direct: bool = True

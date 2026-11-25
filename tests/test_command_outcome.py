@@ -1,10 +1,9 @@
-"""Typed command outcomes (#130, Phase 1).
+"""Typed command outcomes (#130).
 
-The engine used to return only a prose string; the v2 adapter re-derived the
-event from that string and a state diff. These tests pin the new typed seam:
-`Engine.execute(actor, text) -> CommandOutcome` carries the reply, a typed
-success/error, and the semantic events the command produced. The v2 adapter is
-not rewritten yet, so nothing here asserts wire output.
+The engine turns one parsed command into a `CommandOutcome` carrying the reply,
+a typed success/error, and the semantic events it produced. The v2 adapter only
+shapes those events; the wire output is pinned by
+`tests/test_protocol_v2_adapter.py` and the golden scenarios.
 """
 
 import pytest
@@ -155,6 +154,19 @@ async def test_look_returns_a_room_state_outcome(vault):
     assert _kinds(outcome) == ["room.state"]
 
 
+@pytest.mark.parametrize("command", ["take", "drop", "open", "close"])
+@pytest.mark.asyncio
+async def test_missing_argument_is_a_typed_bad_args(vault, command):
+    """A verb with no target is bad_args, not a crash or not_found."""
+    engine, player, _room, _chest, _coin = vault
+
+    outcome = await engine.execute(player, command)
+
+    assert outcome.status == "error"
+    assert outcome.error_code == "bad_args"
+    assert outcome.events == []
+
+
 def test_adapter_is_a_pure_shaping_layer():
     """#130: the adapter no longer owns grammar, prose classification, or a diff."""
     import inspect
@@ -166,3 +178,4 @@ def test_adapter_is_a_pure_shaping_layer():
     source = inspect.getsource(adapter)
     assert "before_room_contents" not in source
     assert "before_inventory" not in source
+    assert "parse_command" not in source
