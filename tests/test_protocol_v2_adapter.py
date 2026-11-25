@@ -25,7 +25,7 @@ def vault():
     key = Entity("Gold Key", "A small key.", item_id="gold_key")
     room.add_content(chest)
     engine._rooms[room.name] = room
-    engine._player_location = room
+    engine.start_room = room
     player = engine.register_player("Ada")
     player.add_content(key)
     return engine, player, room, chest, coin, key

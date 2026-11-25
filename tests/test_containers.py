@@ -1,24 +1,25 @@
 import pytest
+
 from src.mud.content import Entity, Room
 from src.mud.engine.core import Engine
+
 
 @pytest.mark.asyncio
 async def test_nested_containers():
     """[TASK-012] RED PHASE: Verify that taking a container preserves its contents."""
     engine = Engine()
-    player = Entity("Hero", "A brave adventurer.")
     room = Room("Forest", "A dark forest.")
     box = Entity("Box", "A wooden box.", weight=1.0)
     coin = Entity("Coin", "A shiny coin.", weight=0.01)
     
     # Setup state
-    engine.player = player
+    engine.start_room = room
+    player = engine.register_player("Hero")
     room.add_content(box)
     box.add_content(coin)
-    engine._player_location = room
     
     # Action: Take the box
-    await engine.process_command("take box")
+    await engine.process_command("take box", player)
     
     # Assertions
     assert box in player.contents

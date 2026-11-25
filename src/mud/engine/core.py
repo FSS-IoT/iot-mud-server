@@ -28,8 +28,9 @@ class Engine:
         purely in memory for the v1 server and the unit tests.
         """
         self._rooms: Dict[str, Room] = {}
-        self._player_location: Optional[Room] = None
-        self.player: Optional[Entity] = None
+        # The room a freshly registered player spawns in, set by the world
+        # loader. There is no legacy single-player slot (#133).
+        self.start_room: Optional[Room] = None
         # The effect log sink is a bus subscriber (#84): every triggered
         # effect is appended to `event_log` when a store is attached, whether
         # or not any client is allowed to see it.
@@ -37,8 +38,7 @@ class Engine:
             "effect": [self._record_effect],
         }
         # Multiplayer registry. Each named player owns its location; the engine
-        # is authoritative over who is where. Legacy single-player accessors
-        # (self.player / self._player_location) remain for backward compatibility.
+        # is authoritative over who is where.
         self._players: Dict[str, Player] = {}
         self.store: WriteThroughStore | None = store
         # Deterministic world motion (#82). The loader sets `rng_seed` from the
@@ -59,8 +59,8 @@ class Engine:
 
     @property
     def current_location(self) -> Optional[Room]:
-        """Public access to the player's current room."""
-        return self._player_location
+        """The spawn room a newly registered player starts in."""
+        return self.start_room
 
     def get_room(self, name: str) -> Optional[Room]:
         """Return the room with this name, or None."""
@@ -96,7 +96,7 @@ class Engine:
             raise ValueError(f"Player '{name}' is already registered")
         player = Player(name)
         self._players[name] = player
-        player.location = self._player_location
+        player.location = self.start_room
         if player.location is not None:
             player.location.add_content(player)
         return player
@@ -294,7 +294,18 @@ class Engine:
         changes to the affected rooms.
         """
         player = self.get_player(name)
-        if player is None or player.location is None:
+        if player is None:
+            return False, ""
+        return await self._move_actor(player, direction)
+
+    async def _move_actor(self, player: Player,
+                          direction: str) -> tuple[bool, str]:
+        """Move one actor one step; the caller supplies the actor (#133).
+
+        Unlike `move_player` this does not require registration, so a v1
+        connection's pre-join solo actor can still walk.
+        """
+        if player.location is None:
             return False, ""
 
         exit_name = direction.strip().lower()
@@ -310,7 +321,7 @@ class Engine:
 
         # Commit first, then apply, then publish (SPEC v2.1.0 criterion 2).
         if self.store is not None:
-            self.store.player(name).move(room=destination)
+            self.store.player(player.name).move(room=destination)
 
         old_name = player.location.name
         player.location.remove_content(player)
@@ -318,10 +329,10 @@ class Engine:
         destination.add_content(player)
 
         await self.emit("player_moved", {
-            "name": name, "from": old_name, "to": destination.name,
+            "name": player.name, "from": old_name, "to": destination.name,
         })
         await self.fire_effects(
-            destination, "on_enter", actor=name, room=destination)
+            destination, "on_enter", actor=player.name, room=destination)
         return True, destination.name
 
     @staticmethod
@@ -519,64 +530,6 @@ class Engine:
         )
         return None, message
 
-    def _speaker_room(self, player_name: str | None):
-        """The room whose NPCs a command acts in, for either engine path."""
-        player = self._resolve_player(player_name)
-        return player.location if player is not None else self._player_location
-
-    async def _handle_talk(self, arg: str, player_name: str | None = None) -> str:
-        """`talk <npc>`: the authored greeting, or the NPC's default line.
-
-        Dialogue is scripted content, never generated. An unknown name is
-        phrased for the adapter's `not_found`; an ambiguous one reuses the
-        item resolver's wording (`ambiguous`). A spoken answer fires the NPC's
-        `on_talk` effects (#84).
-        """
-        room = self._speaker_room(player_name)
-        npc, ambiguity = self.find_npc(room, arg)
-        if ambiguity:
-            return ambiguity
-        if npc is None:
-            return f"You see no {arg.strip()} here."
-        line = npc.greeting or npc.default
-        if not line:
-            return f"{npc.name} has nothing to say."
-        player = self._resolve_player(player_name)
-        await self.fire_effects(
-            npc, "on_talk",
-            actor=player.name if player is not None else None,
-            room=room,
-        )
-        return f'{npc.name} says, "{line}"'
-
-    async def _handle_ask(self, arg: str, player_name: str | None = None) -> str:
-        """`ask <npc> about <topic>`: the topic line, or the default fallback.
-
-        Topics are matched case-insensitively against the authored map. An
-        unknown topic is not an error: the NPC answers with its `default`
-        line, so a client never has to know the script in advance. A spoken
-        answer, including the fallback, fires the NPC's `on_talk` effects
-        (#84): the trigger vocabulary has no separate `on_ask`.
-        """
-        npc_arg, separator, topic = arg.partition(" about ")
-        if not separator:
-            return "Ask whom about what? Try `ask <npc> about <topic>`."
-        room = self._speaker_room(player_name)
-        npc, ambiguity = self.find_npc(room, npc_arg)
-        if ambiguity:
-            return ambiguity
-        if npc is None:
-            return f"You see no {npc_arg.strip()} here."
-        line = npc.topics.get(topic.strip().lower()) or npc.default
-        if not line:
-            return f"{npc.name} has nothing to say."
-        player = self._resolve_player(player_name)
-        await self.fire_effects(
-            npc, "on_talk",
-            actor=player.name if player is not None else None,
-            room=room,
-        )
-        return f'{npc.name} says, "{line}"'
 
     @staticmethod
     def _held_items(entity) -> List[str]:
@@ -623,7 +576,7 @@ class Engine:
         return self.carry_used(player) + weight <= capacity + 1e-9
 
     def _room_is_lit(self, player, room) -> bool:
-        """Whether `room` is lit from the perspective of `player` (or legacy slot).
+        """Whether `room` is lit from the perspective of `player`.
 
         A room is lit unless it is explicitly marked `dark`. A dark room is lit
         if it carries a light source, or if the observer carries a *lit* light
@@ -634,10 +587,11 @@ class Engine:
             return True
         if isinstance(room, Room) and room.light_source is not None:
             return True
-        observer = player if player is not None else self.player
-        return observer is not None and any(
+        if player is None:
+            return False
+        return any(
             getattr(c, "light_source", False) and getattr(c, "lit", False)
-            for c in observer.contents
+            for c in player.contents
         )
 
     def visible_room_state(self, player) -> Dict[str, Any]:
@@ -650,7 +604,7 @@ class Engine:
         reports its name and darkness but hides every item and occupant the
         player cannot see.
         """
-        room = player.location if player is not None else self._player_location
+        room = player.location if player is not None else None
         dark = isinstance(room, Room) and room.dark and not self._room_is_lit(player, room)
         if dark:
             return {
@@ -671,128 +625,6 @@ class Engine:
             "occupants": occupants,
         }
 
-    def _find_target(self, player, room, arg: str):
-        """Resolve the entity named `arg` for the `examine` / `read` verbs.
-
-        Returns a tuple `(item, player_target)`:
-          * `item` is the held or room Entity matching `arg` (or None when no such
-            physical object exists).
-          * `player_target` is a named Player sharing the room (or None).
-
-        Physical items are matched before people so `read`/`examine X` never
-        accidentally describes a player. Players are excluded from the room-item
-        scan because they live in `room.contents` too.
-        """
-        held = self._find_item(player.contents, arg) if player is not None else None
-        if held is not None:
-            return held, None
-
-        room_items = [c for c in (room.contents if room is not None else [])
-                      if not isinstance(c, Player)]
-        room_item = self._find_item(room_items, arg)
-        if room_item is not None:
-            return room_item, None
-
-        player_target = next((p for p in self._players.values()
-                              if (room is None or p.location is room)
-                              and p.name.lower() == arg), None)
-        return None, player_target
-
-    async def _handle_take(self, arg: str, player_name: Optional[str]) -> str:
-        """Move an item named `arg` from the player's room into their inventory.
-
-        Returns the reply string. Supports both the registered-player path (a
-        socket-bound client passes a name) and the legacy single-player slot.
-        With a store attached, the item's new owner commits before the
-        in-memory move; a `StorageWriteError` propagates with nothing changed.
-        """
-        target_player = self._resolve_player(player_name)
-        if target_player is not None:
-            # Multiplayer path: take from the room into the registered player.
-            room = target_player.location
-            if room is None:
-                return "There is nowhere here to take anything from."
-            target_item, disambig = self._disambiguate(room.contents, arg)
-            if disambig:
-                return disambig
-            if target_item:
-                # Carry limit (#78): refuse before the write-through, so a
-                # refused take changes neither SQLite nor memory.
-                if not self.can_carry(target_player, target_item):
-                    return (
-                        f"You cannot carry the {target_item.name}; it is "
-                        "too heavy.")
-                # Write-through: the take is durable before memory moves.
-                if self.store is not None:
-                    self.store.player(target_player.name).take(
-                        target_item, room=room)
-                room.remove_content(target_item)
-                target_player.add_content(target_item)
-                await self.emit("item_taken", {"item_name": target_item.name.lower(), "owner": target_player.name})
-                return f"You picked up the {target_item.name}."
-            return f"There is no {arg} here."
-
-        # Legacy single-player path.
-        if not self.player:
-            return "You do not exist!"
-        if not self._player_location:
-            return "There is nowhere here to take anything from."
-        target_item, disambig = self._disambiguate(self._player_location.contents, arg)
-        if disambig:
-            return disambig
-        if target_item:
-            if not self.can_carry(self.player, target_item):
-                return (
-                    f"You cannot carry the {target_item.name}; it is "
-                    "too heavy.")
-            self._player_location.remove_content(target_item)
-            self.player.add_content(target_item)
-            await self.emit("item_taken", {"item_name": target_item.name.lower(), "owner": "player"})
-            return f"You picked up the {target_item.name}."
-        return f"There is no {arg} here."
-
-    async def _handle_drop(self, arg: str, player_name: Optional[str]) -> str:
-        """Drop an item named `arg` from the player's inventory into their room.
-
-        Returns the reply string. Supports both the registered-player path and the
-        legacy single-player slot. With a store attached, the item's new room
-        commits before the in-memory move; a `StorageWriteError` propagates with
-        nothing changed.
-        """
-        target_player = self._resolve_player(player_name)
-        if target_player is not None:
-            # Multiplayer path: drop from the registered player into their room.
-            room = target_player.location
-            if room is None:
-                return "There is nowhere here to drop anything."
-            target_item, disambig = self._disambiguate(target_player.contents, arg)
-            if disambig:
-                return disambig
-            if target_item:
-                # Write-through: the drop is durable before memory moves.
-                if self.store is not None:
-                    self.store.player(target_player.name).drop(
-                        target_item, room=room)
-                target_player.remove_content(target_item)
-                room.add_content(target_item)
-                await self.emit("item_dropped", {"item_name": target_item.name.lower(), "location": room.name})
-                return f"You dropped the {target_item.name}."
-            return f"You aren't carrying any {arg}."
-
-        # Legacy single-player path.
-        if not self.player:
-            return "You do not exist!"
-        if not self._player_location:
-            return "There is nowhere here to drop anything."
-        target_item, disambig = self._disambiguate(self.player.contents, arg)
-        if disambig:
-            return disambig
-        if target_item:
-            self.player.remove_content(target_item)
-            self._player_location.add_content(target_item)
-            await self.emit("item_dropped", {"item_name": target_item.name.lower(), "location": self._player_location.name})
-            return f"You dropped the {target_item.name}."
-        return f"You aren't carrying any {arg}."
 
     @staticmethod
     def _containment_cycle(container: Entity, item: Entity) -> bool:
@@ -818,67 +650,6 @@ class Engine:
         graph.setdefault(str(id(container)), []).append(str(id(item)))
         return bool(container_cycles(graph))
 
-    async def _handle_put(self, arg: str, player_name: str | None) -> str:
-        """Put an item inside a container: `put <item> in <container>`.
-
-        The item is resolved from the player's inventory; the container from the
-        player's room. A locked container refuses. Names are resolved by the same
-        forgiving match as take/examine. Returns the reply string.
-        """
-        # Split "put <item> in <container>" on the delimiter, not on the
-        # substring: `partition("in")` splits inside item names like "coin"
-        # and "lantern". The last " in " is the one that separates the two.
-        # "into" is accepted as the same delimiter.
-        normalized = arg.replace(" into ", " in ")
-        if " in " not in normalized:
-            return "Put what where? Try `put <item> in <container>`."
-        item_arg, _, container_arg = normalized.rpartition(" in ")
-        item_arg = item_arg.strip()
-        container_arg = container_arg.strip()
-        if not item_arg or not container_arg:
-            return "Put what where? Try `put <item> in <container>`."
-
-        target_player = self._resolve_player(player_name)
-        if target_player is not None:
-            room = target_player.location
-            if room is None:
-                return "There is nowhere here to put anything."
-            held, item_disambig = self._disambiguate(target_player.contents, item_arg)
-            if item_disambig:
-                return item_disambig
-            container, cont_disambig = self._disambiguate(room.contents, container_arg)
-            if cont_disambig:
-                return cont_disambig
-        else:
-            if not self.player or not self._player_location:
-                return "You do not exist!"
-            target_player = self.player
-            room = self._player_location
-            held, item_disambig = self._disambiguate(self.player.contents, item_arg)
-            if item_disambig:
-                return item_disambig
-            container, cont_disambig = self._disambiguate(room.contents, container_arg)
-            if cont_disambig:
-                return cont_disambig
-
-        if held is None:
-            return f"You aren't carrying any {item_arg}."
-        if container is None:
-            return f"There is no {container_arg} here to put it in."
-        if getattr(container, "locked", False):
-            return f"The {container.name} is locked. Find a key and `use <key> on {container.name.lower()}`."
-        if self._containment_cycle(container, held):
-            # Refuse before either collection changes: the item stays in the
-            # pack and the container's contents are untouched (#79).
-            return (
-                f"You cannot put the {held.name} in the {container.name}; "
-                "a container cannot contain itself, directly or transitively."
-            )
-
-        target_player.remove_content(held)
-        container.add_content(held)
-        await self.emit("item_put", {"item_name": held.name.lower(), "container": container.name.lower(), "location": room.name})
-        return f"You put the {held.name} in the {container.name}."
 
     @staticmethod
     def _find_exit(room, arg: str):
@@ -906,354 +677,6 @@ class Engine:
                 return direction, target, lock
         return None
 
-    async def _handle_use(self, arg: str, player_name: str | None) -> str:
-        """Open a lock with a key: `use <key> on <lock|exit>`.
-
-        Names locate the objects by the same forgiving match as take/examine,
-        but whether the lock opens is decided by identity, not name. The key is
-        resolved from the player's inventory; the target is a room object or a
-        room exit. A container's `required_key` and an exit's `ExitLock.key`
-        name the key object's `item_id`, so a copy with the same name still
-        does not fit. Returns the reply string.
-        """
-        if " on " not in arg:
-            return "Use a key on something: `use <key> on <lock|exit>`."
-
-        key_name, lock_name = arg.split(" on ", 1)
-
-        target_player = self._resolve_player(player_name)
-        if target_player is not None:
-            room = target_player.location
-            if room is None:
-                return "There is nowhere here to use a key."
-            key_item, key_disambig = self._disambiguate(target_player.contents, key_name)
-            if key_disambig:
-                return key_disambig
-            lock_item, lock_disambig = self._disambiguate(room.contents, lock_name)
-            if lock_disambig:
-                return lock_disambig
-        else:
-            if not self.player or not self._player_location:
-                return "You do not exist!"
-            room = self._player_location
-            key_item, key_disambig = self._disambiguate(self.player.contents, key_name)
-            if key_disambig:
-                return key_disambig
-            lock_item, lock_disambig = self._disambiguate(room.contents, lock_name)
-            if lock_disambig:
-                return lock_disambig
-
-        if key_item is None:
-            return f"You don't have a {key_name.strip()} to use."
-        if lock_item is None:
-            # No room object matched; the target may be a locked exit (#77).
-            found = self._find_exit(room, lock_name)
-            if found is None:
-                return (
-                    f"There is no {lock_name.strip()} here to use a "
-                    f"{key_name.strip()} on."
-                )
-            direction, target, lock = found
-            if lock is None or not lock.locked:
-                return f"The way {direction} is already open."
-            # Identity, not name: the door checks for its specific key.
-            if not lock.key or getattr(key_item, "item_id", None) != lock.key:
-                return (
-                    f"The {key_item.name} does not fit the lock on the way "
-                    f"{direction}."
-                )
-            lock.locked = False
-            await self.emit("exit_unlocked", {
-                "direction": direction,
-                "from": room.name,
-                "to": target.name,
-                "key": key_item.name.lower(),
-            })
-            door = lock.label or f"way {direction}"
-            return f"You turn the {key_item.name}; the {door} unlocks."
-
-        if not getattr(lock_item, "locked", False):
-            return f"The {lock_item.name} is already open."
-
-        # Identity, not name: the lock checks for its specific key.
-        if getattr(lock_item, "required_key", None) and getattr(key_item, "item_id", None) == lock_item.required_key:
-            lock_item.locked = False
-            await self.emit("item_unlocked", {"item_name": lock_item.name.lower(), "location": room.name})
-            return f"You turn the {key_item.name} and the {lock_item.name} clicks open."
-
-        return f"The {key_item.name} does not fit the {lock_item.name}."
-
-    async def _handle_open(self, arg: str, player_name: str | None) -> str:
-        """Open a container: `open <chest>`.
-
-        A locked container refuses. An already-open one refuses with
-        `already_open`. Opening sets the explicit `open` flag (#76) and
-        reports what is inside; it does not move anything. `get <item> from
-        <container>` pulls one item out, and `close` puts the lid back down.
-        An empty container reports empty. Names are resolved by the same
-        forgiving match as take/examine. Returns the reply string.
-        """
-        target_player = self._resolve_player(player_name)
-        if target_player is not None:
-            room = target_player.location
-            if room is None:
-                return "There is nowhere here to open anything."
-            container, disambig = self._disambiguate(room.contents, arg)
-            if disambig:
-                return disambig
-        else:
-            if not self.player or not self._player_location:
-                return "You do not exist!"
-            room = self._player_location
-            container, disambig = self._disambiguate(room.contents, arg)
-            if disambig:
-                return disambig
-
-        if container is None:
-            return f"There is no {arg} here to open."
-        if getattr(container, "locked", False):
-            return f"The {container.name} is locked. Find a key and `use <key> on {container.name.lower()}`."
-
-        # A plain item has no lid. It keeps the v2.0 empty-container reply and
-        # does not acquire an open state it can never close.
-        if container.is_container:
-            if container.open:
-                return f"The {container.name} is already open."
-            container.open = True
-            await self.fire_effects(
-                container, "on_open",
-                actor=getattr(target_player, "name", None),
-                room=room,
-            )
-
-        loot = list(container.contents)
-        if not loot:
-            return f"The {container.name} is empty."
-
-        await self.emit("chest_opened", {"item_name": container.name.lower(), "location": room.name})
-
-        listed = ", ".join(sorted(c.name for c in loot))
-        return f"You open the {container.name}. Inside you see: {listed}."
-
-    async def _handle_close(self, arg: str, player_name: str | None) -> str:
-        """Close an open container: `close <chest>`.
-
-        The lid state is explicit (`Entity.open`, #76). A container that is
-        already closed refuses with `already_closed`; a plain item is not
-        something to close. Contents stay inside: closing changes only the
-        lid, never what the container holds. Returns the reply string.
-        """
-        target_player = self._resolve_player(player_name)
-        if target_player is not None:
-            room = target_player.location
-            if room is None:
-                return "There is nowhere here to close anything."
-            container, disambig = self._disambiguate(room.contents, arg)
-            if disambig:
-                return disambig
-        else:
-            if not self.player or not self._player_location:
-                return "You do not exist!"
-            room = self._player_location
-            container, disambig = self._disambiguate(room.contents, arg)
-            if disambig:
-                return disambig
-
-        if container is None:
-            return f"There is no {arg} here to close."
-        if not container.is_container:
-            return f"The {container.name} is not something you can close."
-        if not container.open:
-            return f"The {container.name} is already closed."
-
-        container.open = False
-        await self.emit("container_closed", {
-            "item_name": container.name.lower(), "location": room.name,
-        })
-        return f"You close the {container.name}."
-
-    async def _handle_get_from(self, arg: str, player_name: str | None) -> str:
-        """Take one item out of an open container: `get <item> from <chest>`.
-
-        The container is resolved from the player's room, the item from the
-        container's contents. A closed container refuses with `container_closed`
-        before the item is resolved; an item that is not inside is
-        `not_here`; a fixed (`portable: false`) object cannot be lifted. The
-        move is in memory only: the write-through boundary for containers is
-        #63/#71, so this verb does not invent a second persistence rule.
-        Returns the reply string.
-        """
-        # `partition("from")` would split names like "brass"; the last " from "
-        # separates the two arguments, mirroring `put ... in ...`.
-        if " from " not in arg:
-            return "Get what from what? Try `get <item> from <container>`."
-        item_arg, _, container_arg = arg.rpartition(" from ")
-        item_arg = item_arg.strip()
-        container_arg = container_arg.strip()
-        if not item_arg or not container_arg:
-            return "Get what from what? Try `get <item> from <container>`."
-
-        target_player = self._resolve_player(player_name)
-        if target_player is not None:
-            room = target_player.location
-            if room is None:
-                return "There is nowhere here to get anything from."
-            container, cont_disambig = self._disambiguate(
-                room.contents, container_arg)
-            if cont_disambig:
-                return cont_disambig
-        else:
-            if not self.player or not self._player_location:
-                return "You do not exist!"
-            target_player = self.player
-            room = self._player_location
-            container, cont_disambig = self._disambiguate(
-                room.contents, container_arg)
-            if cont_disambig:
-                return cont_disambig
-
-        if container is None:
-            return f"There is no {container_arg} here."
-        if not container.is_container:
-            return f"The {container.name} is not a container."
-        if not container.open:
-            return f"The {container.name} is closed. Open it first."
-
-        item, item_disambig = self._disambiguate(container.contents, item_arg)
-        if item_disambig:
-            return item_disambig
-        if item is None:
-            return f"The {item_arg} is not in the {container.name}."
-        if not getattr(item, "portable", True):
-            return f"The {item.name} is fixed in place and cannot be put in your pack."
-        if not self.can_carry(target_player, item):
-            return f"You cannot carry the {item.name}; it is too heavy."
-
-        container.remove_content(item)
-        target_player.add_content(item)
-        await self.emit("item_got", {
-            "item_name": item.name.lower(),
-            "container": container.name.lower(),
-            "location": room.name,
-        })
-        return f"You get the {item.name} from the {container.name}."
-
-    async def _handle_look_in(self, arg: str, player_name: str | None) -> str:
-        """Look inside a container: `look in <chest>` / `look inside <chest>`.
-
-        A locked container refuses. An open container with nothing inside
-        reports empty. Otherwise every item it holds is listed. Names are
-        resolved by the same forgiving match as take/examine. Returns the
-        reply string.
-        """
-        target_player = self._resolve_player(player_name)
-        if target_player is not None:
-            room = target_player.location
-            if room is None:
-                return "There is nowhere here to look inside."
-            container, disambig = self._disambiguate(room.contents, arg)
-            if disambig:
-                return disambig
-        else:
-            if not self.player or not self._player_location:
-                return "You do not exist!"
-            room = self._player_location
-            container, disambig = self._disambiguate(room.contents, arg)
-            if disambig:
-                return disambig
-
-        if container is None:
-            return f"There is no {arg} here to look inside."
-        if getattr(container, "locked", False):
-            return f"The {container.name} is locked. Find a key and `use <key> on {container.name.lower()}`."
-
-        loot = list(container.contents)
-        if not loot:
-            return f"The {container.name} is empty."
-
-        listed = ", ".join(sorted(c.name for c in loot))
-        return f"You see inside the {container.name}: {listed}."
-
-    async def _handle_light(self, arg: str, player_name: str | None) -> str:
-        """Ignite a carried light source: `light <torch/lantern>`.
-
-        The item is resolved from the player's inventory by the same forgiving
-        match as take/examine and must be a `light_source`. Lighting it sets its
-        `lit` state so it sheds light wherever the player stands; an already-lit
-        one is reported rather than re-struck. Returns the reply string.
-        """
-        target_player = self._resolve_player(player_name)
-        if target_player is not None:
-            held_item, disambig = self._disambiguate(
-                target_player.contents, arg)
-            if disambig:
-                return disambig
-        else:
-            if not self.player:
-                return "You do not exist!"
-            held_item, disambig = self._disambiguate(
-                self.player.contents, arg)
-            if disambig:
-                return disambig
-
-        if held_item is None:
-            return f"You don't have a {arg.strip()} to light."
-        if not getattr(held_item, "light_source", False):
-            return f"You can't light the {held_item.name}."
-        if getattr(held_item, "lit", False):
-            return f"The {held_item.name} is already lit."
-
-        held_item.lit = True
-        await self.emit("light_ignited", {"item_name": held_item.name.lower()})
-        return f"You light the {held_item.name}. Its flame casts a warm glow."
-
-    async def _handle_tell(
-        self, raw_text: str, player_name: str | None = None,
-    ) -> str:
-        """One private line to an awake character anywhere in the world.
-
-        `tell <player> <text>` resolves the target server-wide, by display
-        name and ignoring case. A live target must be awake; a durable roster
-        row with no live session is asleep/stone by definition (#72). Both
-        failures are typed by the adapter (`not_awake` and `not_found`), and
-        nothing is stored: this is not offline mail, so a tell to a sleeping
-        character is refused rather than replayed on wake.
-        """
-        pieces = raw_text.split(maxsplit=2)
-        if len(pieces) < 3 or not pieces[2].strip():
-            return "Tell whom what? Try `tell <player> <text>`."
-        target_arg = pieces[1]
-        message = pieces[2].strip()
-
-        target = self.find_character(target_arg)
-        if target is not None:
-            if target.asleep:
-                return (
-                    f"{target.name} is asleep, turned to stone; a tell cannot "
-                    "reach them."
-                )
-            sender = player_name or (
-                self.player.name if self.player is not None else "someone")
-            await self.emit("player_told", {
-                "from": sender, "to": target.name, "text": message,
-            })
-            return f'You tell {target.name}, "{message}".'
-
-        entry = self.character_entry(target_arg)
-        if entry is not None:
-            return (
-                f"{entry['name']} is asleep, turned to stone; a tell cannot "
-                "reach them."
-            )
-        return f"There is no one named {target_arg} in the world."
-
-    def _resolve_player(self, player_name):
-        """Return the registered player to act as, falling back to the legacy slot."""
-        if player_name:
-            return self.get_player(player_name)
-        return None
-
-    # --- Effects (#84) -------------------------------------------------------
 
     @staticmethod
     def _effect_source(owner: Any) -> dict[str, str]:
@@ -1360,8 +783,8 @@ class Engine:
 
     # --- Typed command outcomes (#130) ---------------------------------------
 
-    # The one alias table. `process_command` keeps its own copy until the
-    # adapter reshape folds that path in; both must stay identical.
+    # The one alias table (#133). `parse_command` uses it; `process_command`
+    # delegates to `execute`, so there is no second copy to keep in sync.
     _ALIASES: ClassVar[dict[str, str]] = {
         "get": "take", "pick": "take", "grab": "take",
         "l": "look",
@@ -1382,9 +805,9 @@ class Engine:
     def parse_command(text: str) -> tuple[str, str | None, str]:
         """Resolve one input line to `(verb, arg, raw)`, applying the aliases.
 
-        The single grammar owner (#130): the engine parses the command, and the
-        v2 adapter will stop parsing. A blank line is ``"empty"``; the
-        ``look at`` / ``look in`` rewrites match `process_command`.
+        The single grammar owner (#130): the engine parses the command. A
+        blank line is ``"empty"``; ``look at`` / ``look in`` are rewritten
+        here, once.
         """
         raw = text.strip()
         lowered = raw.lower()
@@ -1414,8 +837,10 @@ class Engine:
             resolved, _, resolved_arg = Engine._ALIASES[input_str].partition(" ")
             return resolved, resolved_arg or None, raw
         if verb in Engine._ALIASES:
+            # A single-word alias rewrites only the verb; the argument stays
+            # (`exam gold coin` -> examine / "gold coin").
             resolved, _, resolved_arg = Engine._ALIASES[verb].partition(" ")
-            return resolved, resolved_arg or None, raw
+            return resolved, resolved_arg or arg, raw
         return verb, arg, raw
 
     @staticmethod
@@ -1451,8 +876,8 @@ class Engine:
 
         The single command path: it parses once, dispatches to the verb
         handler, and the handler records the reply, typed status, and semantic
-        events. The v2 adapter shapes that outcome; `process_command` remains
-        for the legacy single-player caller.
+        events. The v2 adapter shapes that outcome; `process_command` is a
+        string shim over it for the v1 server and the unit tests.
         """
         verb, arg, _raw = self.parse_command(text)
         outcome = CommandOutcome()
@@ -1739,7 +1164,7 @@ class Engine:
             return
 
         old_room = room
-        moved, result = await self.move_player(actor.name, direction)
+        moved, result = await self._move_actor(actor, direction)
         if not moved:
             self._fail(outcome, "no_exit", result)
             return
@@ -2597,462 +2022,32 @@ class Engine:
             scope="room",
         ))
 
-    async def process_command(self, command_text: str, player_name: Optional[str] = None) -> str:
-        """Translates player input into state mutation or narrative.
+    def _require_actor(self, actor: Player | str) -> Player:
+        """Resolve an actor reference to a registered `Player`.
 
-        `player_name` is the registered name whose perspective to render from.
-        It is optional so existing single-player callers keep working unchanged;
-        only the multiplayer path (which knows each socket's registered name)
-        passes one. When given, room descriptions also list other occupants.
+        The engine has one command path and requires an actor: a `Player` or a
+        registered character name. There is no single-player fallback (#133).
         """
-        raw_text = command_text.strip()
-        text = raw_text.lower()
-        if not text:
-            return "Silence falls over you."
+        if isinstance(actor, Player):
+            return actor
+        player = self.get_player(actor)
+        if player is None:
+            raise KeyError(f"no registered player named {actor!r}")
+        return player
 
-        parts = text.split(maxsplit=1)
-        verb = parts[0]
-        arg = parts[1] if len(parts) > 1 else None
-        
-        # --- 1. SYSTEM COMMANDS (Highest Priority) ---
-        if verb == "exit":
-            response = "Goodbye!"
-            matched = True
-            await self.emit("player_quit", {"reason": "user_requested"})
-            return response
+    async def process_command(self, command_text: str, actor: Player | str) -> str:
+        """Return the reply string for one command from `actor`.
 
-        # --- 2. ALIAS RESOLUTION & NORMALIZATION ---
-        aliases = {
-            "get": "take", "pick": "take", "grab": "take",
-            "l": "look", 
-            "n": "go north", "north": "go north",
-            "s": "go south", "south": "go south", 
-            "e": "go east",  "east": "go east",
-            "w": "go west",  "west": "go west", 
-            "u": "go up",    "up": "go up", 
-            "d": "go down",  "down": "go down",
-            "exits": "show_exits",
-            # Short forms for the everyday commands. Kept single-word so they map
-            # straight to a verb below (`i` -> `inventory`, not a direction).
-            "i": "inventory", "inv": "inventory",
-            "h": "help",
-            "exam": "examine",
-            # `me` is the design-doc alias for a room-local action (#75).
-            "me": "emote",
-        }
-        
-        # `look at X` focuses on something; treat it as `examine X`.
-        # `look in X` / `look inside X` peer into a container.
-        if verb.lower() == "look" and arg is not None:
-            first = arg.split(maxsplit=1)[0]
-            if first == "at":
-                parts = arg.split(maxsplit=1)
-                resolved_verb = "examine"
-                resolved_arg = parts[1].strip() if len(parts) > 1 else None
-            elif first in ("in", "inside"):
-                resolved_verb = "look_in"
-                resolved_arg = arg.split(maxsplit=1)[1].strip() if len(arg.split(maxsplit=1)) > 1 else ""
-            else:
-                resolved_verb = verb
-                resolved_arg = arg
-        else:
-            resolved_verb = verb
-            resolved_arg = arg
-
-        input_str = f"{verb} {arg}".strip().lower() if arg else verb.lower()
-        if verb == "get" and arg and " from " in arg:
-            # `get <item> from <container>` is the v2.1 container verb (#76).
-            # A bare `get <item>` stays the v2.0 alias for `take` below.
-            resolved_verb = "get"
-            resolved_arg = arg
-        elif input_str in aliases:
-            alias_target = aliases[input_str]
-            if " " in alias_target:
-                v_part, a_part = alias_target.split(" ", 1)
-                resolved_verb = v_part
-                resolved_arg = a_part
-            else:
-                resolved_verb = alias_target
-        elif verb.lower() in aliases:
-            resolved_verb = aliases[verb.lower()]
-
-        response = ""
-        matched = False
-
-        # --- 3. GAMEPLAY COMMAND LOGIC ---
-        
-        # VIEWING THE WORLD
-        if resolved_verb == "look":
-            target_player = self.get_player(player_name) if player_name else None
-            room = target_player.location if target_player is not None else self._player_location
-            if room:
-                if not self._room_is_lit(target_player, room):
-                    response = "It is too dark to see anything."
-                    matched = True
-                else:
-                    response = room.description
-                    # Items are everything in the room that is not a player; players
-                    # get their own line below. This makes items visible without
-                    # guessing the exact take/drop command.
-                    items = [c for c in room.contents if not isinstance(c, Player)]
-                    if items:
-                        listed = ", ".join(sorted(c.name for c in items))
-                        response += f"\n\nHere you see: {listed}."
-                    occupants = [p for p in self._players.values()
-                                 if p.location is room and p.name != player_name]
-                    if room.npcs:
-                        listed = ", ".join(
-                            npc.name for npc in sorted(
-                                room.npcs, key=lambda npc: npc.name.lower()))
-                        response += f"\n\nAlso here: {listed}."
-                    if occupants:
-                        listed = ", ".join(
-                            p.name for p in sorted(occupants,
-                                                   key=lambda p: p.name.lower()))
-                        response += f"\n\nOthers in the room: {listed}."
-                    matched = True
-            else:
-                response = "You feel lost in a void."
-                matched = True
-
-        elif resolved_verb == "look_in" and resolved_arg:
-            response = await self._handle_look_in(resolved_arg, player_name)
-            matched = True
-
-        elif resolved_verb == "show_exits":
-            acting_player = self.get_player(player_name) if player_name else None
-            room = (acting_player.location if acting_player is not None
-                    else self._player_location)
-            if not room:
-                response = "You have no context for exits here."
-                matched = True
-            else:
-                exits_dict = room.exits
-                if not exits_dict:
-                    response = "There are no exits here."
-                else:
-                    names = self._exit_labels(room)
-                    response = f"Available exits: {', '.join(names)}."
-                matched = True
-
-        # MOVEMENT
-        elif resolved_verb == "go" and resolved_arg:
-            direction = resolved_arg.strip()
-            registered_player = self.get_player(player_name) if player_name else None
-
-            # Multiplayer path: move the registered, named player. This is what a
-            # socket-bound client drives; it keeps that player's location in sync
-            # with the world so `look` and broadcasts reflect real movement.
-            if registered_player is not None:
-                old_location = registered_player.location
-                moved, result = await self.move_player(player_name, direction)
-                if moved:
-                    response = self._describe_movement(
-                        registered_player.location, direction, old_location=old_location,
-                    )
-                    matched = True
-                else:
-                    response = result  # refusal string, e.g. "You cannot go south."
-                    matched = True
-
-            # Legacy single-player path (no player_name): unchanged behavior.
-            elif not self._player_location:
-                response = "You have no presence here to move."
-                matched = True
-            elif self._player_location.exit_is_locked(direction):
-                response = self._locked_exit_reply(direction)
-                matched = True
-                await self.emit("exit_locked", {
-                    "direction": direction,
-                    "location": self._player_location.name,
-                })
-            else:
-                destination = self._player_location.exits.get(direction)
-                if isinstance(destination, Room):
-                    prev_location = self._player_location
-                    self._player_location = destination
-
-                    response = self._describe_movement(
-                        destination, direction, old_location=prev_location,
-                    )
-                    matched = True
-                    # Signal World Change
-                    await self.emit("room_change", {"from": prev_location.name, "to": destination.name, "desc": destination.description})
-                    await self.fire_effects(
-                        destination, "on_enter",
-                        actor=(
-                            self.player.name
-                            if self.player is not None else None
-                        ),
-                        room=destination,
-                    )
-                else:
-                    response = f"You cannot go {direction}."
-                    matched = True
-
-        # INTERACTION (Items)
-        elif resolved_verb == "take":
-            if not resolved_arg:
-                response = "Take what? Try `take <item>`."
-                matched = True
-            else:
-                response = await self._handle_take(resolved_arg, player_name)
-                matched = True
-
-        elif resolved_verb == "drop":
-            if not resolved_arg:
-                response = "Drop what? Try `drop <item>`."
-                matched = True
-            else:
-                response = await self._handle_drop(resolved_arg, player_name)
-                matched = True
-
-        elif resolved_verb == "put":
-            if not resolved_arg:
-                response = "Put what where? Try `put <item> in <container>`."
-            else:
-                response = await self._handle_put(resolved_arg, player_name)
-            matched = True
-
-        # USE — open a lock with a key: `use <key> on <lock>`. Names locate the
-        # objects; identity decides whether the lock opens.
-        elif resolved_verb == "use":
-            if not resolved_arg:
-                response = "Use what on what? Try `use <key> on <lock>`."
-                matched = True
-            else:
-                response = await self._handle_use(resolved_arg, player_name)
-                matched = True
-
-        # OPEN — open a container: `open <chest>`. A locked one refuses; an
-        # open, empty one reports empty; otherwise it lists the contents and
-        # keeps them inside so `get <item> from <chest>` can pull one out.
-        elif resolved_verb == "open":
-            if not resolved_arg:
-                response = "Open what? Try `open <chest>`."
-                matched = True
-            else:
-                response = await self._handle_open(resolved_arg, player_name)
-                matched = True
-
-        # CLOSE — put the lid back: `close <chest>`. Only an open container
-        # closes; its contents stay inside.
-        elif resolved_verb == "close":
-            if not resolved_arg:
-                response = "Close what? Try `close <chest>`."
-                matched = True
-            else:
-                response = await self._handle_close(resolved_arg, player_name)
-                matched = True
-
-        # GET FROM — take one item out of an open container:
-        # `get <item> from <chest>`. The item moves into the actor's inventory.
-        elif resolved_verb == "get":
-            if not resolved_arg:
-                response = "Get what from what? Try `get <item> from <container>`."
-                matched = True
-            else:
-                response = await self._handle_get_from(resolved_arg, player_name)
-                matched = True
-
-        # EXAMINE / LOOK AT — hold first, then room contents (not just players).
-        elif resolved_verb == "examine" and resolved_arg:
-            # Focus on a specific entity the player can hold or see. `examine X`
-            # and `look at X` both arrive here with verb "examine". Prefer an item
-            # the examiner holds; otherwise describe a physical item on the floor,
-            # then a named player in the room (whose presence does not depend on
-            # the examiner being registered).
-            player = self._resolve_player(player_name)
-            room = player.location if player is not None else self._player_location
-            held, held_disambig = (
-                self._disambiguate(player.contents, resolved_arg)
-                if player is not None else (None, None)
-            )
-            if not self._room_is_lit(player, room):
-                response = "It is too dark to see anything."
-                matched = True
-            elif held_disambig:
-                response = held_disambig
-                matched = True
-            elif held is not None:
-                response = f"It is {held.description}."
-                matched = True
-            else:
-                room_items = [c for c in (room.contents if room is not None else [])
-                              if not isinstance(c, Player)]
-                disambig_item, disambig = self._disambiguate(room_items, resolved_arg)
-                if disambig:
-                    response = disambig
-                elif disambig_item is not None:
-                    response = f"It is {disambig_item.description}."
-                else:
-                    target_player = next((p for p in self._players.values()
-                                          if (room is None or p.location is room)
-                                          and p.name.lower() == resolved_arg), None)
-                    if target_player is not None:
-                        response = f"{target_player.name} is here, exploring the world."
-                    else:
-                        response = f"You see no {resolved_arg} here."
-                matched = True
-
-        # READ — like examine, but only readable objects (signs, books). Plain
-        # items are not something to read, so `read <item>` is refused rather
-        # than describing it. Shares the hold/floor/player resolution above.
-        elif resolved_verb == "read" and resolved_arg:
-            player = self._resolve_player(player_name)
-            room = player.location if player is not None else self._player_location
-            held, held_disambig = (
-                self._disambiguate(player.contents, resolved_arg)
-                if player is not None else (None, None)
-            )
-            if not self._room_is_lit(player, room):
-                response = "It is too dark to see anything."
-                matched = True
-            elif held_disambig:
-                response = held_disambig
-                matched = True
-            elif held is not None and held.readable:
-                response = f"It is {held.description}."
-                matched = True
-            else:
-                room_items = [c for c in (room.contents if room is not None else [])
-                              if not isinstance(c, Player)]
-                disambig_item, disambig = self._disambiguate(room_items, resolved_arg)
-                if disambig:
-                    response = disambig
-                elif disambig_item is not None and disambig_item.readable:
-                    response = f"It is {disambig_item.description}."
-                else:
-                    target_player = next((p for p in self._players.values()
-                                          if (room is None or p.location is room)
-                                          and p.name.lower() == resolved_arg), None)
-                    if target_player is not None:
-                        response = f"You can't read {target_player.name}."
-                    else:
-                        response = "There is nothing readable here."
-                matched = True
-
-        # NPC DIALOGUE — scripted replies authored in the world YAML (#81).
-        # No LLM or generated text is involved.
-        elif resolved_verb == "talk":
-            if not resolved_arg:
-                response = "Talk to whom? Try `talk <npc>`."
-            else:
-                response = await self._handle_talk(resolved_arg, player_name)
-            matched = True
-
-        elif resolved_verb == "ask":
-            if not resolved_arg:
-                response = "Ask whom about what? Try `ask <npc> about <topic>`."
-            else:
-                response = await self._handle_ask(resolved_arg, player_name)
-            matched = True
-
-        # LIGHT — ignite a carried light source: `light <torch/lantern>`.
-        elif resolved_verb == "light" and resolved_arg:
-            response = await self._handle_light(resolved_arg, player_name)
-            matched = True
-
-        # INVENTORY / HELP (UTILITY)
-        elif resolved_verb == "inventory":
-            held = self._held_items(self._resolve_player(player_name))
-            if held:
-                response = f"You are carrying: {', '.join(held)}."
-            else:
-                response = "You are not carrying anything."
-            matched = True
-
-        # WHO — the server-wide roster, including characters asleep in stone
-        # (#72). This is the minimal v2.1.1 shape; #75 owns the final social
-        # verbs and may refine the presentation.
-        elif resolved_verb == "who":
-            roster = self.who_entries()
-            if not roster:
-                response = "There is no one in the world."
-            else:
-                listed = []
-                for entry in roster:
-                    state = (
-                        "asleep, turned to stone"
-                        if entry["asleep"] else "awake"
-                    )
-                    where = entry["room_id"] or "nowhere"
-                    listed.append(f"{entry['name']} ({where}, {state})")
-                response = "Characters in the world: " + "; ".join(listed) + "."
-            matched = True
-
-        elif resolved_verb == "help":
-            response = (
-                "Commands: look (l), go <direction>, exits, take <item>, get <item> from <container>, drop <item>, put <item> in <container>, "
-                "open <container>, close <container>, use <key> on <container|exit>, "
-                "examine <thing> (exam), read <thing> (signs, books), look in <chest>, light <torch/lantern>, inventory (i), who, "
-                "say <text>, emote <action> (me), tell <player> <text>, "
-                "talk <npc>, ask <npc> about <topic>, hello. Try `look` first."
-            )
-            matched = True
-
-        # SOCIAL / UTILITY
-        elif resolved_verb == "say" and resolved_arg:
-            # Echo the player's own words with their original casing, then emit a
-            # `player_said` event so the server can broadcast the message to
-            # everyone else standing in the room (multiplayer chat).
-            spoken = raw_text.split(maxsplit=1)[1]
-            response = f'You say, "{spoken}".'
-            acting_player = self.get_player(player_name) if player_name else None
-            location = (acting_player.location if acting_player is not None
-                        else self._player_location)
-            await self.emit("player_said", {
-                "name": player_name,
-                "text": spoken,
-                "location": location.name if location else None,
-            })
-            matched = True
-        elif resolved_verb == "emote":
-            # A room-local third-person action (#75). The actor and everyone in
-            # the room see the same rendered line; `self` on the wire says who
-            # did it, so the text does not need a second-person rewrite. The
-            # adapter routes it to the room only, exactly like `say`.
-            if not resolved_arg:
-                response = "Emote what? Try `emote <action>`."
-                matched = True
-            else:
-                action = raw_text.split(maxsplit=1)[1].strip()
-                acting_player = self.get_player(player_name) if player_name else None
-                speaker = (
-                    acting_player.name if acting_player is not None
-                    else self.player.name if self.player is not None
-                    else "You"
-                )
-                line = f"{speaker} {action}"
-                if not line.endswith((".", "!", "?")):
-                    line += "."
-                response = line
-                location = (acting_player.location if acting_player is not None
-                            else self._player_location)
-                await self.emit("player_emoted", {
-                    "name": player_name,
-                    "text": action,
-                    "location": location.name if location else None,
-                })
-                matched = True
-        elif resolved_verb == "tell":
-            # Private, server-wide, awake target only (#75). The reply carries
-            # the sender's presentation; the adapter adds the target's copy.
-            response = await self._handle_tell(raw_text, player_name)
-            matched = True
-        elif resolved_verb == "hello":
-            response = "The world listens..."
-            matched = True
-
-        # --- 4. FALLBACK PATH ---
-        if not matched:
-            response = "Hmm, I don't understand that. Type `help` for a list of commands."
-
-        await self.emit("command_processed", {"raw": command_text, "clean": text, "reply": response})
-        return response
+        A thin string seam over `execute` for the v1 server and the unit
+        tests; the actor is required. The v2 adapter consumes `execute`
+        directly and shapes its `CommandOutcome`.
+        """
+        player = self._require_actor(actor)
+        return (await self.execute(player, command_text)).reply
 
     async def run(self) -> None:
         pass
+
 
 if __name__ == "__main__":
     # Simple bootstrap for inspection
@@ -3060,6 +2055,7 @@ if __name__ == "__main__":
     r1 = Room("Start", "A beginning.")
     r2 = Room("End", "The end.")
     r1.exits["next"] = r2
-    eng._player_location = r1
-    print(asyncio.run(eng.process_command("go next")))
-    print(asyncio.run(eng.process_command("look")))
+    eng.start_room = r1
+    hero = eng.register_player("Hero")
+    print(asyncio.run(eng.process_command("go next", hero)))
+    print(asyncio.run(eng.process_command("look", hero)))

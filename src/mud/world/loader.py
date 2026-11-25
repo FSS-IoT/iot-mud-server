@@ -152,17 +152,13 @@ async def _load_yaml_world(engine: Engine, data_path: Path) -> None:
     # 6. Finalize engine state.
     for room in room_map.values():
         engine._rooms[room.name] = room
-    engine._player_location = room_map[compiled.start_room]
+    engine.start_room = room_map[compiled.start_room]
 
     # 7. Deterministic world motion (#82). The seed is authored content, not a
     # clock: a reload replays the same NPC paths. The wanderer is built after
     # every room and NPC exists, and moves only `Room.npcs` from here on.
     engine.rng_seed = compiled.rng_seed
     engine.wanderer = NpcWanderer(engine.rooms, compiled.rng_seed)
-
-    # Keep the legacy single-player placeholder for backward compatibility;
-    # it is not a real item and must not be added to a room's contents.
-    engine.player = Entity("Adventurer", "A traveler passing through.")
 
 
 async def _load_json_world(engine: Engine, data_path: Path) -> None:
@@ -283,13 +279,7 @@ async def _load_json_world(engine: Engine, data_path: Path) -> None:
 
     start_room_id = data.get("start_location")
     if start_room_id in room_map:
-        engine._player_location = room_map[start_room_id]
-
-    # Spawn legacy single-player placeholder. It is kept on the engine for
-    # backward compatibility but must NOT be added to a room's contents: it is
-    # not a real item, and showing up as one would make `look` report "Here you
-    # see: Adventurer" — confusing phantom clutter in an otherwise empty start room.
-    engine.player = Entity("Adventurer", "A traveler passing through.")
+        engine.start_room = room_map[start_room_id]
 
 
 async def load_demo_village(engine: Engine) -> None:

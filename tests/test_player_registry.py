@@ -1,8 +1,7 @@
 """Contract tests for the engine player registry (issue #22).
 
-The engine currently tracks a single player (`self.player`, `self._player_location`).
-Multiplayer needs a registry of named players, each with its own location, plus
-join and leave. These tests encode that behavior; they fail until the registry
+The engine tracks named players in a registry, each with its own location,
+plus join and leave (`start_room` is only the spawn room a new player enters). These tests encode that behavior; they fail until the registry
 exists, which is the RED phase for #22.
 
 Scope note: this ticket is registry + join/leave only. Movement-driven presence

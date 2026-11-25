@@ -331,7 +331,7 @@ def test_sleep_player_drops_only_flagged_items_and_keeps_the_rest(tmp_path):
         hall.add_content(coin)
         hall.add_content(lantern)
         engine._rooms[hall.name] = hall
-        engine._player_location = hall
+        engine.start_room = hall
 
         ada = engine.register_player("Ada")
         for item in (key, coin, lantern):
@@ -398,7 +398,7 @@ def test_sleep_drop_commits_before_memory_moves(tmp_path):
         key.instance_id = "key"
         hall.add_content(key)
         engine._rooms[hall.name] = hall
-        engine._player_location = hall
+        engine.start_room = hall
         ada = engine.register_player("Ada")
         store.player("Ada").take(key, room=hall)
         hall.remove_content(key)

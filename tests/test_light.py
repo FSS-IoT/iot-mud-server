@@ -16,7 +16,7 @@ deterministic.
 
 import pytest
 
-from src.mud.content import Entity, Player, Room
+from src.mud.content import Entity, Room
 from src.mud.engine.core import Engine
 
 
@@ -25,10 +25,8 @@ def _dark_room():
     engine = Engine()
     room = Room("Cave", "A pitch-black cavern.", dark=True)
     engine._rooms["Cave"] = room
-    engine._player_location = room
-    player = Player("Ada")
-    player.location = room
-    engine.player = player  # legacy single-player slot holds the player
+    engine.start_room = room
+    player = engine.register_player("Ada")
     return engine, room, player
 
 
@@ -58,7 +56,7 @@ async def test_light_torch_ignites_and_lights_dark_room():
     assert torch.lit is True
     assert "dark" not in response.lower()
     # The room is now lit, so a bare look reveals what was previously unseen.
-    view = engine.visible_room_state(engine.player)
+    view = engine.visible_room_state(player)
     assert view["dark"] is False
 
 

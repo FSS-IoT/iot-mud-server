@@ -347,7 +347,7 @@ async def test_room_without_geometry_omits_the_field():
     room = Room("Bare Room", "Nothing here.")
     room.item_id = "bare"
     engine._rooms[room.name] = room
-    engine._player_location = room
+    engine.start_room = room
     player = engine.register_player("Ada")
 
     state = build_room_state(engine, player)

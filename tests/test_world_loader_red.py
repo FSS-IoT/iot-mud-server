@@ -23,10 +23,8 @@ async def test_demo_village_populates_world_green():
     assert "Old Tavern" in room_names
     assert "Mysterious Forest" in room_names
     
-    # Assertion: Items count across all rooms/player
+    # Assertion: Items count across all rooms
     total_items = sum(len(r.contents) for r in engine.rooms.values())
-    if engine.player:
-        total_items += len(engine.player.contents)
     
     assert total_items >= 10, f"Expected at least 10 items in the world, but found {total_items}"
 
@@ -37,7 +35,7 @@ async def test_every_room_is_reachable_from_start():
     engine = Engine()
     await load_demo_village(engine)
 
-    start = engine._player_location
+    start = engine.start_room
     seen = {start}
     queue = [start]
     while queue:

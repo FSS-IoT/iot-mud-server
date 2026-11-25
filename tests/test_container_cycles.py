@@ -140,7 +140,7 @@ def _market() -> tuple[Engine, Room, Player]:
     room = Room("Market", "A busy market.")
     room.item_id = "market"
     engine._rooms[room.name] = room
-    engine._player_location = room
+    engine.start_room = room
     player = engine.register_player("Ada")
     return engine, room, player
 

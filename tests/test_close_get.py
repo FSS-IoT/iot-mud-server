@@ -34,7 +34,7 @@ def _market(*, container_open: bool = False, locked: bool = False):
     chest.add_content(coin)
     room.add_content(chest)
     engine._rooms[room.name] = room
-    engine._player_location = room
+    engine.start_room = room
     player = engine.register_player("Ada")
     return engine, player, room, chest, coin
 

@@ -41,7 +41,7 @@ async def test_registered_player_can_take_item():
     coin = Entity("Gold Coin", "A shiny, minted copper coin.", weight=0.01)
     room.add_content(coin)
     engine._rooms["Marketplace"] = room
-    engine._player_location = room
+    engine.start_room = room
 
     player = engine.register_player("Ada")
     assert coin in room.contents  # sanity: it is here before the command
@@ -61,7 +61,7 @@ async def test_registered_player_take_is_forgiving_on_name():
     coin = Entity("Gold Coin", "A shiny, minted copper coin.", weight=0.01)
     room.add_content(coin)
     engine._rooms["Marketplace"] = room
-    engine._player_location = room
+    engine.start_room = room
 
     engine.register_player("Ada")
 
@@ -77,7 +77,7 @@ async def test_registered_player_can_drop_item():
     room = Room("Marketplace", "Lively vendors cry out their wares.")
     coin = Entity("Gold Coin", "A shiny, minted copper coin.", weight=0.01)
     engine._rooms["Marketplace"] = room
-    engine._player_location = room
+    engine.start_room = room
 
     player = engine.register_player("Ada")
     player.add_content(coin)  # pretend it is already in their inventory
@@ -95,12 +95,11 @@ async def test_legacy_take_still_works_without_player_name():
     engine = Engine()
     room = Room("Forest", "A dark forest.")
     sword = Entity("Sword", "A sharp blade.", weight=2.0)
-    legacy = Entity("Hero", "A brave adventurer.")
     room.add_content(sword)
-    engine.player = legacy
-    engine._player_location = room
+    engine.start_room = room
+    legacy = engine.register_player("Hero")
 
-    await engine.process_command("take sword")
+    await engine.process_command("take sword", legacy)
 
     assert sword in legacy.contents
     assert sword not in room.contents
@@ -116,8 +115,9 @@ async def test_examine_player():
     engine = Engine()
     room = Room("Marketplace", "Lightly vendors cry out their wares.")
     engine._rooms["Marketplace"] = room
-    engine._player_location = room
+    engine.start_room = room
     engine.register_player("Ada")
+    engine.register_player("Ben")
 
     response = await engine.process_command("examine Ada", "Ben")
 
@@ -130,8 +130,9 @@ async def test_look_at_player():
     engine = Engine()
     room = Room("Marketplace", "Lightly vendors cry out their wares.")
     engine._rooms["Marketplace"] = room
-    engine._player_location = room
+    engine.start_room = room
     engine.register_player("Ada")
+    engine.register_player("Ben")
 
     response = await engine.process_command("look at Ada", "Ben")
 
@@ -145,7 +146,7 @@ async def test_examine_item():
     room = Room("Marketplace", "Lightly vendors cry out their wares.")
     coin = Entity("Gold Coin", "A shiny, minted copper coin.", weight=0.01)
     engine._rooms["Marketplace"] = room
-    engine._player_location = room
+    engine.start_room = room
 
     player = engine.register_player("Ada")
     player.add_content(coin)

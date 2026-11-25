@@ -27,7 +27,7 @@ def _setup():
     coin = Entity("Gold Coin", "A shiny, minted copper coin.", weight=0.01)
     room.add_content(coin)
     engine._rooms["Marketplace"] = room
-    engine._player_location = room
+    engine.start_room = room
     engine.register_player("Ada")
     return engine
 
@@ -117,7 +117,7 @@ async def test_bare_drop_gets_hint_not_fallback():
 
 
 def coin_exists_in_room(engine: Engine) -> bool:
-    room = engine._player_location
+    room = engine.start_room
     return any(c.name == "Gold Coin" for c in (room.contents if room else []))
 
 
@@ -130,7 +130,7 @@ async def test_exam_shorthand_resolves():
     """`exam gold coin` (when held) describes the item like `examine` would."""
     engine = _setup()
     player = engine.get_player("Ada")
-    coin = next(c for c in engine._player_location.contents if c.name == "Gold Coin")
+    coin = next(c for c in engine.start_room.contents if c.name == "Gold Coin")
     player.add_content(coin)
 
     response = await engine.process_command("exam gold coin", "Ada")
@@ -157,7 +157,7 @@ def _setup_sign_and_coin():
     room.add_content(Entity("Notice Board", "A weathered sign nailed to the gate.", readable=True))
     room.add_content(Entity("Gold Coin", "A shiny, minted copper coin.", weight=0.01))
     engine._rooms["Village Gate"] = room
-    engine._player_location = room
+    engine.start_room = room
     engine.register_player("Ada")
     return engine
 
@@ -201,7 +201,7 @@ def _setup_two_coins():
     room.add_content(Entity("Gold Coin", "A heavy gold coin.", weight=0.05))
     room.add_content(Entity("Silver Coin", "A smaller silver coin.", weight=0.03))
     engine._rooms["Treasury"] = room
-    engine._player_location = room
+    engine.start_room = room
     engine.register_player("Ada")
     return engine
 
@@ -240,7 +240,7 @@ async def test_take_the_coin_takes_a_coin():
     engine = _setup_two_coins()
     response = await engine.process_command("take the coin 1", "Ada")
     assert "picked up" in response.lower()
-    remaining = [c.name for c in engine._player_location.contents]
+    remaining = [c.name for c in engine.start_room.contents]
     # Exactly one coin was taken; the other is still on the floor.
     assert remaining.count("Silver Coin") + remaining.count("Gold Coin") == 1
 
@@ -250,7 +250,7 @@ async def test_take_the_gold_coin_distinguishes():
     """`take the gold coin` grabs the gold one, leaving the silver."""
     engine = _setup_two_coins()
     await engine.process_command("take the gold coin", "Ada")
-    remaining = sorted(c.name for c in engine._player_location.contents)
+    remaining = sorted(c.name for c in engine.start_room.contents)
     assert "Gold Coin" not in remaining
     assert "Silver Coin" in remaining
 

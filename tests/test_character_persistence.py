@@ -198,7 +198,7 @@ def test_restore_player_takes_owned_objects_off_the_floor_and_out_of_containers(
     hall.add_content(chest)
     hall.add_content(coin)
     engine._rooms[hall.name] = hall
-    engine._player_location = hall
+    engine.start_room = hall
 
     ada = engine.register_player("Ada")
     engine.restore_player(ada, room=hall, item_keys=("coin", "lantern"))

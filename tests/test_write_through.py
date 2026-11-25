@@ -34,7 +34,6 @@ from src.mud.storage.db import open_database
 from src.mud.storage.store import (
     ObjectLocation,
     PlayerStore,
-    StorageWriteError,
     WorldStore,
     WriteThroughStore,
 )
@@ -70,7 +69,7 @@ def _world(store: WriteThroughStore | None = None) -> World:
 
     engine._rooms[hall.name] = hall
     engine._rooms[yard.name] = yard
-    engine._player_location = hall
+    engine.start_room = hall
     ada = engine.register_player("Ada")
     ada.add_content(lantern)
     return World(engine, hall, yard, coin, lantern, ada)
@@ -230,10 +229,12 @@ async def test_a_real_sqlite_failure_rolls_back_and_changes_nothing(tmp_path):
         # A read-only connection makes every write fail the way a full or
         # locked disk would, without needing the injection seam.
         conn.execute("PRAGMA query_only = ON")
-        with pytest.raises(StorageWriteError):
-            await world.engine.process_command("take coin", "Ada")
+        # The string seam reports the failed commit as a reply; the v2 adapter
+        # turns the same outcome into a typed `error{internal}`.
+        reply = await world.engine.process_command("take coin", "Ada")
         conn.execute("PRAGMA query_only = OFF")
 
+        assert "could not save" in reply.lower()
         assert published == []
         assert world.coin in world.hall.contents
         assert world.coin not in world.ada.contents
@@ -310,7 +311,7 @@ def build_engine():
     hall.add_content(lantern)
     engine._rooms[hall.name] = hall
     engine._rooms[yard.name] = yard
-    engine._player_location = hall
+    engine.start_room = hall
     return engine
 
 
