@@ -4,11 +4,13 @@ import asyncio
 import logging
 import re
 from collections.abc import Iterable
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Dict, List, Optional
 from src.mud.content import DEFAULT_CARRY_CAPACITY, NPC, Entity, Player, Room
 from src.mud.content.effects import effect_entries, effect_payload
 from src.mud.content.validator import container_cycles
-from src.mud.storage.keys import object_key, room_key
+from src.mud.protocol.v2 import CommandOutcome, SemanticEvent
+from src.mud.storage.keys import object_key, room_key, slug
+from src.mud.storage.store import StorageWriteError
 from src.mud.world.wander import NpcMove, NpcWanderer, npc_key
 
 if TYPE_CHECKING:
@@ -1355,6 +1357,1245 @@ class Engine:
                         callback(event_type, data)
                 except Exception as e:
                     print(f"Event Error ({event_type}): {e}")
+
+    # --- Typed command outcomes (#130) ---------------------------------------
+
+    # The one alias table. `process_command` keeps its own copy until the
+    # adapter reshape folds that path in; both must stay identical.
+    _ALIASES: ClassVar[dict[str, str]] = {
+        "get": "take", "pick": "take", "grab": "take",
+        "l": "look",
+        "n": "go north", "north": "go north",
+        "s": "go south", "south": "go south",
+        "e": "go east", "east": "go east",
+        "w": "go west", "west": "go west",
+        "u": "go up", "up": "go up",
+        "d": "go down", "down": "go down",
+        "exits": "show_exits",
+        "i": "inventory", "inv": "inventory",
+        "h": "help",
+        "exam": "examine",
+        "me": "emote",
+    }
+
+    @staticmethod
+    def parse_command(text: str) -> tuple[str, str | None, str]:
+        """Resolve one input line to `(verb, arg, raw)`, applying the aliases.
+
+        The single grammar owner (#130): the engine parses the command, and the
+        v2 adapter will stop parsing. A blank line is ``"empty"``; the
+        ``look at`` / ``look in`` rewrites match `process_command`.
+        """
+        raw = text.strip()
+        lowered = raw.lower()
+        if not lowered:
+            return "empty", None, raw
+
+        parts = lowered.split(maxsplit=1)
+        verb = parts[0]
+        arg = parts[1] if len(parts) > 1 else None
+
+        if verb == "look" and arg is not None:
+            first = arg.split(maxsplit=1)[0]
+            if first == "at":
+                rest = arg.split(maxsplit=1)
+                return "examine", rest[1].strip() if len(rest) > 1 else None, raw
+            if first in ("in", "inside"):
+                rest = arg.split(maxsplit=1)
+                return "look_in", rest[1].strip() if len(rest) > 1 else "", raw
+            return "look", arg, raw
+
+        input_str = f"{verb} {arg}".strip() if arg else verb
+        if verb == "get" and arg and " from " in arg:
+            # `get <item> from <container>` is its own verb; a bare `get <item>`
+            # still aliases to `take` below.
+            return "get", arg, raw
+        if input_str in Engine._ALIASES:
+            resolved, _, resolved_arg = Engine._ALIASES[input_str].partition(" ")
+            return resolved, resolved_arg or None, raw
+        if verb in Engine._ALIASES:
+            resolved, _, resolved_arg = Engine._ALIASES[verb].partition(" ")
+            return resolved, resolved_arg or None, raw
+        return verb, arg, raw
+
+    @staticmethod
+    def _semantic_object(entity: Entity,
+                         collection: list[Entity] | None = None) -> dict[str, Any]:
+        """A stable object descriptor for a semantic event.
+
+        Mirrors the adapter's wire `_object_data` (id, kind, name) so the two
+        agree on instance ids, including the `<kind>-<n>` suffix that tells two
+        of the same prototype apart in one collection.
+        """
+        base = getattr(entity, "item_id", None) or slug(entity.name)
+        ident = getattr(entity, "instance_id", None)
+        if not ident:
+            siblings = [
+                candidate for candidate in (collection or [])
+                if (getattr(candidate, "item_id", None)
+                    or slug(candidate.name)) == base
+            ]
+            if len(siblings) > 1:
+                try:
+                    index = siblings.index(entity) + 1
+                except ValueError:
+                    index = 1
+                ident = f"{base}-{index}"
+            else:
+                ident = base
+            entity.instance_id = ident
+        return {"id": ident, "kind": base, "name": entity.name}
+
+    async def execute(self, actor: Player, text: str) -> CommandOutcome:
+        """Run one command for `actor` and return a typed outcome (#130).
+
+        The single command path: it parses once, dispatches to the verb
+        handler, and the handler records the reply, typed status, and semantic
+        events. The v2 adapter shapes that outcome; `process_command` remains
+        for the legacy single-player caller.
+        """
+        verb, arg, _raw = self.parse_command(text)
+        outcome = CommandOutcome()
+        if verb == "empty":
+            self._notice(outcome, "Silence falls over you.")
+            await self.emit("command_processed", {
+                "raw": text, "clean": text.strip().lower(),
+                "reply": outcome.reply,
+            })
+            return outcome
+        if verb in ("exit", "quit"):
+            await self.emit("player_quit", {"reason": "user_requested"})
+            outcome.reply = "Goodbye!"
+            return outcome
+
+        handlers = {
+            "take": self._exec_take,
+            "drop": self._exec_drop,
+            "open": self._exec_open,
+            "go": self._exec_go,
+            "look": self._exec_look,
+            "inventory": self._exec_inventory,
+            "who": self._exec_who,
+            "show_exits": self._exec_show_exits,
+            "help": self._exec_help,
+            "hello": self._exec_hello,
+            "examine": self._exec_examine,
+            "read": self._exec_read,
+            "look_in": self._exec_look_in,
+            "put": self._exec_put,
+            "get": self._exec_get,
+            "close": self._exec_close,
+            "use": self._exec_use,
+            "talk": self._exec_talk,
+            "ask": self._exec_ask,
+            "light": self._exec_light,
+        }
+        raw_handlers = {
+            "say": self._exec_say,
+            "emote": self._exec_emote,
+            "tell": self._exec_tell,
+        }
+        handler = handlers.get(verb)
+        raw_handler = raw_handlers.get(verb)
+        try:
+            if raw_handler is not None:
+                await raw_handler(outcome, actor, arg, text)
+            elif handler is not None:
+                await handler(outcome, actor, arg)
+            else:
+                self._fail(
+                    outcome, "unknown_command",
+                    "Hmm, I don't understand that. Type `help` for a list of "
+                    "commands.")
+        except StorageWriteError:
+            # A commit failed, so the engine changed nothing: one typed error,
+            # no event for any other client (SPEC v2.1.0 criterion 2).
+            logger.exception("write-through failed on %r", text)
+            outcome.status = "error"
+            outcome.error_code = "internal"
+            outcome.reply = (
+                "The world could not save that command; nothing changed.")
+            outcome.error_data = {}
+            outcome.events = []
+            return outcome
+
+        await self.emit("command_processed", {
+            "raw": text, "clean": text.strip().lower(),
+            "reply": outcome.reply,
+        })
+        return outcome
+
+    @staticmethod
+    def _fail(outcome: CommandOutcome, code: str, reply: str) -> None:
+        """Record a typed failure on `outcome`."""
+        outcome.status = "error"
+        outcome.error_code = code
+        outcome.reply = reply
+
+    def _candidates(self, collection: list[Entity],
+                    arg: str | None) -> list[dict[str, Any]]:
+        """The structured ambiguity candidates for `arg` in `collection` (#78).
+
+        Empty when the name resolves uniquely or not at all; an `ambiguous`
+        outcome attaches the list so a client can disambiguate.
+        """
+        if not arg:
+            return []
+        matches = self.target_matches(collection, arg)
+        if len(matches) < 2:
+            return []
+        return [self._semantic_object(item, collection) for item in matches]
+
+    def _set_too_heavy(self, outcome: CommandOutcome, actor: Player,
+                       collection: list[Entity], arg: str | None,
+                       reply: str, item: Entity | None = None) -> None:
+        """Record the typed carry-limit refusal with the numbers behind it (#78)."""
+        self._fail(outcome, "too_heavy", reply)
+        data: dict[str, Any] = {
+            "capacity": round(self.carry_capacity(actor), 3),
+            "used": round(self.carry_used(actor), 3),
+        }
+        found = item if item is not None else self._find_item(collection, arg)
+        if found is not None:
+            data["object"] = self._semantic_object(found, collection)
+            data["weight"] = round(
+                float(getattr(found, "weight", 0.0) or 0.0), 3)
+        outcome.error_data = data
+
+    async def _exec_take(self, outcome: CommandOutcome, actor: Player,
+                         arg: str | None) -> None:
+        """`take <item>`: move one room item into the actor's pack."""
+        if not arg:
+            self._fail(outcome, "bad_args", "Take what? Try `take <item>`.")
+            return
+        room = actor.location
+        if room is None:
+            self._fail(
+                outcome, "not_here",
+                "There is nowhere here to take anything from.")
+            return
+        before_room_contents = list(room.contents)
+        item, disambig = self._disambiguate(room.contents, arg)
+        if disambig:
+            self._fail(outcome, "ambiguous", disambig)
+            outcome.error_data = {
+                "candidates": self._candidates(before_room_contents, arg)}
+            return
+        if item is None:
+            self._fail(outcome, "not_found", f"There is no {arg} here.")
+            return
+        if not self.can_carry(actor, item):
+            self._set_too_heavy(
+                outcome, actor, before_room_contents, arg,
+                f"You cannot carry the {item.name}; it is too heavy.", item)
+            return
+        if self.store is not None:
+            self.store.player(actor.name).take(item, room=room)
+        room.remove_content(item)
+        actor.add_content(item)
+        await self.emit("item_taken", {
+            "item_name": item.name.lower(), "owner": actor.name})
+        outcome.reply = f"You picked up the {item.name}."
+        outcome.events.append(SemanticEvent(
+            kind="object.taken",
+            data={
+                "object": self._semantic_object(item, before_room_contents),
+                "by": actor.name,
+                "text_actor": outcome.reply,
+                "text_room": f"{actor.name} picks up the {item.name}.",
+            },
+            scope="room",
+        ))
+
+    async def _exec_drop(self, outcome: CommandOutcome, actor: Player,
+                         arg: str | None) -> None:
+        """`drop <item>`: move one carried item into the actor's room."""
+        if not arg:
+            self._fail(outcome, "bad_args", "Drop what? Try `drop <item>`.")
+            return
+        room = actor.location
+        if room is None:
+            self._fail(
+                outcome, "not_here",
+                "There is nowhere here to drop anything.")
+            return
+        item, disambig = self._disambiguate(actor.contents, arg)
+        if disambig:
+            self._fail(outcome, "ambiguous", disambig)
+            outcome.error_data = {
+                "candidates": self._candidates(actor.contents, arg)}
+            return
+        if item is None:
+            self._fail(
+                outcome, "not_found", f"You aren't carrying any {arg}.")
+            return
+        if self.store is not None:
+            self.store.player(actor.name).drop(item, room=room)
+        actor.remove_content(item)
+        room.add_content(item)
+        await self.emit("item_dropped", {
+            "item_name": item.name.lower(), "location": room.name})
+        outcome.reply = f"You dropped the {item.name}."
+        outcome.events.append(SemanticEvent(
+            kind="object.dropped",
+            data={
+                "object": self._semantic_object(item, room.contents),
+                "by": actor.name,
+                "text_actor": outcome.reply,
+                "text_room": f"{actor.name} drops the {item.name}.",
+            },
+            scope="room",
+        ))
+
+    async def _exec_open(self, outcome: CommandOutcome, actor: Player,
+                         arg: str | None) -> None:
+        """`open <container>`: set the lid open and report the contents."""
+        if not arg:
+            self._fail(outcome, "bad_args", "Open what? Try `open <chest>`.")
+            return
+        room = actor.location
+        if room is None:
+            self._fail(
+                outcome, "not_here",
+                "There is nowhere here to open anything.")
+            return
+        container, disambig = self._disambiguate(room.contents, arg)
+        if disambig:
+            self._fail(outcome, "ambiguous", disambig)
+            outcome.error_data = {
+                "candidates": self._candidates(room.contents, arg)}
+            return
+        if container is None:
+            self._fail(
+                outcome, "not_found", f"There is no {arg} here to open.")
+            return
+        if getattr(container, "locked", False):
+            self._fail(
+                outcome, "locked",
+                f"The {container.name} is locked. Find a key and "
+                f"`use <key> on {container.name.lower()}`.")
+            return
+        if container.is_container:
+            if container.open:
+                self._fail(
+                    outcome, "already_open",
+                    f"The {container.name} is already open.")
+                return
+            container.open = True
+            await self.fire_effects(
+                container, "on_open", actor=actor.name, room=room)
+
+        loot = list(container.contents)
+        if not loot:
+            outcome.reply = f"The {container.name} is empty."
+        else:
+            await self.emit("chest_opened", {
+                "item_name": container.name.lower(),
+                "location": room.name,
+            })
+            listed = ", ".join(sorted(c.name for c in loot))
+            outcome.reply = (
+                f"You open the {container.name}. Inside you see: {listed}.")
+        outcome.events.append(SemanticEvent(
+            kind="object.opened",
+            data={
+                "object": self._semantic_object(container, room.contents),
+                "by": actor.name,
+                "text_actor": outcome.reply,
+                "text_room": f"{actor.name} opens the {container.name}.",
+            },
+            scope="room",
+        ))
+
+    async def _exec_go(self, outcome: CommandOutcome, actor: Player,
+                       arg: str | None) -> None:
+        """`go <direction>`: move the actor, or refuse a locked/missing way."""
+        if not arg:
+            self._fail(
+                outcome, "bad_args", "Go where? Try `go <direction>`.")
+            return
+        direction = arg.strip()
+        room = actor.location
+        if room is None:
+            self._fail(
+                outcome, "not_here",
+                "You have no presence here to move.")
+            return
+        if room.exit_is_locked(direction):
+            await self.emit("exit_locked", {
+                "direction": direction, "location": room.name})
+            self._fail(outcome, "locked", self._locked_exit_reply(direction))
+            # The room sees the attempt; the actor gets the typed refusal above.
+            outcome.events.append(SemanticEvent(
+                kind="exit.locked",
+                data={
+                    "actor": actor.name,
+                    "room": room,
+                    "direction": direction,
+                    "target": room.exits.get(direction),
+                },
+                scope="room_others",
+            ))
+            return
+
+        old_room = room
+        moved, result = await self.move_player(actor.name, direction)
+        if not moved:
+            self._fail(outcome, "no_exit", result)
+            return
+
+        outcome.reply = self._describe_movement(
+            actor.location, direction, old_location=old_room)
+        outcome.events.append(SemanticEvent(
+            kind="room.state",
+            data={"actor": actor},
+            scope="actor",
+        ))
+        outcome.events.append(SemanticEvent(
+            kind="room.leave",
+            data={
+                "actor": actor.name,
+                "room": old_room,
+                "direction": direction,
+                "text": f"{actor.name} leaves.",
+            },
+            scope="room_others",
+        ))
+        outcome.events.append(SemanticEvent(
+            kind="room.enter",
+            data={
+                "actor": actor.name,
+                "room": actor.location,
+                "direction": direction,
+                "text": f"{actor.name} arrives.",
+            },
+            scope="room_others",
+        ))
+
+    async def _exec_look(self, outcome: CommandOutcome, actor: Player,
+                         arg: str | None) -> None:
+        """`look`: render the actor's room; the adapter builds `room.state`."""
+        room = actor.location
+        if room is None:
+            outcome.reply = "You feel lost in a void."
+        elif not self._room_is_lit(actor, room):
+            outcome.reply = "It is too dark to see anything."
+        else:
+            outcome.reply = room.description
+            items = [c for c in room.contents if not isinstance(c, Player)]
+            if items:
+                listed = ", ".join(sorted(c.name for c in items))
+                outcome.reply += f"\n\nHere you see: {listed}."
+            if room.npcs:
+                listed = ", ".join(
+                    npc.name for npc in sorted(
+                        room.npcs, key=lambda npc: npc.name.lower()))
+                outcome.reply += f"\n\nAlso here: {listed}."
+            occupants = [
+                p for p in self._players.values()
+                if p.location is room and p.name != actor.name
+            ]
+            if occupants:
+                listed = ", ".join(
+                    p.name for p in sorted(
+                        occupants, key=lambda p: p.name.lower()))
+                outcome.reply += f"\n\nOthers in the room: {listed}."
+        outcome.events.append(SemanticEvent(
+            kind="room.state", data={"actor": actor}, scope="actor"))
+
+    async def _exec_inventory(self, outcome: CommandOutcome, actor: Player,
+                              arg: str | None) -> None:
+        """`inventory`: the actor's pack, rendered by the adapter."""
+        held = self._held_items(actor)
+        outcome.reply = (
+            f"You are carrying: {', '.join(held)}."
+            if held else "You are not carrying anything.")
+        outcome.events.append(SemanticEvent(
+            kind="player.inventory",
+            data={"actor": actor, "text": outcome.reply},
+            scope="actor",
+        ))
+
+    async def _exec_who(self, outcome: CommandOutcome, actor: Player,
+                        arg: str | None) -> None:
+        """`who`: the server-wide roster, awake and asleep (#72/#75)."""
+        roster = self.who_entries()
+        if not roster:
+            outcome.reply = "There is no one in the world."
+        else:
+            listed = []
+            for entry in roster:
+                state = (
+                    "asleep, turned to stone"
+                    if entry["asleep"] else "awake")
+                where = entry["room_id"] or "nowhere"
+                listed.append(f"{entry['name']} ({where}, {state})")
+            outcome.reply = (
+                "Characters in the world: " + "; ".join(listed) + ".")
+        outcome.events.append(SemanticEvent(
+            kind="who.list",
+            data={"actor": actor, "text": outcome.reply},
+            scope="actor",
+        ))
+
+    async def _exec_show_exits(self, outcome: CommandOutcome, actor: Player,
+                               arg: str | None) -> None:
+        """`exits`: the actor's room exits, with locked ones marked."""
+        room = actor.location
+        if room is None:
+            outcome.reply = "You have no context for exits here."
+        elif not room.exits:
+            outcome.reply = "There are no exits here."
+        else:
+            names = self._exit_labels(room)
+            outcome.reply = f"Available exits: {', '.join(names)}."
+        self._notice(outcome, outcome.reply)
+
+    async def _exec_help(self, outcome: CommandOutcome, actor: Player,
+                         arg: str | None) -> None:
+        """`help`: the command list."""
+        outcome.reply = (
+            "Commands: look (l), go <direction>, exits, take <item>, "
+            "get <item> from <container>, drop <item>, put <item> in <container>, "
+            "open <container>, close <container>, use <key> on <container|exit>, "
+            "examine <thing> (exam), read <thing> (signs, books), look in <chest>, "
+            "light <torch/lantern>, inventory (i), who, "
+            "say <text>, emote <action> (me), tell <player> <text>, "
+            "talk <npc>, ask <npc> about <topic>, hello. Try `look` first."
+        )
+        self._notice(outcome, outcome.reply)
+
+    async def _exec_hello(self, outcome: CommandOutcome, actor: Player,
+                          arg: str | None) -> None:
+        """`hello`: the greeting line."""
+        outcome.reply = "The world listens..."
+        self._notice(outcome, outcome.reply)
+
+    @staticmethod
+    def _notice(outcome: CommandOutcome, text: str) -> None:
+        """Record a plain informational notice."""
+        outcome.reply = text
+        outcome.events.append(SemanticEvent(
+            kind="notice", data={"text": text}, scope="actor"))
+
+    async def _exec_examine(self, outcome: CommandOutcome, actor: Player,
+                            arg: str | None) -> None:
+        """`examine`: describe a held or visible thing, or a person here."""
+        if not arg:
+            self._fail(
+                outcome, "bad_args",
+                "Examine what? Try `examine <thing>`.")
+            return
+        room = actor.location
+        held, held_disambig = self._disambiguate(actor.contents, arg)
+        if not self._room_is_lit(actor, room):
+            self._notice(outcome, "It is too dark to see anything.")
+            return
+        if held_disambig:
+            self._fail(outcome, "ambiguous", held_disambig)
+            outcome.error_data = {
+                "candidates": self._candidates(actor.contents, arg)}
+            return
+        if held is not None:
+            self._notice(outcome, f"It is {held.description}.")
+            return
+        room_items = [c for c in (room.contents if room is not None else [])
+                      if not isinstance(c, Player)]
+        item, disambig = self._disambiguate(room_items, arg)
+        if disambig:
+            self._fail(outcome, "ambiguous", disambig)
+            outcome.error_data = {
+                "candidates": self._candidates(room_items, arg)}
+            return
+        if item is not None:
+            self._notice(outcome, f"It is {item.description}.")
+            return
+        target = self._character_in_room(room, arg)
+        if target is not None:
+            self._notice(
+                outcome, f"{target.name} is here, exploring the world.")
+            return
+        self._fail(outcome, "not_found", f"You see no {arg} here.")
+
+    async def _exec_read(self, outcome: CommandOutcome, actor: Player,
+                         arg: str | None) -> None:
+        """`read`: show a readable object's text; plain items are refused."""
+        if not arg:
+            # An argument-less `read` falls through the engine to the
+            # unknown-command reply; the adapter classifies it as such.
+            self._fail(
+                outcome, "unknown_command",
+                "Hmm, I don't understand that. Type `help` for a list of "
+                "commands.")
+            return
+        room = actor.location
+        held, held_disambig = self._disambiguate(actor.contents, arg)
+        if not self._room_is_lit(actor, room):
+            self._notice(outcome, "It is too dark to see anything.")
+            return
+        if held_disambig:
+            self._fail(outcome, "ambiguous", held_disambig)
+            outcome.error_data = {
+                "candidates": self._candidates(actor.contents, arg)}
+            return
+        if held is not None and held.readable:
+            self._read_event(
+                outcome, held, actor.contents, f"It is {held.description}.")
+            return
+        room_items = [c for c in (room.contents if room is not None else [])
+                      if not isinstance(c, Player)]
+        item, disambig = self._disambiguate(room_items, arg)
+        if disambig:
+            self._fail(outcome, "ambiguous", disambig)
+            outcome.error_data = {
+                "candidates": self._candidates(room_items, arg)}
+            return
+        if item is not None and item.readable:
+            self._read_event(
+                outcome, item, room_items, f"It is {item.description}.")
+            return
+        target = self._character_in_room(room, arg)
+        if target is not None:
+            self._fail(outcome, "not_found", f"You can't read {target.name}.")
+            return
+        self._fail(outcome, "not_found", "There is nothing readable here.")
+
+    def _read_event(self, outcome: CommandOutcome, target: Entity,
+                    collection: list[Entity], reply: str) -> None:
+        """Record a successful read as an actor-only `object.read` event."""
+        outcome.reply = reply
+        outcome.events.append(SemanticEvent(
+            kind="object.read",
+            data={
+                "object": self._semantic_object(target, collection),
+                "content": target.description,
+                "text": reply,
+            },
+            scope="actor",
+        ))
+
+    async def _exec_look_in(self, outcome: CommandOutcome, actor: Player,
+                            arg: str | None) -> None:
+        """`look in <container>`: list what a container holds."""
+        if not arg:
+            self._fail(
+                outcome, "bad_args",
+                "Look in what? Try `look in <container>`.")
+            return
+        room = actor.location
+        if room is None:
+            self._fail(
+                outcome, "not_here", "There is nowhere here to look inside.")
+            return
+        container, disambig = self._disambiguate(room.contents, arg)
+        if disambig:
+            self._fail(outcome, "ambiguous", disambig)
+            outcome.error_data = {
+                "candidates": self._candidates(room.contents, arg)}
+            return
+        if container is None:
+            self._fail(
+                outcome, "not_found", f"There is no {arg} here to look inside.")
+            return
+        if getattr(container, "locked", False):
+            self._fail(
+                outcome, "locked",
+                f"The {container.name} is locked. Find a key and "
+                f"`use <key> on {container.name.lower()}`.")
+            return
+        loot = list(container.contents)
+        if not loot:
+            self._notice(outcome, f"The {container.name} is empty.")
+            return
+        listed = ", ".join(sorted(c.name for c in loot))
+        self._notice(
+            outcome, f"You see inside the {container.name}: {listed}.")
+
+    def _character_in_room(self, room: Room | None,
+                           name: str) -> Player | None:
+        """The player named `name` sharing `room`, ignoring case."""
+        key = name.strip().lower()
+        return next(
+            (p for p in self._players.values()
+             if (room is None or p.location is room) and p.name.lower() == key),
+            None,
+        )
+
+    async def _exec_put(self, outcome: CommandOutcome, actor: Player,
+                        arg: str | None) -> None:
+        """`put <item> in <container>`: move a carried item into a container."""
+        normalized = (arg or "").replace(" into ", " in ")
+        if " in " not in normalized:
+            self._fail(
+                outcome, "bad_args",
+                "Put what where? Try `put <item> in <container>`.")
+            return
+        item_arg, _, container_arg = normalized.rpartition(" in ")
+        item_arg = item_arg.strip()
+        container_arg = container_arg.strip()
+        if not item_arg or not container_arg:
+            self._fail(
+                outcome, "bad_args",
+                "Put what where? Try `put <item> in <container>`.")
+            return
+        room = actor.location
+        if room is None:
+            self._fail(
+                outcome, "not_here", "There is nowhere here to put anything.")
+            return
+        before_room_contents = list(room.contents)
+        before_inventory = list(actor.contents)
+        held, item_disambig = self._disambiguate(
+            actor.contents, item_arg)
+        container, cont_disambig = self._disambiguate(
+            room.contents, container_arg)
+        if item_disambig:
+            self._fail(outcome, "ambiguous", item_disambig)
+            outcome.error_data = {
+                "candidates": self._candidates(before_inventory, item_arg)}
+            return
+        if cont_disambig:
+            self._fail(outcome, "ambiguous", cont_disambig)
+            outcome.error_data = {
+                "candidates": self._candidates(
+                    before_room_contents, container_arg)}
+            return
+        if held is None:
+            self._fail(
+                outcome, "not_found",
+                f"You aren't carrying any {item_arg}.")
+            return
+        if container is None:
+            self._fail(
+                outcome, "not_found",
+                f"There is no {container_arg} here to put it in.")
+            return
+        if getattr(container, "locked", False):
+            self._fail(
+                outcome, "locked",
+                f"The {container.name} is locked. Find a key and "
+                f"`use <key> on {container.name.lower()}`.")
+            return
+        if self._containment_cycle(container, held):
+            self._fail(
+                outcome, "container_cycle",
+                f"You cannot put the {held.name} in the {container.name}; "
+                "a container cannot contain itself, directly or transitively.")
+            outcome.error_data = {
+                "object": self._semantic_object(held, before_inventory),
+                "container": self._semantic_object(
+                    container, before_room_contents),
+            }
+            return
+        actor.remove_content(held)
+        container.add_content(held)
+        await self.emit("item_put", {
+            "item_name": held.name.lower(),
+            "container": container.name.lower(),
+            "location": room.name,
+        })
+        outcome.reply = f"You put the {held.name} in the {container.name}."
+        obj = self._semantic_object(held, container.contents)
+        cont = self._semantic_object(container, before_room_contents)
+        room_text = (
+            f"{actor.name} puts the {held.name} in the {container.name}.")
+        outcome.events.append(SemanticEvent(
+            kind="object.put",
+            data={"object": obj, "container": cont, "by": actor.name,
+                  "text_actor": outcome.reply},
+            scope="actor",
+        ))
+        outcome.events.append(SemanticEvent(
+            kind="player.inventory", data={"actor": actor},
+            scope="actor", direct=False))
+        outcome.events.append(SemanticEvent(
+            kind="object.put",
+            data={"object": obj, "container": cont, "by": actor.name,
+                  "text_room": room_text},
+            scope="room_others",
+        ))
+
+    async def _exec_get(self, outcome: CommandOutcome, actor: Player,
+                        arg: str | None) -> None:
+        """`get <item> from <container>`: pull one item into the pack."""
+        if not arg:
+            self._fail(
+                outcome, "bad_args",
+                "Get what from what? Try `get <item> from <container>`.")
+            return
+        if " from " not in arg:
+            # The engine leaves a `get` without `from` to its "Get what from
+            # what?" reply, which the adapter surfaces as a notice.
+            self._notice(
+                outcome,
+                "Get what from what? Try `get <item> from <container>`.")
+            return
+        item_arg, _, container_arg = arg.rpartition(" from ")
+        item_arg = item_arg.strip()
+        container_arg = container_arg.strip()
+        if not item_arg or not container_arg:
+            self._notice(
+                outcome,
+                "Get what from what? Try `get <item> from <container>`.")
+            return
+        room = actor.location
+        if room is None:
+            self._fail(
+                outcome, "not_here",
+                "There is nowhere here to get anything from.")
+            return
+        before_room_contents = list(room.contents)
+        container, cont_disambig = self._disambiguate(
+            room.contents, container_arg)
+        if cont_disambig:
+            self._fail(outcome, "ambiguous", cont_disambig)
+            outcome.error_data = {
+                "candidates": self._candidates(
+                    before_room_contents, container_arg)}
+            return
+        if container is None:
+            self._fail(
+                outcome, "not_found", f"There is no {container_arg} here.")
+            return
+        if not container.is_container:
+            self._fail(
+                outcome, "bad_args",
+                f"The {container.name} is not a container.")
+            return
+        if not container.open:
+            self._fail(
+                outcome, "container_closed",
+                f"The {container.name} is closed. Open it first.")
+            return
+        item, item_disambig = self._disambiguate(
+            container.contents, item_arg)
+        if item_disambig:
+            self._fail(outcome, "ambiguous", item_disambig)
+            outcome.error_data = {
+                "candidates": self._candidates(
+                    container.contents, item_arg)}
+            return
+        if item is None:
+            self._fail(
+                outcome, "not_here",
+                f"The {item_arg} is not in the {container.name}.")
+            return
+        if not getattr(item, "portable", True):
+            self._fail(
+                outcome, "not_portable",
+                f"The {item.name} is fixed in place and cannot be put in "
+                "your pack.")
+            return
+        if not self.can_carry(actor, item):
+            self._set_too_heavy(
+                outcome, actor, container.contents, item_arg,
+                f"You cannot carry the {item.name}; it is too heavy.", item)
+            return
+        container.remove_content(item)
+        actor.add_content(item)
+        await self.emit("item_got", {
+            "item_name": item.name.lower(),
+            "container": container.name.lower(),
+            "location": room.name,
+        })
+        outcome.reply = (
+            f"You get the {item.name} from the {container.name}.")
+        obj = self._semantic_object(item, actor.contents)
+        cont = self._semantic_object(container, before_room_contents)
+        room_text = (
+            f"{actor.name} gets the {item.name} from the {container.name}.")
+        outcome.events.append(SemanticEvent(
+            kind="object.got",
+            data={"object": obj, "container": cont, "by": actor.name,
+                  "text_actor": outcome.reply},
+            scope="actor",
+        ))
+        outcome.events.append(SemanticEvent(
+            kind="player.inventory", data={"actor": actor},
+            scope="actor", direct=False))
+        outcome.events.append(SemanticEvent(
+            kind="object.got",
+            data={"object": obj, "container": cont, "by": actor.name,
+                  "text_room": room_text},
+            scope="room_others",
+        ))
+
+    async def _exec_close(self, outcome: CommandOutcome, actor: Player,
+                          arg: str | None) -> None:
+        """`close <container>`: put the lid back down; contents stay."""
+        if not arg:
+            self._fail(
+                outcome, "bad_args", "Close what? Try `close <chest>`.")
+            return
+        room = actor.location
+        if room is None:
+            self._fail(
+                outcome, "not_here", "There is nowhere here to close anything.")
+            return
+        before_room_contents = list(room.contents)
+        container, disambig = self._disambiguate(room.contents, arg)
+        if disambig:
+            self._fail(outcome, "ambiguous", disambig)
+            outcome.error_data = {
+                "candidates": self._candidates(before_room_contents, arg)}
+            return
+        if container is None:
+            self._fail(
+                outcome, "not_found", f"There is no {arg} here to close.")
+            return
+        if not container.is_container:
+            self._fail(
+                outcome, "bad_args",
+                f"The {container.name} is not something you can close.")
+            return
+        if not container.open:
+            self._fail(
+                outcome, "already_closed",
+                f"The {container.name} is already closed.")
+            return
+        container.open = False
+        await self.emit("container_closed", {
+            "item_name": container.name.lower(),
+            "location": room.name,
+        })
+        outcome.reply = f"You close the {container.name}."
+        outcome.events.append(SemanticEvent(
+            kind="object.closed",
+            data={"object": self._semantic_object(
+                      container, before_room_contents),
+                  "by": actor.name,
+                  "text_actor": outcome.reply,
+                  "text_room": f"{actor.name} closes the {container.name}."},
+            scope="room",
+        ))
+
+    async def _exec_use(self, outcome: CommandOutcome, actor: Player,
+                        arg: str | None) -> None:
+        """`use <key> on <lock|exit>`: turn a key to unlock a door or lid."""
+        if not arg:
+            self._fail(
+                outcome, "bad_args",
+                "Use what on what? Try `use <key> on <lock>`.")
+            return
+        if " on " not in arg:
+            self._fail(
+                outcome, "bad_args",
+                "Use a key on something: `use <key> on <lock|exit>`.")
+            return
+        key_name, lock_name = arg.split(" on ", 1)
+        room = actor.location
+        if room is None:
+            self._fail(
+                outcome, "not_here", "There is nowhere here to use a key.")
+            return
+        before_room_contents = list(room.contents)
+        before_inventory = list(actor.contents)
+        key_item, key_disambig = self._disambiguate(
+            actor.contents, key_name)
+        lock_item, lock_disambig = self._disambiguate(
+            room.contents, lock_name)
+        if key_disambig:
+            self._fail(outcome, "ambiguous", key_disambig)
+            outcome.error_data = {
+                "candidates": self._candidates(
+                    before_inventory, key_name.strip())}
+            return
+        if lock_disambig:
+            self._fail(outcome, "ambiguous", lock_disambig)
+            outcome.error_data = {
+                "candidates": self._candidates(
+                    before_room_contents, lock_name.strip())}
+            return
+        if key_item is None:
+            self._fail(
+                outcome, "not_found",
+                f"You don't have a {key_name.strip()} to use.")
+            return
+        if lock_item is None:
+            found = self._find_exit(room, lock_name)
+            if found is None:
+                self._fail(
+                    outcome, "not_found",
+                    f"There is no {lock_name.strip()} here to use a "
+                    f"{key_name.strip()} on.")
+                return
+            direction, target, lock = found
+            if lock is None or not lock.locked:
+                self._fail(
+                    outcome, "already_open",
+                    f"The way {direction} is already open.")
+                return
+            if (not lock.key
+                    or getattr(key_item, "item_id", None) != lock.key):
+                self._fail(
+                    outcome, "locked",
+                    f"The {key_item.name} does not fit the lock on the way "
+                    f"{direction}.")
+                return
+            lock.locked = False
+            await self.emit("exit_unlocked", {
+                "direction": direction,
+                "from": room.name,
+                "to": target.name,
+                "key": key_item.name.lower(),
+            })
+            door = lock.label or f"way {direction}"
+            outcome.reply = (
+                f"You turn the {key_item.name}; the {door} unlocks.")
+            outcome.events.append(SemanticEvent(
+                kind="exit.unlocked",
+                data={"actor": actor.name, "room": room,
+                      "direction": direction, "target": target,
+                      "text_actor": outcome.reply,
+                      "text_room": (f"{actor.name} unlocks the way "
+                                    f"{direction}.")},
+                scope="room",
+            ))
+            return
+        if not getattr(lock_item, "locked", False):
+            self._fail(
+                outcome, "already_open",
+                f"The {lock_item.name} is already open.")
+            return
+        if (getattr(lock_item, "required_key", None)
+                and getattr(key_item, "item_id", None)
+                == lock_item.required_key):
+            lock_item.locked = False
+            await self.emit("item_unlocked", {
+                "item_name": lock_item.name.lower(),
+                "location": room.name,
+            })
+            outcome.reply = (
+                f"You turn the {key_item.name} and the {lock_item.name} "
+                "clicks open.")
+            outcome.events.append(SemanticEvent(
+                kind="object.unlocked",
+                data={"object": self._semantic_object(
+                          lock_item, before_room_contents),
+                      "by": actor.name,
+                      "text_actor": outcome.reply,
+                      "text_room": (f"{actor.name} unlocks the "
+                                    f"{lock_item.name}.")},
+                scope="room",
+            ))
+            return
+        self._fail(
+            outcome, "locked",
+            f"The {key_item.name} does not fit the {lock_item.name}.")
+
+    async def _exec_say(self, outcome: CommandOutcome, actor: Player,
+                        arg: str | None, raw: str) -> None:
+        """`say <text>`: one line to the room, original casing preserved."""
+        pieces = raw.split(maxsplit=1)
+        spoken = pieces[1] if len(pieces) > 1 else ""
+        if not spoken:
+            self._fail(
+                outcome, "unknown_command",
+                "Hmm, I don't understand that. Type `help` for a list of "
+                "commands.")
+            return
+        await self.emit("player_said", {
+            "name": actor.name,
+            "text": spoken,
+            "location": actor.location.name if actor.location else None,
+        })
+        outcome.reply = f'You say, "{spoken}".'
+        outcome.events.append(SemanticEvent(
+            kind="player.said",
+            data={"from": actor.name, "text_actor": outcome.reply,
+                  "text_room": f'{actor.name} says, "{spoken}".'},
+            scope="room",
+        ))
+
+    async def _exec_emote(self, outcome: CommandOutcome, actor: Player,
+                          arg: str | None, raw: str) -> None:
+        """`emote <action>`: a room-local third-person action (#75)."""
+        if not arg:
+            self._fail(
+                outcome, "bad_args", "Emote what? Try `emote <action>`.")
+            return
+        action = raw.split(maxsplit=1)[1].strip()
+        line = f"{actor.name} {action}"
+        if not line.endswith((".", "!", "?")):
+            line += "."
+        await self.emit("player_emoted", {
+            "name": actor.name,
+            "text": action,
+            "location": actor.location.name if actor.location else None,
+        })
+        outcome.reply = line
+        outcome.events.append(SemanticEvent(
+            kind="player.emoted",
+            data={"from": actor.name, "text_actor": line, "text_room": line},
+            scope="room",
+        ))
+
+    async def _exec_tell(self, outcome: CommandOutcome, actor: Player,
+                         arg: str | None, raw: str) -> None:
+        """`tell <player> <text>`: one private line to an awake character."""
+        pieces = raw.split(maxsplit=2)
+        if len(pieces) < 3 or not pieces[2].strip():
+            self._fail(
+                outcome, "bad_args",
+                "Tell whom what? Try `tell <player> <text>`.")
+            return
+        target_arg = pieces[1]
+        message = pieces[2].strip()
+        target = self.find_character(target_arg)
+        if target is not None:
+            if target.asleep:
+                self._fail(
+                    outcome, "not_awake",
+                    f"{target.name} is asleep, turned to stone; a tell "
+                    "cannot reach them.")
+                return
+            await self.emit("player_told", {
+                "from": actor.name, "to": target.name, "text": message})
+            outcome.reply = f'You tell {target.name}, "{message}".'
+            outcome.events.append(SemanticEvent(
+                kind="player.told",
+                data={"from": actor.name, "to": target.name,
+                      "text_actor": outcome.reply},
+                scope="actor",
+            ))
+            outcome.events.append(SemanticEvent(
+                kind="player.told",
+                data={"from": actor.name, "to": target.name,
+                      "player": target.name,
+                      "text_actor": (f'{actor.name} tells you, '
+                                     f'"{message}".')},
+                scope="player", direct=False,
+            ))
+            return
+        entry = self.character_entry(target_arg)
+        if entry is not None:
+            self._fail(
+                outcome, "not_awake",
+                f"{entry['name']} is asleep, turned to stone; a tell cannot "
+                "reach them.")
+            return
+        self._fail(
+            outcome, "not_found",
+            f"There is no one named {target_arg} in the world.")
+
+    async def _exec_talk(self, outcome: CommandOutcome, actor: Player,
+                         arg: str | None) -> None:
+        """`talk <npc>`: the authored greeting or the NPC's default line."""
+        if not arg:
+            self._fail(
+                outcome, "bad_args", "Talk to whom? Try `talk <npc>`.")
+            return
+        room = actor.location
+        npc, ambiguity = self.find_npc(room, arg)
+        if ambiguity:
+            self._fail(outcome, "ambiguous", ambiguity)
+            outcome.error_data = {
+                "candidates": self._candidates(room.contents, arg)
+                if room is not None else []}
+            return
+        if npc is None:
+            self._fail(
+                outcome, "not_found", f"You see no {arg.strip()} here.")
+            return
+        line = npc.greeting or npc.default
+        if not line:
+            self._notice(outcome, f"{npc.name} has nothing to say.")
+            return
+        await self.fire_effects(npc, "on_talk", actor=actor.name, room=room)
+        self._npc_say(outcome, npc, f'{npc.name} says, "{line}"', None)
+
+    async def _exec_ask(self, outcome: CommandOutcome, actor: Player,
+                        arg: str | None) -> None:
+        """`ask <npc> about <topic>`: the topic line or the default fallback."""
+        if not arg:
+            self._fail(
+                outcome, "bad_args",
+                "Ask whom about what? Try `ask <npc> about <topic>`.")
+            return
+        npc_arg, separator, topic = arg.partition(" about ")
+        if not separator:
+            self._fail(
+                outcome, "bad_args",
+                "Ask whom about what? Try `ask <npc> about <topic>`.")
+            return
+        room = actor.location
+        npc, ambiguity = self.find_npc(room, npc_arg)
+        if ambiguity:
+            self._fail(outcome, "ambiguous", ambiguity)
+            outcome.error_data = {
+                "candidates": self._candidates(room.contents, npc_arg)
+                if room is not None else []}
+            return
+        if npc is None:
+            self._fail(
+                outcome, "not_found", f"You see no {npc_arg.strip()} here.")
+            return
+        key = topic.strip().lower()
+        line = npc.topics.get(key) or npc.default
+        if not line:
+            self._notice(outcome, f"{npc.name} has nothing to say.")
+            return
+        await self.fire_effects(npc, "on_talk", actor=actor.name, room=room)
+        topic_out = key if key in npc.topics else None
+        self._npc_say(outcome, npc, f'{npc.name} says, "{line}"', topic_out)
+
+    def _npc_say(self, outcome: CommandOutcome, npc: NPC, reply: str,
+                 topic: str | None) -> None:
+        """Record an NPC line as a room-wide `npc.say` event."""
+        data: dict[str, Any] = {
+            "npc": {
+                "id": getattr(npc, "item_id", None) or slug(npc.name),
+                "name": npc.name,
+            },
+            "text_actor": reply,
+            "text_room": reply,
+        }
+        if topic is not None:
+            data["topic"] = topic
+        outcome.reply = reply
+        outcome.events.append(SemanticEvent(
+            kind="npc.say", data=data, scope="room"))
+
+    async def _exec_light(self, outcome: CommandOutcome, actor: Player,
+                          arg: str | None) -> None:
+        """`light <source>`: ignite a carried light source."""
+        if not arg:
+            self._fail(
+                outcome, "unknown_command",
+                "Hmm, I don't understand that. Type `help` for a list of "
+                "commands.")
+            return
+        held_item, disambig = self._disambiguate(actor.contents, arg)
+        if disambig:
+            self._fail(outcome, "ambiguous", disambig)
+            outcome.error_data = {
+                "candidates": self._candidates(actor.contents, arg)}
+            return
+        if held_item is None:
+            self._fail(
+                outcome, "not_found",
+                f"You don't have a {arg.strip()} to light.")
+            return
+        if not getattr(held_item, "light_source", False):
+            self._notice(outcome, f"You can't light the {held_item.name}.")
+            return
+        if getattr(held_item, "lit", False):
+            self._notice(outcome, f"The {held_item.name} is already lit.")
+            return
+        held_item.lit = True
+        await self.emit("light_ignited", {
+            "item_name": held_item.name.lower()})
+        outcome.reply = (
+            f"You light the {held_item.name}. Its flame casts a warm glow.")
+        obj = self._semantic_object(held_item, actor.contents)
+        obj["lit"] = True
+        outcome.events.append(SemanticEvent(
+            kind="object.lit",
+            data={"object": obj, "by": actor.name,
+                  "text_actor": outcome.reply,
+                  "text_room": f"{actor.name} lights the {held_item.name}."},
+            scope="room",
+        ))
 
     async def process_command(self, command_text: str, player_name: Optional[str] = None) -> str:
         """Translates player input into state mutation or narrative.
