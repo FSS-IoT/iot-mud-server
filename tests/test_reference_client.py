@@ -136,10 +136,10 @@ def test_render_who_and_inventory_are_structured_lines():
     inventory = render_message({
         "v": 2, "type": "player.inventory", "data": {
             "items": [{"id": "torch", "name": "Torch", "lit": True}],
-            "capacity": 12.0, "used": 0.5,
+            "capacity": 30.0, "used": 0.5,
         },
     }, "Ada")
-    assert "You are carrying: Torch (lit). (0.5/12.0)" in inventory
+    assert "You are carrying: Torch (lit). (0.5/30.0)" in inventory
 
 
 def test_key_file_round_trips_with_owner_only_mode(tmp_path):

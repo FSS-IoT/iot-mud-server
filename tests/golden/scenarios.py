@@ -116,7 +116,7 @@ async def full_tour(directory: Path) -> GoldenRun:
             # `player.inventory`; no step waits for the take/drop follow-up
             # that #54/#56 remove.
             inventory = await command(ada, "inventory", "player.inventory")
-            assert inventory["data"]["capacity"] == 12.0
+            assert inventory["data"]["capacity"] == 30.0
 
             await walk(run, ada, engine, "shop", "market")
             await walk(run, ben, engine, "shop", "market")

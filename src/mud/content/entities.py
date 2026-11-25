@@ -1,12 +1,11 @@
 from __future__ import annotations
 from typing import Dict, Optional, List
 
-# How much authored `weight` a character may carry by default (#78). The world
-# authors item weight in the content model; capacity is the same unit, so a
-# character's `used` is the sum of the `weight` of everything in `contents`.
-# A non-positive capacity means no limit (the legacy single-player slot and
-# in-memory test entities keep working without opting in).
-DEFAULT_CARRY_CAPACITY = 12.0
+# How much authored `weight` a character may carry by default (#78, #148). The
+# world authors item weight in the content model; capacity is the same unit, so
+# a character's `used` is the sum of the `weight` of everything in `contents`.
+# A non-positive capacity means no limit (in-memory test entities can opt out).
+DEFAULT_CARRY_CAPACITY = 30.0
 
 class Entity:
     """Base class for everything in the world: Players, Items, Rooms."""
