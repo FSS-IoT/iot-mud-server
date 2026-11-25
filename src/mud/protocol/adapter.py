@@ -343,8 +343,7 @@ async def execute(engine: Engine, player_name: str,
     if player is None:
         return _error("not_joined", "Join before sending commands.")
 
-    verb, _arg, _raw = Engine.parse_command(command_text)
-    if verb in ("exit", "quit"):
+    if command_text.strip().lower() in ("quit", "exit"):
         return CommandResult([])
 
     outcome = await engine.execute(player, command_text)
