@@ -440,7 +440,7 @@ unknown field.
 
 | Type | Data | Recipients |
 |---|---|---|
-| `player.inventory` | `items[]{id,name,weight,lit?}`, `capacity`, `used` | Actor only (v2.1) |
+| `player.inventory` | `items[]{id,name,weight,lit?}`, `capacity`, `used`, `unit` | Actor only (v2.1) |
 | `player.said` | `from`, `text`, `self` | Room, including actor |
 | `player.emoted` | `from`, `text`, `self` | Room, including actor (v2.1) |
 | `player.told` | `from`, `to`, `text`, `self` | Target and sender (v2.1) |
@@ -470,10 +470,12 @@ name is `error{not_found}`.
 utterance. A structured raw-message field is a v2.1 candidate; v2.0 clients
 should treat `text` as presentation.
 
-`player.inventory.capacity` and `used` are always present in v2.1. Both use
-the same unit as the authored object `weight`: `used` is the sum of the
-carried objects' own weights (nested container contents are not counted a
-second time), rounded to three decimals. The server default is `30.0`.
+`player.inventory.capacity` and `used` are always present in v2.1, and `unit`
+names the display unit (`"stones"` today). Authors write item `weight` in
+real-life **kilograms**; the server sends the display unit and clients render it
+verbatim, with no conversion. `used` is the sum of the carried objects' own
+weights (nested container contents are not counted a second time), rounded to
+three decimals. The server default capacity is `30.0`.
 
 ### NPC dialogue (v2.1)
 
@@ -918,10 +920,12 @@ release; a later additive fix still adds a bullet here.
   `error{locked}` and the room sees `exit.locked`; `use <key> on <direction
   |label|room name>` emits `exit.unlocked` and unlocks both sides of a
   two-way door. The product tavern door is locked with the existing gold key.
-- `player.inventory` always carries `capacity` and `used`, in authored
-  `weight` units. A `take`/`get from` that would exceed `capacity` is
-  `error{too_heavy}` with the refused `object`, its `weight`, and the
-  actor's `capacity`/`used`; nothing moves. Same-limit takes are allowed.
+- `player.inventory` always carries `capacity`, `used`, and `unit` (the
+  server-sent display unit, `"stones"` today). Authors write `weight` in
+  kilograms; clients render the unit verbatim, no conversion. A `take`/`get
+  from` that would exceed `capacity` is `error{too_heavy}` with the refused
+  `object`, its `weight`, and the actor's `capacity`/`used`; nothing moves.
+  Same-limit takes are allowed.
 - Every object payload — room listings, `object.*` events, candidate and error
   object refs — and every `player.inventory` item carries the authored
   `weight`, rounded to three decimals (default `0.0`; negatives preserved).

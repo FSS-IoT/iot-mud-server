@@ -221,7 +221,7 @@ class Session:
                 item["name"] for item in items) + "."
         else:
             text = "You are not carrying anything."
-        return {"items": items, "text": text}
+        return {"items": items, "unit": "stones", "text": text}
 
     def error(self, msg_id, code: str, message: str) -> dict:
         return self.envelope("error", {
