@@ -305,8 +305,9 @@ vs "Ada takes the coin.").
 
 A `room.leave` with `reason: "disconnect"` from an authenticated session is a
 sleep, not a removal: `asleep` and `stone` are `true`, and `dropped` lists the
-objects that left the character's inventory (`object{id,name}`). The character
-stays in the room and appears in the next `room.state`.
+objects that left the character's inventory as reduced `object{id,name}`
+references (the next `room.state` carries the full object, including `weight`).
+The character stays in the room and appears in the next `room.state`.
 
 `room.state.data.room`:
 
@@ -681,8 +682,8 @@ closes the socket with `4004`.
 | `object.dropped` | `object{id,kind,name,weight}`, `by`, `self` | Room |
 | `object.opened` | `object{id,kind,name,weight}`, `by`, `self` | Room |
 | `object.closed` | `object{id,kind,name,weight}`, `by`, `self` | Room (v2.1) |
-| `object.put` | `object{...}`, `container{id,name}`, `by`, `self` | Room |
-| `object.got` | `object{...}`, `container{id,name}`, `by`, `self` | Room (v2.1) |
+| `object.put` | `object{...}`, `container{id,kind,name,weight}`, `by`, `self` | Room |
+| `object.got` | `object{...}`, `container{id,kind,name,weight}`, `by`, `self` | Room (v2.1) |
 | `object.read` | `object{id,kind,name,weight}`, `content` | Actor only |
 | `object.lit` | `object{id,kind,name,weight,lit}`, `by`, `self` | Room |
 | `object.unlocked` | `object{id,kind,name,weight}`, `by`, `self` | Room |
@@ -921,6 +922,11 @@ release; a later additive fix still adds a bullet here.
   `weight` units. A `take`/`get from` that would exceed `capacity` is
   `error{too_heavy}` with the refused `object`, its `weight`, and the
   actor's `capacity`/`used`; nothing moves. Same-limit takes are allowed.
+- Every object payload — room listings, `object.*` events, candidate and error
+  object refs — and every `player.inventory` item carries the authored
+  `weight`, rounded to three decimals (default `0.0`; negatives preserved).
+  Additive; v2.0 clients ignore it. `room.leave.dropped[]` remains a reduced
+  `{id,name}` reference, not the full object payload.
 - `take` no longer sends a `player.inventory` follow-up. The actor still gets
   `object.taken` with `self: true`, and the room still gets the `object.taken`
   broadcast with `self: false`. The `player.inventory` event itself is

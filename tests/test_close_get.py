@@ -221,6 +221,7 @@ async def test_get_emits_object_got_and_inventory_follow_up():
     assert actor and room and inventory
     assert actor[0].data["object"]["id"] == "coin"
     assert actor[0].data["container"]["id"] == "chest"
+    assert actor[0].data["container"]["weight"] == 0.0
     assert actor[0].data["self"] is True
     assert room[0].data["self"] is False
     assert inventory[0].data["items"] == [
