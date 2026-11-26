@@ -41,6 +41,17 @@ the YAML world.
   The M2–M5 epics remain parked for v2.2+; several assume SQLite/YAML/auth that
   v2.0 deferred and that v2.1 now delivers.
 
+## Now — v2.2 in progress
+
+Beyond the v2.1 milestone (#62–#91), two tracks are open, both pointing at the
+v2.2 goal below.
+
+- **Architecture** (#131–#139): the actor seam, journal, session/table,
+  scene/renderers, lifecycle, adapter retirement, world index, and character
+  admission.
+- **Weight and inventory** (#144–#149): inventory push, wire weight, `unit`,
+  docs convention, default capacity, and per-character capacity.
+
 ## v2.2 — IoT and LLM
 
 - Semantic effect events with stable IDs, and an MQTT/webhook gateway.
