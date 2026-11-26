@@ -46,3 +46,19 @@ async def test_drop_item_red():
     assert sword not in player.contents
     assert len([c for c in room.contents if not isinstance(c, Player)]) == 1
     assert len(player.contents) == 0
+
+
+@pytest.mark.asyncio
+async def test_inventory_names_the_weight_unit_on_the_wire():
+    """`player.inventory` names its weight unit so a client can label it (#146)."""
+    from src.mud.protocol.adapter import execute
+
+    engine = Engine()
+    room = Room("Forest", "A dark forest.")
+    engine.start_room = room
+    engine.register_player("Hero")
+
+    result = await execute(engine, "Hero", "inventory")
+    payload = result.events[0].data
+
+    assert payload["unit"] == "stones"
