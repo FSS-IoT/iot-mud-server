@@ -223,7 +223,8 @@ async def test_get_emits_object_got_and_inventory_follow_up():
     assert actor[0].data["container"]["id"] == "chest"
     assert actor[0].data["self"] is True
     assert room[0].data["self"] is False
-    assert inventory[0].data["items"] == [{"id": "coin", "name": "Coin"}]
+    assert inventory[0].data["items"] == [
+        {"id": "coin", "name": "Coin", "weight": 0.0}]
     assert coin in player.contents
     assert coin not in chest.contents
 

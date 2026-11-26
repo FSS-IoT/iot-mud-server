@@ -158,7 +158,7 @@ async def test_login_after_a_restart_resumes_the_room_and_the_inventory(tmp_path
             assert state["data"]["room"]["objects"] == []
 
             assert await ada.inventory() == [
-                {"id": "gold_coin", "name": "Gold Coin"},
+                {"id": "gold_coin", "name": "Gold Coin", "weight": 0.01},
             ]
     finally:
         await _stop(server, task)
@@ -298,7 +298,8 @@ def test_character_room_and_inventory_survive_sigkill(tmp_path):
     try:
         room_id, inventory = asyncio.run(_log_in_and_read(port, key))
         assert room_id == "market"
-        assert inventory == [{"id": "gold_coin", "name": "Gold Coin"}]
+        assert inventory == [
+            {"id": "gold_coin", "name": "Gold Coin", "weight": 0.01}]
         os.kill(second.pid, signal.SIGKILL)
         second.wait(timeout=10)
     finally:

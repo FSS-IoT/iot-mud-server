@@ -848,9 +848,9 @@ class Engine:
                          collection: list[Entity] | None = None) -> dict[str, Any]:
         """A stable object descriptor for a semantic event.
 
-        Mirrors the adapter's wire `_object_data` (id, kind, name) so the two
-        agree on instance ids, including the `<kind>-<n>` suffix that tells two
-        of the same prototype apart in one collection.
+        Mirrors the adapter's wire `_object_data` (id, kind, name, weight) so
+        the two agree on instance ids, including the `<kind>-<n>` suffix that
+        tells two of the same prototype apart in one collection.
         """
         base = getattr(entity, "item_id", None) or slug(entity.name)
         ident = getattr(entity, "instance_id", None)
@@ -869,7 +869,9 @@ class Engine:
             else:
                 ident = base
             entity.instance_id = ident
-        return {"id": ident, "kind": base, "name": entity.name}
+        weight = round(float(getattr(entity, "weight", 0.0) or 0.0), 3)
+        return {"id": ident, "kind": base, "name": entity.name,
+                "weight": weight}
 
     async def execute(self, actor: Player, text: str) -> CommandOutcome:
         """Run one command for `actor` and return a typed outcome (#130).

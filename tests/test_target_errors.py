@@ -151,7 +151,8 @@ async def test_inventory_reports_capacity_and_used():
     payload = full.events[0].data
     assert payload["capacity"] == 3.0
     assert payload["used"] == 0.25
-    assert payload["items"] == [{"id": "gold_coin", "name": "Gold Coin"}]
+    assert payload["items"] == [
+        {"id": "gold_coin", "name": "Gold Coin", "weight": 0.25}]
 
 
 # --- target resolution: not found -----------------------------------------

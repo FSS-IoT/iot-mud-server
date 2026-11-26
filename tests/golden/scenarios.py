@@ -117,6 +117,9 @@ async def full_tour(directory: Path) -> GoldenRun:
             # that #54/#56 remove.
             inventory = await command(ada, "inventory", "player.inventory")
             assert inventory["data"]["capacity"] == 30.0
+            assert inventory["data"]["items"]
+            assert all("weight" in item
+                       for item in inventory["data"]["items"])
 
             await walk(run, ada, engine, "shop", "market")
             await walk(run, ben, engine, "shop", "market")
