@@ -12,6 +12,7 @@ It no longer parses verbs, classifies prose, or snapshots world state.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 from src.mud.content import Entity, Player, Room
@@ -24,7 +25,7 @@ def _room_id(room: Room) -> str:
     return room_key(room)
 
 
-def _object_data(entity: Entity, collection: list[Entity]) -> dict[str, Any]:
+def _object_data(entity: Entity, collection: Sequence[Entity]) -> dict[str, Any]:
     """Stable instance id plus the prototype kind.
 
     The world's item id is the prototype. When a collection holds more than one

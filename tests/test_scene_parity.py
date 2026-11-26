@@ -156,6 +156,36 @@ async def test_inventory_prose_and_wire_items_match_the_scene():
     assert "Brass Key" in reply.reply
 
 
+@pytest.mark.asyncio
+async def test_go_into_a_dark_room_hides_the_destination():
+    """Moving into an unlit room hides the destination in prose and state.
+
+    #135 is widened to cover this intentional v1 prose change: v1 retires in
+    #137, and v2 already sends a dark `room.state` with no objects or exits.
+    """
+    engine, ada, hall, vault, _coin, _npc, _key = _world()
+    vault.dark = True
+    vault.exits["south"] = hall
+    vault.add_content(
+        Entity("Vault Coin", "A coin in the dark.", item_id="vault_coin"))
+
+    outcome = await engine.execute(ada, "go north")
+
+    assert "It is too dark to see anything." in outcome.reply
+    assert "A cold vault." not in outcome.reply
+    assert "Exits lead" not in outcome.reply
+    assert "Vault Coin" not in outcome.reply
+
+    state = build_room_state(engine, ada)
+    room = state["room"]
+    assert room["dark"] is True
+    assert room["objects"] == []
+    assert room["players"] == []
+    assert room["npcs"] == []
+    assert room["exits"] == []
+    assert "geometry" not in room
+
+
 async def _inventory_event(engine, ada):
     """Run `inventory` through the v2 adapter and return its items."""
     from src.mud.protocol.adapter import execute
