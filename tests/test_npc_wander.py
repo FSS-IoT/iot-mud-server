@@ -311,8 +311,7 @@ class _FakeSocket:
 def _bind(server: V2Server, name: str) -> _FakeSocket:
     ws = _FakeSocket()
     session = Session(ws=ws, player_name=name, joined=True)
-    server._sessions[ws] = session
-    server._ws_by_name[name] = ws
+    server.sessions.bind(session)
     return ws
 
 

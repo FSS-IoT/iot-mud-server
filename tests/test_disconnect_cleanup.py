@@ -1,10 +1,11 @@
 """Regression: simultaneous disconnects must not fail the room broadcast.
 
 When several authenticated clients close at once, one handler can be in
-`_cleanup` and broadcast `room.leave` to a socket another handler has already
-closed. `_broadcast_room` used to let `websockets.exceptions.ConnectionClosed`
-escape, so the websockets server logged `connection handler failed` for a
-normal disconnect. #89 requires no unhandled exceptions in the playtest.
+`SessionTable.disconnect` and broadcast `room.leave` to a socket another handler
+has already closed. `SessionTable.broadcast_room` used to let
+`websockets.exceptions.ConnectionClosed` escape, so the websockets server
+logged `connection handler failed` for a normal disconnect. #89 requires no
+unhandled exceptions in the playtest.
 """
 
 from __future__ import annotations
@@ -68,10 +69,11 @@ async def test_simultaneous_disconnects_do_not_log_connection_handler_failed(
     await asyncio.gather(*(client.close() for client in clients))
 
     for _ in range(200):
-        if not server._sessions:
+        if server.sessions.is_quiescent:
             break
         await asyncio.sleep(0.01)
-    assert not server._sessions, "a connection handler never finished cleanup"
+    assert server.sessions.is_quiescent, (
+        "a connection handler never finished cleanup")
 
     failures = [
         record

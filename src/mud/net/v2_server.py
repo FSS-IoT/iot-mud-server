@@ -185,26 +185,307 @@ class TokenBucket:
 
 @dataclass
 class Session:
+    """One websocket connection and the policy that belongs to it (#134).
+
+    The session owns what is true only of this connection: its socket, the
+    outbound sequence, the identity phase, the auth-failure budget, the command
+    bucket, the last client message, and the idle deadline. `SessionTable`
+    owns presence and delivery; `V2Server` owns accept, hello, and bootstrap.
+    """
+
     ws: Any
+    clock: Callable[[], float] = time.monotonic
+    # Both limiters read this connection's clock and config. They stay
+    # separate: auth failures never spend command tokens and vice versa.
+    auth_limits: AuthConfig = field(default_factory=AuthConfig)
+    limits: LimitsConfig = field(default_factory=LimitsConfig)
     seq: int = 0
     player_name: str | None = None
     joined: bool = False
     # True for the durable character paths (`auth` register/login). A guest
     # `join` leaves it False and keeps the v2.0 remove-on-disconnect behavior.
     authenticated: bool = False
-    # Auth failure times on the server's clock. The limiter lives here, on the
-    # connection: there is no shared table and no entry keyed by a name, so a
-    # throttled connection can never lock a character name.
+    # Auth failure times on this connection's clock. There is no shared table
+    # and no entry keyed by a name, so a throttled connection can never lock a
+    # character name.
     auth_failures: list[float] = field(default_factory=list)
     # Command-rate bucket, also per connection. It is lazily built on the
     # first `input`, so auth traffic never spends a command token.
     command_bucket: TokenBucket | None = None
-    # The last client message, on the server's clock. Server pushes do not
-    # refresh this; only a message from the client proves it is not idle.
-    last_activity: float = 0.0
+    # The last client message, on this connection's clock. Server pushes do
+    # not refresh this; only a message from the client proves it is not idle.
+    last_activity: float = field(init=False)
     # Set once the #72 sleep path has run for this session, so an idle close
-    # followed by `_cleanup` cannot sleep and broadcast the leave twice.
+    # followed by the disconnect path cannot sleep and broadcast leave twice.
     slept: bool = False
+
+    def __post_init__(self) -> None:
+        self.last_activity = self.clock()
+
+    @property
+    def phase(self) -> str:
+        """The identity phase: `anonymous`, `guest`, or `authenticated`."""
+        if not self.joined:
+            return "anonymous"
+        return "authenticated" if self.authenticated else "guest"
+
+    def bind(self, name: str, *, authenticated: bool) -> None:
+        """Bind this connection to its one character identity."""
+        self.player_name = name
+        self.joined = True
+        self.authenticated = authenticated
+
+    def touch(self) -> None:
+        """Record a client message; server pushes do not refresh idle."""
+        self.last_activity = self.clock()
+
+    @property
+    def idle_deadline(self) -> float:
+        """When this session's idle timeout would fire."""
+        return self.last_activity + self.limits.idle_timeout_seconds
+
+    def idle_expired(self) -> bool:
+        """True once the clock reaches this session's idle deadline."""
+        return self.clock() >= self.idle_deadline
+
+    def note_auth_failure(self) -> None:
+        """Count one typed auth failure against this connection."""
+        self.auth_failures.append(self.clock())
+
+    def auth_is_limited(self) -> bool:
+        """True when this connection spent its failure budget in the window.
+
+        Expired failures are pruned here, which is the whole recovery path:
+        once the clock is a window past them, the budget is empty again.
+        """
+        now = self.clock()
+        window = self.auth_limits.window_seconds
+        recent = [at for at in self.auth_failures if now - at < window]
+        self.auth_failures[:] = recent
+        return len(recent) >= self.auth_limits.max_attempts
+
+    def take_command(self) -> bool:
+        """Spend one command token, building the bucket full on first use."""
+        if self.command_bucket is None:
+            self.command_bucket = TokenBucket.full(
+                self.limits.command_burst,
+                self.limits.commands_per_second,
+                self.clock(),
+            )
+        return self.command_bucket.take(self.clock())
+
+    async def send(self, type_: str, data: dict, *, direct: bool = False,
+                   msg_id: Any = None) -> None:
+        self.seq += 1
+        message = envelope(
+            type_, data, seq=self.seq,
+            msg_id=msg_id if direct else None,
+        )
+        await self.ws.send(json.dumps(message))
+
+    async def send_error(self, code: str, message: str,
+                         msg_id: Any = None) -> None:
+        await self.send(
+            "error",
+            {"code": code, "message": message, "text": message},
+            direct=msg_id is not None, msg_id=msg_id,
+        )
+
+    async def send_auth_error(self, code: str, message: str,
+                              msg_id: Any = None) -> None:
+        """A typed auth failure: direct, echoes the request id, never the key."""
+        if code in AUTH_FAILURE_CODES:
+            self.note_auth_failure()
+        await self.send(
+            "auth.error",
+            {"code": code, "message": message, "text": message},
+            direct=True, msg_id=msg_id,
+        )
+
+    async def close(self, code: int = 1000) -> None:
+        """Close this session's socket; an already-closed peer is not an error."""
+        try:
+            await self.ws.close(code=code)
+        except websockets.exceptions.ConnectionClosed:
+            pass
+
+
+class SessionTable:
+    """Presence and delivery for every live connection (#134).
+
+    This is the one owner of both socket maps. A session is in `_sessions`
+    exactly while its handler is live, and `_ws_by_name` never names a socket
+    absent from `_sessions`; `bind` and `forget` are the only writers.
+    """
+
+    def __init__(self, engine: Engine):
+        self.engine = engine
+        self._sessions: dict[Any, Session] = {}
+        self._ws_by_name: dict[str, Any] = {}
+
+    @property
+    def active(self) -> int:
+        """The number of live session handlers."""
+        return len(self._sessions)
+
+    @property
+    def is_quiescent(self) -> bool:
+        """True when no connection handler has a session left."""
+        return not self._sessions
+
+    def active_sessions(self) -> tuple[Session, ...]:
+        """A snapshot for the server's sweep; callers never mutate it."""
+        return tuple(self._sessions.values())
+
+    def bind(self, session: Session) -> None:
+        """Index a session by socket and, once known, by character name."""
+        self._sessions[session.ws] = session
+        if session.player_name is not None:
+            self._ws_by_name[session.player_name] = session.ws
+
+    def session_for(self, ws) -> Session | None:
+        """The live session for a socket, or None."""
+        return self._sessions.get(ws)
+
+    def session_for_name(self, name: str) -> Session | None:
+        """The live session for `name`, pruning a stale name mapping."""
+        ws = self._ws_by_name.get(name)
+        if ws is None:
+            return None
+        session = self._sessions.get(ws)
+        if session is None or session.player_name != name:
+            if self._ws_by_name.get(name) is ws:
+                self._ws_by_name.pop(name, None)
+            return None
+        return session
+
+    def socket_for_name(self, name: str) -> Any | None:
+        """The socket bound to `name`, or None. The supported presence query."""
+        session = self.session_for_name(name)
+        return session.ws if session is not None else None
+
+    def forget(self, session: Session) -> None:
+        """Drop this session from both maps; safe to call twice."""
+        self._sessions.pop(session.ws, None)
+        name = session.player_name
+        if name is not None and self._ws_by_name.get(name) is session.ws:
+            self._ws_by_name.pop(name, None)
+
+    async def send_to_player(self, name: str, type_: str, data: dict, *,
+                             direct: bool = False,
+                             msg_id: Any = None) -> bool:
+        """Deliver one event to `name`; False when they have no live session."""
+        session = self.session_for_name(name)
+        if session is None:
+            return False
+        try:
+            await session.send(type_, data, direct=direct, msg_id=msg_id)
+        except websockets.exceptions.ConnectionClosed:
+            # A peer can close between the lookup and the send. Drop both
+            # mappings so later pushes skip the socket; its own handler still
+            # owns the leave/sleep transition.
+            self.forget(session)
+            return False
+        return True
+
+    async def broadcast_room(self, room_name: str | None, type_: str,
+                             data: dict,
+                             exclude_name: str | None = None) -> None:
+        """Send one event to every other live session in a room."""
+        if room_name is None:
+            return
+        room = self.engine.get_room(room_name)
+        if room is None:
+            return
+        for player in self.engine.players_in_room(room):
+            if player.name == exclude_name:
+                continue
+            await self.send_to_player(player.name, type_, data)
+
+    async def disconnect(self, session: Session) -> None:
+        """Run the leave/sleep policy, then forget this connection.
+
+        The idle sweep and the handler's `finally` share this path: an
+        authenticated character sleeps in place (#72), a guest is removed, and
+        both maps drop the socket. `Session.slept` and `forget` make it
+        idempotent.
+        """
+        name = session.player_name
+        if name is not None:
+            player = self.engine.get_player(name)
+            if player is not None:
+                room = player.location
+                if session.authenticated:
+                    await self._sleep(session)
+                else:
+                    # The explicit guest path keeps the v2.0
+                    # remove-on-disconnect behavior: no durable character.
+                    if room is not None:
+                        await self.broadcast_room(room.name, "room.leave", {
+                            "room": {"id": _room_id(room), "name": room.name},
+                            "actor": {"name": name},
+                            "reason": "disconnect",
+                            "text": f"{name} has left.",
+                        }, exclude_name=name)
+                    self.engine.remove_player(name)
+        self.forget(session)
+
+    async def expire_idle(self) -> list[Session]:
+        """Sleep and close every authenticated session past its deadline.
+
+        `Session` owns the deadline; the table owns the sweep. Guest sessions
+        have no durable character and are left alone, matching #85.
+        """
+        expired: list[Session] = []
+        for session in self.active_sessions():
+            if not session.authenticated or session.player_name is None:
+                continue
+            if session.slept or not session.idle_expired():
+                continue
+            await self.disconnect(session)
+            await session.close(IDLE_TIMEOUT_CLOSE)
+            expired.append(session)
+        return expired
+
+    async def _sleep(self, session: Session) -> None:
+        """Run the #72 sleep path once for an authenticated session.
+
+        Works for both a disconnect (`disconnect`) and an idle timeout
+        (`expire_idle`). `session.slept` makes it idempotent, so the idle close
+        followed by the handler's disconnect cannot sleep twice or broadcast
+        two `room.leave` events.
+        """
+        name = session.player_name
+        if name is None or session.slept:
+            return
+        session.slept = True
+        player = self.engine.get_player(name)
+        if player is None:
+            return
+        room = player.location
+        # The durable character sleeps in place (#72). Only items marked
+        # `dropped_on_sleep` drop into the room; the rest of the inventory
+        # stays. The store commits each drop before the engine moves it.
+        dropped = []
+        try:
+            dropped = self.engine.sleep_player(name)
+        except StorageWriteError:
+            logger.exception("could not persist sleep for %s", name)
+            player.asleep = True
+        if room is None:
+            return
+        await self.broadcast_room(room.name, "room.leave", {
+            "room": {"id": _room_id(room), "name": room.name},
+            "actor": {"name": name},
+            "reason": "disconnect",
+            "asleep": True,
+            "stone": True,
+            "dropped": [
+                {"id": object_key(item), "name": item.name}
+                for item in dropped
+            ],
+            "text": f"{name} turns to stone.",
+        }, exclude_name=name)
 
 
 class V2Server:
@@ -262,69 +543,20 @@ class V2Server:
         self._server = None
         self._idle_task: asyncio.Task | None = None
         self._wander_task: asyncio.Task | None = None
-        self._sessions: dict[Any, Session] = {}
-        self._ws_by_name: dict[str, Any] = {}
+        # Presence, delivery, and idle expiry live in one collaborator; the
+        # server never owns either socket map (#134).
+        self.sessions = SessionTable(engine)
 
     # ------------------------------------------------------------------
-    # Sending
+    # Room delivery
     # ------------------------------------------------------------------
-
-    async def _send(self, ws, session: Session, type_: str, data: dict,
-                    *, direct: bool = False, msg_id: Any = None) -> None:
-        session.seq += 1
-        message = envelope(
-            type_, data, seq=session.seq,
-            msg_id=msg_id if direct else None,
-        )
-        await ws.send(json.dumps(message))
-
-    async def _send_error(self, ws, session: Session, code: str, message: str,
-                          msg_id: Any = None) -> None:
-        await self._send(
-            ws, session, "error",
-            {"code": code, "message": message, "text": message},
-            direct=msg_id is not None, msg_id=msg_id,
-        )
-
-    async def _send_auth_error(self, ws, session: Session, code: str,
-                               message: str, msg_id: Any = None) -> None:
-        """A typed auth failure: direct, echoes the request id, never the key."""
-        if code in AUTH_FAILURE_CODES:
-            session.auth_failures.append(self.clock())
-        await self._send(
-            ws, session, "auth.error",
-            {"code": code, "message": message, "text": message},
-            direct=True, msg_id=msg_id,
-        )
-
-    def _auth_is_limited(self, session: Session) -> bool:
-        """True when this connection spent its failure budget in the window.
-
-        Expired failures are pruned here, which is the whole recovery path:
-        once the clock is a window past them, the budget is empty again.
-        """
-        now = self.clock()
-        window = self.auth_limits.window_seconds
-        recent = [at for at in session.auth_failures if now - at < window]
-        session.auth_failures[:] = recent
-        return len(recent) >= self.auth_limits.max_attempts
-
-    def _command_bucket(self, session: Session) -> TokenBucket:
-        """This connection's command bucket, created full on first use."""
-        if session.command_bucket is None:
-            session.command_bucket = TokenBucket.full(
-                self.limits.command_burst,
-                self.limits.commands_per_second,
-                self.clock(),
-            )
-        return session.command_bucket
 
     async def _announce_connect(self, player) -> None:
         """Tell the character's room that it arrived."""
         room = player.location
         if room is None:
             return
-        await self._broadcast_room(room.name, "room.enter", {
+        await self.sessions.broadcast_room(room.name, "room.enter", {
             "room": {"id": _room_id(room), "name": room.name},
             "actor": {"name": player.name},
             "reason": "connect",
@@ -343,43 +575,8 @@ class V2Server:
             return
         room = data.get("room")
         room_name = room.get("name") if isinstance(room, dict) else None
-        await self._broadcast_room(
+        await self.sessions.broadcast_room(
             room_name, "effect", data, exclude_name=None)
-
-    async def _broadcast_room(self, room_name: str | None, type_: str,
-                              data: dict,
-                              exclude_name: str | None = None) -> None:
-        if room_name is None:
-            return
-        room = self.engine.get_room(room_name)
-        if room is None:
-            return
-        for player in self.engine.players_in_room(room):
-            if player.name == exclude_name:
-                continue
-            target = self._ws_by_name.get(player.name)
-            if target is None:
-                continue
-            session = self._sessions.get(target)
-            if session is None:
-                # The handler finished between the name lookup and the send.
-                self._forget_connection(target, player.name)
-                continue
-            try:
-                await self._send(target, session, type_, data, direct=False)
-            except websockets.exceptions.ConnectionClosed:
-                # Simultaneous disconnects can close a peer after the lookup
-                # above and before this send. A normal disconnect is not an
-                # unhandled handler failure: drop the stale mappings so later
-                # pushes skip the socket. The target's own `_cleanup` still
-                # owns its sleep/leave transition.
-                self._forget_connection(target, player.name)
-
-    def _forget_connection(self, ws, name: str | None = None) -> None:
-        """Drop a socket that a send (or lookup) just proved closed."""
-        self._sessions.pop(ws, None)
-        if name is not None and self._ws_by_name.get(name) is ws:
-            self._ws_by_name.pop(name, None)
 
     def _room_by_key(self, room_id: str | None):
         """The loaded room stored under `room_id`, or None if it is unknown.
@@ -398,59 +595,57 @@ class V2Server:
     # Handlers
     # ------------------------------------------------------------------
 
-    async def _handle_join(self, ws, session: Session, msg: dict) -> None:
+    async def _handle_join(self, session: Session, msg: dict) -> None:
         msg_id = msg.get("id")
         if session.joined:
-            await self._send_error(ws, session, "already_joined",
-                                   "This connection has already joined.",
-                                   msg_id)
+            await session.send_error("already_joined",
+                                     "This connection has already joined.",
+                                     msg_id)
             return
 
         if self.auth_required:
-            await self._send_error(ws, session, "not_authenticated",
-                                   "Authenticate before joining.", msg_id)
+            await session.send_error("not_authenticated",
+                                     "Authenticate before joining.", msg_id)
             return
 
         data = msg.get("data")
         if data is None:
             data = {}
         if not isinstance(data, dict):
-            await self._send_error(ws, session, "malformed_message",
-                                   "The data field must be an object.",
-                                   msg_id)
+            await session.send_error("malformed_message",
+                                     "The data field must be an object.",
+                                     msg_id)
             return
         name = data.get("name")
         if not isinstance(name, str) or not name.strip():
-            await self._send_error(ws, session, "bad_args",
-                                   "Join needs a non-empty name.", msg_id)
+            await session.send_error("bad_args",
+                                     "Join needs a non-empty name.", msg_id)
             return
         name = name.strip()
 
         try:
             player = self.engine.register_player(name)
         except ValueError:
-            await self._send_error(ws, session, "name_taken",
-                                   f"The name {name!r} is already in use.",
-                                   msg_id)
+            await session.send_error(
+                "name_taken", f"The name {name!r} is already in use.", msg_id)
             return
 
-        session.player_name = name
-        session.joined = True
-        self._ws_by_name[name] = ws
+        session.bind(name, authenticated=False)
+        self.sessions.bind(session)
 
-        await self._send(ws, session, "session.ok", {
+        await session.send("session.ok", {
             "player": {"name": name},
             "world": {"name": self.world_name, "epoch": self.epoch},
             "mode": "guest",
             "text": f"Welcome, {name}.",
         }, direct=True, msg_id=msg_id)
 
-        await self._send(ws, session, "room.state",
-                         build_room_state(self.engine, player))
+        await session.send("room.state",
+                           build_room_state(self.engine, player))
 
         await self._announce_connect(player)
 
-    async def _handle_auth(self, ws, session: Session, msg: dict) -> None:
+    async def _handle_auth(self, session: Session, msg: dict) -> None:
         """Route one `auth` message, enforcing the per-connection budget first.
 
         A connection over its budget gets `auth.error{rate_limited}` before its
@@ -460,56 +655,53 @@ class V2Server:
         """
         msg_id = msg.get("id")
         if session.joined:
-            await self._send_auth_error(
-                ws, session, "already_joined",
+            await session.send_auth_error(
+                "already_joined",
                 "This connection has already joined.", msg_id)
             return
 
-        if self._auth_is_limited(session):
-            await self._send_auth_error(
-                ws, session, "rate_limited", RATE_LIMITED_MESSAGE, msg_id)
+        if session.auth_is_limited():
+            await session.send_auth_error(
+                "rate_limited", RATE_LIMITED_MESSAGE, msg_id)
             return
 
         data = msg.get("data")
         if data is None:
             data = {}
         if not isinstance(data, dict):
-            await self._send_error(ws, session, "malformed_message",
-                                   "The data field must be an object.",
-                                   msg_id)
+            await session.send_error("malformed_message",
+                                     "The data field must be an object.",
+                                     msg_id)
             return
 
         mode = data.get("mode")
         if mode == "register":
-            await self._auth_register(ws, session, data, msg_id)
+            await self._auth_register(session, data, msg_id)
             return
         if mode == "login":
-            await self._auth_login(ws, session, data, msg_id)
+            await self._auth_login(session, data, msg_id)
             return
-        await self._send_auth_error(
-            ws, session, "bad_args",
-            "Auth mode must be 'register' or 'login'.", msg_id)
+        await session.send_auth_error(
+            "bad_args", "Auth mode must be 'register' or 'login'.", msg_id)
 
-    async def _auth_register(self, ws, session: Session, data: dict,
+    async def _auth_register(self, session: Session, data: dict,
                              msg_id: Any) -> None:
         """Register a name, issue its first key, and enter the world."""
         try:
             name = normalize_name(data.get("name"))
         except AuthError as exc:
-            await self._send_auth_error(
-                ws, session, exc.code, str(exc), msg_id)
+            await session.send_auth_error(exc.code, str(exc), msg_id)
             return
 
         if self.engine.get_player(name) is not None:
-            await self._send_auth_error(
-                ws, session, "name_taken",
-                f"The name {name!r} is already in use.", msg_id)
+            await session.send_auth_error(
+                "name_taken", f"The name {name!r} is already in use.", msg_id)
             return
 
         start_room = self.engine.current_location
         if self.db is None or start_room is None:
-            await self._send_auth_error(
-                ws, session, "internal",
+            await session.send_auth_error(
+                "internal",
                 "The server cannot create characters right now.", msg_id)
             return
 
@@ -517,19 +709,16 @@ class V2Server:
             registration = register_character(
                 self.db, name, start_room=start_room)
         except AuthError as exc:
-            await self._send_auth_error(
-                ws, session, exc.code, str(exc), msg_id)
+            await session.send_auth_error(exc.code, str(exc), msg_id)
             return
 
         player = self.engine.register_player(registration.name)
-        session.player_name = registration.name
-        session.joined = True
-        session.authenticated = True
-        self._ws_by_name[registration.name] = ws
+        session.bind(registration.name, authenticated=True)
+        self.sessions.bind(session)
 
         # The key appears here and nowhere else: not in the session, the room
         # state, a broadcast, a log line, or the database.
-        await self._send(ws, session, "auth.ok", {
+        await session.send("auth.ok", {
             "player": {"name": registration.name},
             "world": {"name": self.world_name, "epoch": self.epoch},
             "mode": "register",
@@ -538,12 +727,12 @@ class V2Server:
                      "shown only once."),
         }, direct=True, msg_id=msg_id)
 
-        await self._send(ws, session, "room.state",
-                         build_room_state(self.engine, player))
+        await session.send("room.state",
+                           build_room_state(self.engine, player))
 
         await self._announce_connect(player)
 
-    async def _auth_login(self, ws, session: Session, data: dict,
+    async def _auth_login(self, session: Session, data: dict,
                           msg_id: Any) -> None:
         """Verify a key and bind the session to its durable character.
 
@@ -553,23 +742,20 @@ class V2Server:
         logged.
         """
         if self.db is None:
-            await self._send_auth_error(
-                ws, session, "internal",
-                "The server cannot check keys right now.", msg_id)
+            await session.send_auth_error(
+                "internal", "The server cannot check keys right now.", msg_id)
             return
 
         try:
             login = login_character(self.db, data.get("key"))
         except AuthError as exc:
-            await self._send_auth_error(
-                ws, session, exc.code, str(exc), msg_id)
+            await session.send_auth_error(exc.code, str(exc), msg_id)
             return
 
         existing = self.engine.get_player(login.name)
         if existing is not None and not existing.asleep:
-            await self._send_auth_error(
-                ws, session, "name_taken",
-                "That character is already in play.", msg_id)
+            await session.send_auth_error(
+                "name_taken", "That character is already in play.", msg_id)
             return
 
         # Login wakes the character where the store left it, carrying what the
@@ -595,61 +781,58 @@ class V2Server:
             logger.exception("could not wake %s", login.name)
             if existing is None:
                 self.engine.remove_player(login.name)
-            await self._send_auth_error(
-                ws, session, "internal",
-                "The character could not be woken right now.", msg_id)
+            await session.send_auth_error(
+                "internal", "The character could not be woken right now.",
+                msg_id)
             return
 
-        session.player_name = login.name
-        session.joined = True
-        session.authenticated = True
-        self._ws_by_name[login.name] = ws
+        session.bind(login.name, authenticated=True)
+        self.sessions.bind(session)
 
         # No key field: a login response never repeats the credential.
-        await self._send(ws, session, "auth.ok", {
+        await session.send("auth.ok", {
             "player": {"name": login.name},
             "world": {"name": self.world_name, "epoch": self.epoch},
             "mode": "login",
             "text": f"Welcome back, {login.name}.",
         }, direct=True, msg_id=msg_id)
 
-        await self._send(ws, session, "room.state",
-                         build_room_state(self.engine, player))
+        await session.send("room.state",
+                           build_room_state(self.engine, player))
 
         await self._announce_connect(player)
 
-    async def _handle_input(self, ws, session: Session, msg: dict) -> int | None:
+    async def _handle_input(self, session: Session, msg: dict) -> int | None:
         msg_id = msg.get("id")
         if not session.joined or session.player_name is None:
             if self.auth_required:
-                await self._send_error(ws, session, "not_authenticated",
-                                       "Authenticate before sending commands.",
-                                       msg_id)
+                await session.send_error(
+                    "not_authenticated",
+                    "Authenticate before sending commands.", msg_id)
             else:
-                await self._send_error(ws, session, "not_joined",
-                                       "Join before sending commands.", msg_id)
+                await session.send_error(
+                    "not_joined", "Join before sending commands.", msg_id)
             return None
         if session.slept:
             # An idle frame that was already in flight must not run a command
             # for a stone character. The idle path is closing with this code.
             return IDLE_TIMEOUT_CLOSE
         if msg_id is None:
-            await self._send_error(ws, session, "bad_args",
-                                   "Input needs a request id.")
+            await session.send_error("bad_args", "Input needs a request id.")
             return None
 
         data = msg.get("data")
         if data is None:
             data = {}
         if not isinstance(data, dict):
-            await self._send_error(ws, session, "malformed_message",
-                                   "The data field must be an object.",
-                                   msg_id)
+            await session.send_error("malformed_message",
+                                     "The data field must be an object.",
+                                     msg_id)
             return None
         text = data.get("text")
         if not isinstance(text, str):
-            await self._send_error(ws, session, "bad_args",
-                                   "Input needs a text string.", msg_id)
+            await session.send_error(
+                "bad_args", "Input needs a text string.", msg_id)
             return None
 
         # `quit`/`exit` are commands in the v1 vocabulary and in the protocol's
@@ -662,10 +845,9 @@ class V2Server:
         # The command bucket is separate from the auth-failure budget. A
         # limited command is a direct typed error that echoes the request id;
         # the socket stays open and the bucket refills on the clock.
-        if not self._command_bucket(session).take(self.clock()):
-            await self._send_error(
-                ws, session, "rate_limited",
-                COMMAND_RATE_LIMITED_MESSAGE, msg_id)
+        if not session.take_command():
+            await session.send_error(
+                "rate_limited", COMMAND_RATE_LIMITED_MESSAGE, msg_id)
             return None
 
         result = await execute(self.engine, session.player_name, text)
@@ -674,8 +856,8 @@ class V2Server:
 
         for outbound in result.events:
             if outbound.target == "actor":
-                await self._send(
-                    ws, session, outbound.type, outbound.data,
+                await session.send(
+                    outbound.type, outbound.data,
                     direct=outbound.direct,
                     msg_id=msg_id if outbound.direct else None,
                 )
@@ -684,47 +866,34 @@ class V2Server:
                 # reply to the actor's request id and it never reaches the
                 # room. A target that left between resolution and delivery
                 # gets nothing; there is no offline queue.
-                target_name = outbound.player_name
-                target_ws = (
-                    self._ws_by_name.get(target_name)
-                    if target_name is not None else None
-                )
-                target_session = (
-                    self._sessions.get(target_ws)
-                    if target_ws is not None else None
-                )
-                if target_ws is None or target_session is None:
-                    continue
-                try:
-                    await self._send(
-                        target_ws, target_session, outbound.type,
-                        outbound.data, direct=outbound.direct,
+                if outbound.player_name is not None:
+                    await self.sessions.send_to_player(
+                        outbound.player_name, outbound.type, outbound.data,
+                        direct=outbound.direct,
                     )
-                except websockets.exceptions.ConnectionClosed:
-                    continue
             else:
                 room_name = outbound.room_name or (
                     current_room.name if current_room is not None else None)
-                await self._broadcast_room(
+                await self.sessions.broadcast_room(
                     room_name, outbound.type, outbound.data,
                     exclude_name=session.player_name,
                 )
         return None
 
-    async def _route(self, ws, session: Session, msg: Any) -> int | None:
+    async def _route(self, session: Session, msg: Any) -> int | None:
         """Route one decoded message. Returns a close code to stop, else None."""
         if not isinstance(msg, dict):
-            await self._send_error(ws, session, "malformed_message",
-                                   "A message must be a JSON object.")
+            await session.send_error("malformed_message",
+                                     "A message must be a JSON object.")
             return None
 
         if "v" not in msg or msg.get("v") is None:
-            await self._send_error(ws, session, "malformed_message",
-                                   "Missing protocol version.")
+            await session.send_error("malformed_message",
+                                     "Missing protocol version.")
             return None
         if msg.get("v") != PROTOCOL_VERSION:
-            await self._send_error(
-                ws, session, "unsupported_version",
+            await session.send_error(
+                "unsupported_version",
                 f"Protocol {msg.get('v')!r} is not supported; this server "
                 f"speaks {PROTOCOL_VERSION}.",
             )
@@ -732,114 +901,20 @@ class V2Server:
 
         kind = msg.get("type")
         if kind == "auth":
-            await self._handle_auth(ws, session, msg)
+            await self._handle_auth(session, msg)
             return None
         if kind == "join":
-            await self._handle_join(ws, session, msg)
+            await self._handle_join(session, msg)
             return None
         if kind == "input":
-            return await self._handle_input(ws, session, msg)
+            return await self._handle_input(session, msg)
         if kind == "quit":
             return 1000
 
-        await self._send_error(ws, session, "unknown_message",
-                               f"Unknown message type: {kind!r}.",
-                               msg.get("id"))
+        await session.send_error(
+            "unknown_message", f"Unknown message type: {kind!r}.",
+            msg.get("id"))
         return None
-
-    async def _sleep_authenticated(self, session: Session) -> None:
-        """Run the #72 sleep path once for an authenticated session.
-
-        Works for both a disconnect (`_cleanup`) and an idle timeout
-        (`check_idle_timeouts`). `session.slept` makes it idempotent, so the
-        idle close followed by the handler's cleanup cannot sleep twice or
-        broadcast two `room.leave` events.
-        """
-        name = session.player_name
-        if name is None or session.slept:
-            return
-        session.slept = True
-        player = self.engine.get_player(name)
-        if player is None:
-            return
-        room = player.location
-        # The durable character sleeps in place (#72). Only items marked
-        # `dropped_on_sleep` drop into the room; the rest of the inventory
-        # stays. The store commits each drop before the engine moves it.
-        dropped = []
-        try:
-            dropped = self.engine.sleep_player(name)
-        except StorageWriteError:
-            logger.exception("could not persist sleep for %s", name)
-            player.asleep = True
-        if room is None:
-            return
-        await self._broadcast_room(room.name, "room.leave", {
-            "room": {"id": _room_id(room), "name": room.name},
-            "actor": {"name": name},
-            "reason": "disconnect",
-            "asleep": True,
-            "stone": True,
-            "dropped": [
-                {"id": object_key(item), "name": item.name}
-                for item in dropped
-            ],
-            "text": f"{name} turns to stone.",
-        }, exclude_name=name)
-
-    async def _cleanup(self, session: Session) -> None:
-        name = session.player_name
-        if name is None:
-            return
-        try:
-            player = self.engine.get_player(name)
-            if player is None:
-                return
-            room = player.location
-            if session.authenticated:
-                await self._sleep_authenticated(session)
-            else:
-                # The explicit guest path keeps the v2.0 remove-on-disconnect
-                # behavior: there is no durable character to sleep.
-                if room is not None:
-                    await self._broadcast_room(room.name, "room.leave", {
-                        "room": {"id": _room_id(room), "name": room.name},
-                        "actor": {"name": name},
-                        "reason": "disconnect",
-                        "text": f"{name} has left.",
-                    }, exclude_name=name)
-                self.engine.remove_player(name)
-        finally:
-            # An idle close may already have let a fresh login bind the same
-            # character to a new socket; only this session's mapping is ours
-            # to remove.
-            if self._ws_by_name.get(name) is session.ws:
-                self._ws_by_name.pop(name, None)
-
-    async def check_idle_timeouts(self) -> None:
-        """Sleep authenticated sessions whose last client message is too old.
-
-        The monitor below calls this on `idle_poll_seconds`; tests advance the
-        injected clock and call it directly, so no test waits for a timeout.
-        The character sleeps first (#72), then the socket closes with `4004`.
-        Guest sessions have no durable character and are left alone.
-        """
-        now = self.clock()
-        timeout = self.limits.idle_timeout_seconds
-        for ws, session in list(self._sessions.items()):
-            if not session.authenticated or session.player_name is None:
-                continue
-            if session.slept:
-                continue
-            if now - session.last_activity < timeout:
-                continue
-            await self._sleep_authenticated(session)
-            if self._ws_by_name.get(session.player_name) is ws:
-                self._ws_by_name.pop(session.player_name, None)
-            try:
-                await ws.close(code=IDLE_TIMEOUT_CLOSE)
-            except websockets.exceptions.ConnectionClosed:
-                pass
 
     async def _idle_loop(self) -> None:
         while not self._stop_event.is_set():
@@ -850,7 +925,7 @@ class V2Server:
             except TimeoutError:
                 pass
             try:
-                await self.check_idle_timeouts()
+                await self.sessions.expire_idle()
             except Exception:
                 logger.exception("idle sweep failed")
 
@@ -863,20 +938,20 @@ class V2Server:
         `direction` fields. `room.state` (on `look` or a move) remains the
         resynchronization path for clients that ignore the events.
 
-        The broadcast reuses `_broadcast_room` unchanged and passes an empty
-        exclude name: an NPC move excludes nobody. The task that paces this
-        method is separate from the idle monitor and from connection cleanup
-        (#86).
+        The broadcast reuses `SessionTable.broadcast_room` unchanged and
+        passes an empty exclude name: an NPC move excludes nobody. The task
+        that paces this method is separate from the idle monitor and from
+        connection cleanup (#86).
         """
         moves = await self.engine.tick_world()
         for move in moves:
             data = move.event_data()
-            await self._broadcast_room(
+            await self.sessions.broadcast_room(
                 move.from_room.name, "npc.leave",
                 {**data, "text": f"{move.npc_name} leaves."},
                 exclude_name="",
             )
-            await self._broadcast_room(
+            await self.sessions.broadcast_room(
                 move.to_room.name, "npc.enter",
                 {**data, "text": f"{move.npc_name} arrives."},
                 exclude_name="",
@@ -898,8 +973,13 @@ class V2Server:
                 logger.exception("npc wander tick failed")
 
     async def handler(self, websocket) -> None:
-        session = Session(ws=websocket, last_activity=self.clock())
-        self._sessions[websocket] = session
+        session = Session(
+            ws=websocket,
+            clock=self.clock,
+            auth_limits=self.auth_limits,
+            limits=self.limits,
+        )
+        self.sessions.bind(session)
         try:
             hello = {
                 "server": "iot-mud-server",
@@ -912,41 +992,37 @@ class V2Server:
             }
             if self.auth_required:
                 hello["auth_modes"] = list(AUTH_MODES)
-            await self._send(websocket, session, "hello", hello)
+            await session.send("hello", hello)
 
             async for raw in websocket:
                 # Only a client message proves the client is not idle; server
                 # pushes deliberately do not refresh this.
-                session.last_activity = self.clock()
+                session.touch()
                 try:
                     message = json.loads(raw)
                 except json.JSONDecodeError:
-                    await self._send_error(
-                        websocket, session, "malformed_message",
+                    await session.send_error(
+                        "malformed_message",
                         "That message was not valid JSON.")
                     continue
 
                 try:
-                    close_code = await self._route(websocket, session, message)
+                    close_code = await self._route(session, message)
                 except Exception:
                     logger.exception("v2 handler failed on a message")
-                    await self._send_error(
-                        websocket, session, "internal",
+                    await session.send_error(
+                        "internal",
                         "The server could not process that command.")
                     continue
 
                 if close_code is not None:
-                    await websocket.close(code=close_code)
+                    await session.close(close_code)
                     break
         except websockets.exceptions.ConnectionClosed:
             pass
         finally:
-            await self._cleanup(session)
-            self._sessions.pop(websocket, None)
-            try:
-                await websocket.close()
-            except websockets.exceptions.ConnectionClosed:
-                pass
+            await self.sessions.disconnect(session)
+            await session.close()
 
     async def run(self) -> None:
         if self.db_path is not None:
