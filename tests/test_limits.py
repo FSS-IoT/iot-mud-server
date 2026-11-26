@@ -351,7 +351,7 @@ async def test_idle_client_sleeps_in_place_and_closes_with_4004(tmp_path):
         # is old enough for the sweep.
         await ben.input("look", "ben-awake")
         await ben.next("room.state", msg_id="ben-awake")
-        await instance.check_idle_timeouts()
+        await instance.sessions.expire_idle()
 
         assert await ada.close_code() == IDLE_TIMEOUT_CLOSE
 
@@ -403,10 +403,10 @@ async def test_client_activity_resets_the_idle_clock(tmp_path):
 
         # 20s since the last message, not 40s since registration.
         clock.advance(20.0)
-        await instance.check_idle_timeouts()
+        await instance.sessions.expire_idle()
         assert ada.ws.close_code is None
 
         # Ten more seconds empty the 30s budget since that last message.
         clock.advance(10.0)
-        await instance.check_idle_timeouts()
+        await instance.sessions.expire_idle()
         assert await ada.close_code() == IDLE_TIMEOUT_CLOSE
