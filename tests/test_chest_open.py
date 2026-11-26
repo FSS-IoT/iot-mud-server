@@ -10,16 +10,15 @@ These tests expect an `open` verb that does not exist yet, so they fail now (RED
 
 import pytest
 
-from src.mud.content import Entity, Player, Room
+from src.mud.content import Entity, Room
 from src.mud.engine.core import Engine
 
 
 async def _setup():
     engine = Engine()
-    player = Player("Ada", "A brave adventurer.")
     room = Room("Market", "A busy marketplace.")
-    engine.player = player
-    engine._player_location = room
+    engine.start_room = room
+    player = engine.register_player("Ada")
     events = []
     await engine.subscribe("chest_opened", lambda *_: events.append(True))
     return engine, player, room, events
@@ -32,7 +31,7 @@ async def test_open_locked_chest_refused():
     chest = Entity("Chest", "A sturdy oak chest.", locked=True, required_key="key_gold_1")
     room.add_content(chest)
 
-    response = await engine.process_command("open chest")
+    response = await engine.process_command("open chest", "Ada")
 
     assert "lock" in response.lower()
     assert chest.locked is True
@@ -47,7 +46,7 @@ async def test_open_unlocked_chest_reveals_contents():
     chest.add_content(lantern)
     room.add_content(chest)
 
-    response = await engine.process_command("open chest")
+    response = await engine.process_command("open chest", "Ada")
 
     assert "lantern" in response.lower()
     assert lantern in chest.contents  # stays inside; `get` pulls it out
@@ -64,8 +63,8 @@ async def test_get_after_open():
     chest.add_content(lantern)
     room.add_content(chest)
 
-    await engine.process_command("open chest")
-    response = await engine.process_command("get lantern from chest")
+    await engine.process_command("open chest", "Ada")
+    response = await engine.process_command("get lantern from chest", "Ada")
 
     assert lantern in player.contents
     assert lantern not in chest.contents
@@ -79,6 +78,6 @@ async def test_open_empty_chest():
     chest = Entity("Chest", "A sturdy oak chest.")
     room.add_content(chest)
 
-    response = await engine.process_command("open chest")
+    response = await engine.process_command("open chest", "Ada")
 
     assert "empty" in response.lower()

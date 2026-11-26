@@ -88,7 +88,7 @@ def _corridor() -> tuple[Engine, Room, Room, Room]:
 def _place(engine: Engine, name: str, room: Room):
     player = engine.get_player(name)
     if player is None:
-        engine._player_location = room
+        engine.start_room = room
         player = engine.register_player(name)
         return player
     if player.location is not None:

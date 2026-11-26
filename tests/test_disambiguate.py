@@ -8,16 +8,15 @@ exist yet, so they fail now (RED).
 
 import pytest
 
-from src.mud.content import Entity, Player, Room
+from src.mud.content import Entity, Room
 from src.mud.engine.core import Engine
 
 
 async def _setup():
     engine = Engine()
-    _player = Player("Ada", "A brave adventurer.")
     room = Room("Market", "A busy marketplace.")
-    engine.player = _player
-    engine._player_location = room
+    engine.start_room = room
+    _player = engine.register_player("Ada")
     return engine, _player, room
 
 
@@ -28,7 +27,7 @@ async def test_unique_item_still_resolves_bare_name():
     gold = Entity("Gold Key", "A heavy gold key.")
     room.add_content(gold)
 
-    await engine.process_command("take key")
+    await engine.process_command("take key", player)
 
     assert gold in player.contents
 
@@ -40,7 +39,7 @@ async def test_bare_name_is_ambiguous():
     room.add_content(Entity("Gold Key", "A heavy gold key."))
     room.add_content(Entity("Silver Key", "A slender silver key."))
 
-    response = await engine.process_command("take key")
+    response = await engine.process_command("take key", player)
 
     assert "several" in response.lower()
     assert "gold key" in response.lower()
@@ -57,7 +56,7 @@ async def test_disambiguate_by_index_first():
     room.add_content(gold)
     room.add_content(silver)
 
-    await engine.process_command("take key 1")
+    await engine.process_command("take key 1", player)
 
     assert gold in player.contents
     assert silver not in player.contents
@@ -72,7 +71,7 @@ async def test_disambiguate_by_index_second():
     room.add_content(gold)
     room.add_content(silver)
 
-    await engine.process_command("take key 2")
+    await engine.process_command("take key 2", player)
 
     assert silver in player.contents
     assert gold not in player.contents
@@ -84,7 +83,7 @@ async def test_disambiguate_bad_index():
     engine, player, room = await _setup()
     room.add_content(Entity("Gold Key", "A heavy gold key."))
 
-    response = await engine.process_command("take key 3")
+    response = await engine.process_command("take key 3", player)
 
     assert "no key" in response.lower()
     assert not player.contents
@@ -97,7 +96,7 @@ async def test_bare_index_does_not_match_every_item():
     coin = Entity("Gold Coin", "A gold coin.")
     room.add_content(coin)
 
-    response = await engine.process_command("take 1")
+    response = await engine.process_command("take 1", player)
 
     assert "no 1" in response.lower()
     assert coin in room.contents
@@ -111,7 +110,7 @@ async def test_examine_ambiguous():
     room.add_content(Entity("Gold Key", "A heavy gold key."))
     room.add_content(Entity("Silver Key", "A slender silver key."))
 
-    response = await engine.process_command("examine key")
+    response = await engine.process_command("examine key", _player)
 
     assert "several" in response.lower()
 
@@ -124,6 +123,6 @@ async def test_put_ambiguous_item():
     player.add_content(Entity("Gold Key", "A heavy gold key."))
     player.add_content(Entity("Silver Key", "A slender silver key."))
 
-    response = await engine.process_command("put key in chest")
+    response = await engine.process_command("put key in chest", player)
 
     assert "several" in response.lower()

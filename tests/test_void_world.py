@@ -1,5 +1,7 @@
 import pytest
+
 from src.mud.engine.core import Engine
+
 
 @pytest.mark.asyncio
 async def test_engine_initialization_is_empty():
@@ -8,5 +10,5 @@ async def test_engine_initialization_is_empty():
     
     # Assertions against expected PUBLIC API
     assert len(engine.rooms) == 0, "New engine should start with no rooms."
-    assert engine.player is None, "New engine should have no player."
+    assert engine.start_room is None, "New engine should have no spawn room."
     assert engine.current_location is None, "New engine should have no location."

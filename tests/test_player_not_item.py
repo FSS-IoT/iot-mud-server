@@ -21,7 +21,7 @@ def _market():
     room.add_content(coin)
     room.add_content(chest)
     engine._rooms[room.name] = room
-    engine._player_location = room
+    engine.start_room = room
     ada = engine.register_player("Ada")
     ben = engine.register_player("Ben")
     ben.add_content(key)

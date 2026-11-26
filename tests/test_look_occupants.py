@@ -28,14 +28,14 @@ async def engine_with_world():
 
 
 @pytest.mark.asyncio
-async def test_look_without_player_name_is_unchanged(engine_with_world):
-    """Backward compatibility: no player_name -> legacy behavior, no occupants line."""
+async def test_look_without_other_occupants_is_unchanged(engine_with_world):
+    """A solo registered player sees the room, with no occupants line."""
     engine = engine_with_world
-    # Legacy single-player plumbing still drives look.
     room = Room("Hallway", "A narrow corridor.")
-    engine._player_location = room
+    engine.start_room = room
+    player = engine.register_player("Adventurer")
 
-    response = await engine.process_command("look")
+    response = await engine.process_command("look", player)
     assert "A narrow corridor." in response
 
 

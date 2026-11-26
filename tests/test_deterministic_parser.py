@@ -1,14 +1,16 @@
 import pytest
-from src.mud.engine.core import Engine
+
 from src.mud.content import Entity, Room
+from src.mud.engine.core import Engine
 
 
 @pytest.mark.asyncio
 async def test_deterministic_parsing():
     """[TASK-007] Verify that specific syntax is handled deterministically."""
     engine = Engine()
+    player = engine.register_player("Adventurer")
 
-    result = await engine.process_command("say hello world")
+    result = await engine.process_command("say hello world", player)
     assert result == 'You say, "hello world".'
 
 
@@ -19,11 +21,11 @@ async def test_command_alias_deterministic():
     room = Room("Clearing", "A quiet clearing.")
     sword = Entity("Sword", "A blunt sword.")
     room.add_content(sword)
-    engine._player_location = room
-    engine.player = Entity("Adventurer", "A traveler.")
+    engine.start_room = room
+    player = engine.register_player("Adventurer")
 
-    result = await engine.process_command("get sword")
+    result = await engine.process_command("get sword", player)
 
     assert "picked up" in result.lower()
-    assert sword in engine.player.contents
+    assert sword in player.contents
     assert sword not in room.contents

@@ -115,11 +115,12 @@ class SemanticEvent:
 class CommandOutcome:
     """The engine's typed answer to one command (#130).
 
-    ``process_command`` still returns a bare reply string for legacy callers.
-    ``Engine.execute`` returns this instead: the presentation reply, a typed
-    success-or-error status with the error code, and the semantic events the
-    command produced. An adapter maps it to wire events without parsing the
-    command again or diffing world state.
+    ``process_command`` is a string shim over this that still requires an
+    actor (a `Player` or a registered name). ``Engine.execute`` returns the
+    typed result: the presentation reply, a typed success-or-error status with
+    the error code, and the semantic events the command produced. An adapter
+    maps it to wire events without parsing the command again or diffing world
+    state.
 
     ``error_data`` carries the extra fields a typed refusal includes on the
     wire — `ambiguous` candidates, the `too_heavy` capacity/used numbers, the

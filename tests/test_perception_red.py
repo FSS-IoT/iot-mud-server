@@ -1,6 +1,8 @@
 import pytest
+
+from src.mud.content import Room
 from src.mud.engine.core import Engine
-from src.mud.content import Entity, Room
+
 
 @pytest.mark.asyncio
 async def test_automatic_room_description_red():
@@ -12,11 +14,11 @@ async def test_automatic_room_description_red():
     r2 = Room("Garden", "A beautiful garden full of flowers.")
     r1.exits["north"] = r2
     
-    engine._player_location = r1
-    engine.player = Entity("Adventurer", "Player")
+    engine.start_room = r1
+    player = engine.register_player("Adventurer")
 
     # Action: Move North
-    response = await engine.process_command("go north")
+    response = await engine.process_command("go north", player)
     
     # Assertions: The response MUST contain the description of the target room (R2)
     assert "A beautiful garden full of flowers" in response, f"Response did not contain the new room's description. Got: '{response}'"

@@ -1,6 +1,8 @@
+
 import pytest
-import asyncio
+
 from src.mud.engine.core import Engine
+
 
 @pytest.mark.asyncio
 async def test_engine_emits_command_event():
@@ -15,7 +17,8 @@ async def test_engine_emits_command_event():
     # The 'subscribe' method does not exist yet in the current implementation of Engine.
     # This is intentional for the RED phase.
     await engine.subscribe("command_processed", listener)
+    player = engine.register_player("Adventurer")
 
-    await engine.process_command("look")
+    await engine.process_command("look", player)
 
     assert len(events_received) > 0, "The engine did not emit any events for the command 'look'."

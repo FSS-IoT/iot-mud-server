@@ -107,6 +107,12 @@ async def test_scripted_full_session(running_server):
 
     async with websockets.connect(uri) as websocket:
         await _read_handshake(websocket)
+        await websocket.send(json.dumps({
+            "v": 1, "type": "join", "id": "join",
+            "data": {"name": "Ada"},
+        }))
+        while json.loads(await websocket.recv())["type"] != "room_state":
+            pass
 
         commands = ["look", "go north", "take gold coin", "drop gold coin"]
         results = []

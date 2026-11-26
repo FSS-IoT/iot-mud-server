@@ -1,10 +1,10 @@
 """Red-green fixes for bug 3: movement and position awareness for registered players.
 
-Bug 3: `go` (and the other interaction commands) only moved the legacy
-single-player slot (`engine._player_location` / `engine.player`). A registered,
-named player never actually moved — so `look`, which reads the registered
-player's `.location`, reported a stale room. Movement and item handling were not
-shared between the two slots.
+Bug 3: `go` (and the other interaction commands) only moved a legacy
+single-player slot. A registered, named player never actually moved — so
+`look`, which reads the player's `.location`, reported a stale room. Movement
+and item handling were not shared between the two slots. The engine now has one
+required actor per command (#133).
 
 This file covers movement + position broadcasting:
 
@@ -42,7 +42,7 @@ def _two_room_engine():
     gate.exits["north"] = market
     engine._rooms["Village Gate"] = gate
     engine._rooms["Marketplace"] = market
-    engine._player_location = gate
+    engine.start_room = gate
     return engine
 
 
@@ -89,12 +89,13 @@ async def test_registered_move_emits_player_moved():
 
 @pytest.mark.asyncio
 async def test_legacy_move_still_works_without_player_name():
-    """Backward compat: no player_name still moves the legacy slot."""
+    """Moving the single actor updates that actor's location."""
     engine = _two_room_engine()
+    player = engine.register_player("Adventurer")
 
-    await engine.process_command("go north")
+    await engine.process_command("go north", player)
 
-    assert engine._player_location.name == "Marketplace"
+    assert player.location.name == "Marketplace"
 
 
 # ---------------------------------------------------------------------------

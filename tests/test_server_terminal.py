@@ -39,7 +39,7 @@ def _two_room_engine():
     gate.exits["north"] = market
     engine._rooms["Village Gate"] = gate
     engine._rooms["Marketplace"] = market
-    engine._player_location = gate
+    engine.start_room = gate
     return engine
 
 

@@ -1,7 +1,9 @@
+
 import pytest
-import asyncio
-from src.mud.content import Entity, Room
+
+from src.mud.content import Room
 from src.mud.engine.core import Engine
+
 
 @pytest.mark.asyncio
 async def test_spatial_graph_movement_green():
@@ -17,12 +19,13 @@ async def test_spatial_graph_movement_green():
         "Hall": hall,
         "Kitchen": kitchen
     }
-    engine._player_location = hall
+    engine.start_room = hall
+    player = engine.register_player("Adventurer")
     
     # Action: Attempt to travel through the graph
-    await engine.process_command("go north")
+    await engine.process_command("go north", player)
     
     # Assertions: The player should now point to the Kitchen OBJECT, not a string key
-    assert engine._player_location is kitchen
-    assert engine._player_location.name == "Kitchen"
-    assert isinstance(engine._player_location, Room)
+    assert player.location is kitchen
+    assert player.location.name == "Kitchen"
+    assert isinstance(player.location, Room)

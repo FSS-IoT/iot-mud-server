@@ -13,16 +13,15 @@ not exist yet, so they fail now (RED).
 
 import pytest
 
-from src.mud.content import Entity, Player, Room
+from src.mud.content import Entity, Room
 from src.mud.engine.core import Engine
 
 
 def _setup():
     engine = Engine()
-    player = Player("Ada", "A brave adventurer.")
     room = Room("Forest", "Trees loom high.")
-    engine.player = player
-    engine._player_location = room
+    engine.start_room = room
+    player = engine.register_player("Ada")
     return engine, player, room
 
 
@@ -35,7 +34,7 @@ async def test_use_key_on_unlocked_chest_matches():
     room.add_content(chest)
     player.add_content(key)
 
-    response = await engine.process_command("use gold key on chest")
+    response = await engine.process_command("use gold key on chest", "Ada")
 
     assert "unlock" in response.lower() or "open" in response.lower()
     assert chest.locked is False
@@ -50,7 +49,7 @@ async def test_use_wrong_key_fails():
     room.add_content(chest)
     player.add_content(key)
 
-    response = await engine.process_command("use gold key on chest")
+    response = await engine.process_command("use gold key on chest", "Ada")
 
     assert "unlock" not in response.lower()
     assert chest.locked is True
@@ -63,6 +62,6 @@ async def test_use_key_without_chest_fails():
     key = Entity("Gold Key", "A small gold key.", item_id="key_gold_1")
     player.add_content(key)
 
-    response = await engine.process_command("use gold key on chest")
+    response = await engine.process_command("use gold key on chest", "Ada")
 
     assert response is not None

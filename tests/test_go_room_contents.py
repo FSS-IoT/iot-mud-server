@@ -9,8 +9,8 @@ duplicated this reply.
 
 import pytest
 
-from src.mud.engine.core import Engine
 from src.mud.content import Entity, Room
+from src.mud.engine.core import Engine
 
 
 @pytest.mark.asyncio
@@ -23,7 +23,7 @@ async def test_go_reply_includes_destination_items():
     coin = Entity("Gold Coin", "A shiny, minted copper coin.", weight=0.01)
     market.add_content(coin)
     engine._rooms = {"Village Gate": gate, "Marketplace": market}
-    engine._player_location = gate
+    engine.start_room = gate
     engine.register_player("Ada")
 
     response = await engine.process_command("go north", "Ada")
@@ -40,7 +40,7 @@ async def test_go_reply_without_items_has_no_contents_line():
     hall = Room("Hallway", "A narrow corridor.")
     gate.exits["north"] = hall
     engine._rooms = {"Village Gate": gate, "Hallway": hall}
-    engine._player_location = gate
+    engine.start_room = gate
     engine.register_player("Ada")
 
     response = await engine.process_command("go north", "Ada")
@@ -51,7 +51,7 @@ async def test_go_reply_without_items_has_no_contents_line():
 
 @pytest.mark.asyncio
 async def test_legacy_go_reply_includes_destination_items():
-    """Backward compat: the legacy (no player_name) path also shows room contents."""
+    """The single actor path also shows room contents on arrival."""
     engine = Engine()
     gate = Room("Village Gate", "A heavy stone gate stands tall.")
     market = Room("Marketplace", "Lightly vendors cry out their wares.")
@@ -59,9 +59,10 @@ async def test_legacy_go_reply_includes_destination_items():
     coin = Entity("Gold Coin", "A shiny, minted copper coin.", weight=0.01)
     market.add_content(coin)
     engine._rooms = {"Village Gate": gate, "Marketplace": market}
-    engine._player_location = gate
+    engine.start_room = gate
+    player = engine.register_player("Adventurer")
 
-    response = await engine.process_command("go north")
+    response = await engine.process_command("go north", player)
 
     assert "Marketplace" in response
     assert "Gold Coin" in response

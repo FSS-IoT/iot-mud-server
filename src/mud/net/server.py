@@ -21,6 +21,10 @@ class MudServer:
         # Maps a live websocket to the name its client announced on `join`.
         # Used to correlate players with sockets for join/leave broadcasts.
         self._ws_to_player: Dict[Any, str] = {}
+        # The actor each connection commands as. Set at `join`; before a join
+        # (the v1 protocol allows early input) a per-connection solo actor runs
+        # in the start room, so the engine always has an actor (#133).
+        self._ws_actor: Dict[Any, Player] = {}
 
     async def handler(self, websocket) -> None:
         """Handles the connection lifecycle and command routing."""
@@ -50,11 +54,11 @@ class MudServer:
                     if data.get("type") == "join":
                         await self._handle_join(websocket, data)
                     elif data.get("type") == "input":
-                        # Render from this socket's registered player so `look`
-                        # can name the other occupants of the room.
-                        player_name = self._ws_to_player.get(websocket)
+                        # Commands run as this connection's actor: the joined
+                        # player, or a solo actor before a join.
+                        actor = self._actor_for(websocket)
                         result_text = await self.engine.process_command(
-                            data["data"]["text"], player_name
+                            data["data"]["text"], actor
                         )
 
                         response = {
@@ -79,6 +83,7 @@ class MudServer:
             logger.error(f"Error in handler loop: {e}")
         finally:
             # A socket closed: if it announced a player, tell the room they left.
+            self._ws_actor.pop(websocket, None)
             name = self._ws_to_player.pop(websocket, None)
             if name is not None and self.engine.get_player(name) is not None:
                 # Broadcast first (while the player still has a location so we
@@ -87,18 +92,32 @@ class MudServer:
                 self.engine.remove_player(name)
             await websocket.close()
 
+    def _actor_for(self, websocket) -> Player:
+        """The actor this connection commands as.
+
+        The registered player after ``join``; before that, a per-connection solo
+        actor placed at the start room so the engine always has an actor.
+        """
+        actor = self._ws_actor.get(websocket)
+        if actor is None:
+            actor = Player("Adventurer")
+            actor.location = self.engine.start_room
+            self._ws_actor[websocket] = actor
+        return actor
+
     async def _handle_join(self, websocket, data: Dict[str, Any]) -> None:
         """Register the caller as a named player and notify roommates."""
         name = data.get("data", {}).get("name")
         if not name or not isinstance(name, str):
             return
         try:
-            self.engine.register_player(name)
+            player = self.engine.register_player(name)
         except ValueError:
             # Name already in use; the protocol says reject duplicates. Ignore a
             # duplicate `join` rather than crash the connection over it.
             return
 
+        self._ws_actor[websocket] = player
         self._ws_to_player[websocket] = name
 
         # Tell everyone already in the room that a newcomer has arrived.

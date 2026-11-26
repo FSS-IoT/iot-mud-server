@@ -32,7 +32,7 @@ def _engine(*items, capacity=2.0):
     room = Room("Market", "A busy market.")
     room.item_id = "market"
     engine._rooms[room.name] = room
-    engine._player_location = room
+    engine.start_room = room
     player = engine.register_player("Ada")
     player.capacity = capacity
     for item in items:
@@ -353,7 +353,7 @@ async def target_server(tmp_path):
     room = Room("Market", "A busy market.")
     room.item_id = "market"
     engine._rooms[room.name] = room
-    engine._player_location = room
+    engine.start_room = room
     room.add_content(Entity("Boulder", "A granite boulder.", weight=20.0,
                             item_id="boulder"))
     room.add_content(Entity("Gold Key", "A gold key.", weight=0.1,

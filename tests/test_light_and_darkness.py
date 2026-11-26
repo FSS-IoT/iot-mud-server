@@ -18,7 +18,7 @@ and existing demo tests are unaffected; this file proves the dark path works.
 
 import pytest
 
-from src.mud.content import Entity, Room, Player
+from src.mud.content import Entity, Room
 from src.mud.engine.core import Engine
 
 
@@ -29,19 +29,17 @@ def _dark_room_with_torch():
     coin = Entity("Gold Coin", "A shiny, minted copper coin.")
     room.add_content(coin)
     engine._rooms["Cave"] = room
-    engine._player_location = room
+    engine.start_room = room
+    engine.register_player("Ada")
     return engine, room
 
 
 def _lit_room_with_torch():
     """A dark room with a Torch on the floor and a player holding the Torch."""
-    from src.mud.content import Player
     engine, room = _dark_room_with_torch()
-    player = Player("Ada")
+    player = engine.get_player("Ada")
     torch = Entity("Torch", "A flickering wooden torch.", light_source=True)
     player.add_content(torch)  # carried items live in the player's contents
-    engine._player_location = room
-    engine.player = player  # legacy single-player slot holds the player
     return engine, room
 
 
@@ -50,7 +48,7 @@ async def test_dark_room_blocks_look():
     """`look` in a dark room reports darkness, not the room's contents."""
     engine, _room = _dark_room_with_torch()
 
-    response = await engine.process_command("look")
+    response = await engine.process_command("look", "Ada")
 
     assert "dark" in response.lower()
     assert "Here you see" not in response
@@ -61,7 +59,7 @@ async def test_dark_room_blocks_examine():
     """`examine coin` in a dark room fails — you cannot see it."""
     engine, _room = _dark_room_with_torch()
 
-    response = await engine.process_command("examine coin")
+    response = await engine.process_command("examine coin", "Ada")
 
     assert "dark" in response.lower()
 
@@ -73,7 +71,7 @@ async def test_dark_room_blocks_read():
     sign = Entity("Sign", "A wooden sign.", readable=True)
     room.add_content(sign)
 
-    response = await engine.process_command("read sign")
+    response = await engine.process_command("read sign", "Ada")
 
     assert "dark" in response.lower()
 
@@ -81,15 +79,13 @@ async def test_dark_room_blocks_read():
 @pytest.mark.asyncio
 async def test_carrying_lit_torch_lights_the_room():
     """Carrying a *lit* light source lets the player see in a dark room."""
-    from src.mud.content import Player
     engine, _room = _dark_room_with_torch()
-    player = Player("Ada")
+    player = engine.get_player("Ada")
     torch = Entity("Torch", "A flickering wooden torch.", light_source=True)
     torch.lit = True  # a carried light only sheds light once it is lit
     player.add_content(torch)  # carried items live in the player's contents
-    engine.player = player  # legacy single-player slot holds the player
 
-    response = await engine.process_command("look")
+    response = await engine.process_command("look", "Ada")
 
     assert "dark" not in response.lower()
     assert "Here you see" in response
@@ -104,9 +100,10 @@ async def test_room_light_source_lights_the_room():
     coin = Entity("Gold Coin", "A shiny, minted copper coin.")
     room.add_content(coin)
     engine._rooms["Lantern Room"] = room
-    engine._player_location = room
+    engine.start_room = room
+    engine.register_player("Ada")
 
-    response = await engine.process_command("look")
+    response = await engine.process_command("look", "Ada")
 
     assert "Here you see" in response
     assert "dark" not in response.lower()
@@ -120,21 +117,18 @@ async def test_lit_room_default_sees_items():
     coin = Entity("Gold Coin", "A shiny, minted copper coin.")
     room.add_content(coin)
     engine._rooms["Market"] = room
-    engine._player_location = room
+    engine.start_room = room
+    engine.register_player("Ada")
 
-    response = await engine.process_command("look")
+    response = await engine.process_command("look", "Ada")
 
     assert "Here you see" in response
     assert "Gold Coin" in response
 
 
 def _make_dark_room_player():
-    """A dark room plus a Player standing in it (legacy slot holds the player)."""
+    """A dark room plus a registered player standing in it."""
     engine, room = _dark_room_with_torch()
-    player = Player("Ada")
-    player.location = room
-    engine._player_location = room
-    engine.player = player
     return engine, room
 
 
@@ -148,7 +142,7 @@ async def test_dark_room_visible_state_hides_items():
     """
     engine, room = _make_dark_room_player()
 
-    view = engine.visible_room_state(engine.player)
+    view = engine.visible_room_state(engine.get_player("Ada"))
 
     assert view["name"] == room.name
     assert view["dark"] is True
@@ -161,11 +155,9 @@ async def test_lit_room_visible_state_shows_items():
     """A lit room's visible state lists its items and other occupants."""
     engine, room = _make_dark_room_player()
     room.dark = False
-    other = Player("Bo")
-    other.location = room
-    engine._players["Bo"] = other
+    engine.register_player("Bo")
 
-    view = engine.visible_room_state(engine.player)
+    view = engine.visible_room_state(engine.get_player("Ada"))
 
     assert view["dark"] is False
     assert "Gold Coin" in view["items"]

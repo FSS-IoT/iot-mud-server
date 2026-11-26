@@ -33,9 +33,10 @@ async def test_look_lists_items_in_room():
     coin = Entity("Gold Coin", "A shiny, minted copper coin.", weight=0.01)
     gate.add_content(coin)
     engine._rooms["Village Gate"] = gate
-    engine._player_location = gate
+    engine.start_room = gate
+    player = engine.register_player("Ada")
 
-    response = await engine.process_command("look")
+    response = await engine.process_command("look", player)
 
     assert "A heavy stone gate stands tall." in response
     # The item is visible without guessing the command.
@@ -50,7 +51,7 @@ async def test_look_omits_players_from_item_line():
     torch = Entity("Torch", "A flickering wooden torch.", weight=0.5)
     room.add_content(torch)
     engine._rooms["Market"] = room
-    engine._player_location = room
+    engine.start_room = room
 
     # Register two players both standing in the market.
     p1 = engine.register_player("Ada")
@@ -72,9 +73,10 @@ async def test_look_without_items_has_no_item_line():
     engine = Engine()
     room = Room("Empty", "A hollow chamber.")
     engine._rooms["Empty"] = room
-    engine._player_location = room
+    engine.start_room = room
+    player = engine.register_player("Ada")
 
-    response = await engine.process_command("look")
+    response = await engine.process_command("look", player)
 
     assert "A hollow chamber." in response
 

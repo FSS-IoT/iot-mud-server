@@ -7,16 +7,15 @@ behave do not exist yet, so they fail now (RED).
 
 import pytest
 
-from src.mud.content import Entity, Player, Room
+from src.mud.content import Entity, Room
 from src.mud.engine.core import Engine
 
 
 async def _setup():
     engine = Engine()
-    _player = Player("Ada", "A brave adventurer.")
     room = Room("Market", "A busy marketplace.")
-    engine.player = _player
-    engine._player_location = room
+    engine.start_room = room
+    _player = engine.register_player("Ada")
     return engine, _player, room
 
 
@@ -29,7 +28,7 @@ async def test_look_in_reveals_contents():
     chest.add_content(lantern)
     room.add_content(chest)
 
-    response = await engine.process_command("look in chest")
+    response = await engine.process_command("look in chest", "Ada")
 
     assert "lantern" in response.lower()
 
@@ -43,7 +42,7 @@ async def test_look_inside_reveals_contents():
     chest.add_content(lantern)
     room.add_content(chest)
 
-    response = await engine.process_command("look inside chest")
+    response = await engine.process_command("look inside chest", "Ada")
 
     assert "lantern" in response.lower()
 
@@ -55,7 +54,7 @@ async def test_look_in_locked_refused():
     chest = Entity("Chest", "A sturdy oak chest.", locked=True, required_key="key_gold_1")
     room.add_content(chest)
 
-    response = await engine.process_command("look in chest")
+    response = await engine.process_command("look in chest", "Ada")
 
     assert "lock" in response.lower()
 
@@ -67,6 +66,6 @@ async def test_look_in_empty():
     chest = Entity("Chest", "A sturdy oak chest.")
     room.add_content(chest)
 
-    response = await engine.process_command("look in chest")
+    response = await engine.process_command("look in chest", "Ada")
 
     assert "empty" in response.lower()

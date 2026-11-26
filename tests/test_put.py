@@ -9,16 +9,15 @@ These expect a `put` verb that does not exist yet, so they fail now (RED).
 
 import pytest
 
-from src.mud.content import Entity, Player, Room
+from src.mud.content import Entity, Room
 from src.mud.engine.core import Engine
 
 
 async def _setup():
     engine = Engine()
-    _player = Player("Ada", "A brave adventurer.")
     room = Room("Market", "A busy marketplace.")
-    engine.player = _player
-    engine._player_location = room
+    engine.start_room = room
+    _player = engine.register_player("Ada")
     return engine, _player, room
 
 
@@ -32,7 +31,7 @@ async def test_put_into_open_chest():
     room.add_content(chest)
     player.add_content(lantern)
 
-    await engine.process_command("put lantern in chest")
+    await engine.process_command("put lantern in chest", "Ada")
 
     assert lantern in chest.contents
     assert lantern not in player.contents
@@ -48,7 +47,7 @@ async def test_put_item_whose_name_contains_in():
     room.add_content(chest)
     player.add_content(coin)
 
-    response = await engine.process_command("put gold coin in chest")
+    response = await engine.process_command("put gold coin in chest", "Ada")
 
     assert response == "You put the Gold Coin in the Chest."
     assert coin in chest.contents
@@ -62,7 +61,7 @@ async def test_put_without_in_returns_hint():
     coin = Entity("Gold Coin", "A gold coin.")
     player.add_content(coin)
 
-    response = await engine.process_command("put gold coin")
+    response = await engine.process_command("put gold coin", "Ada")
 
     assert "put what where" in response.lower()
     assert coin in player.contents
@@ -77,7 +76,7 @@ async def test_put_into_alias():
     room.add_content(chest)
     player.add_content(coin)
 
-    response = await engine.process_command("put gold coin into chest")
+    response = await engine.process_command("put gold coin into chest", "Ada")
 
     assert response == "You put the Gold Coin in the Chest."
     assert coin in chest.contents
@@ -92,7 +91,7 @@ async def test_put_with_empty_side_returns_hint():
     coin = Entity("Gold Coin", "A gold coin.")
     player.add_content(coin)
 
-    response = await engine.process_command("put in chest")
+    response = await engine.process_command("put in chest", "Ada")
 
     assert "put what where" in response.lower()
     assert coin in player.contents
@@ -105,7 +104,7 @@ async def test_put_missing_item():
     chest = Entity("Chest", "A sturdy oak chest.")
     room.add_content(chest)
 
-    response = await engine.process_command("put lantern in chest")
+    response = await engine.process_command("put lantern in chest", "Ada")
 
     assert "carrying" in response.lower()
 
@@ -117,7 +116,7 @@ async def test_put_missing_container():
     lantern = Entity("Brass Lantern", "A brass lantern.", light_source=True)
     player.add_content(lantern)
 
-    response = await engine.process_command("put lantern in chest")
+    response = await engine.process_command("put lantern in chest", "Ada")
 
     assert "chest" in response.lower()
 
@@ -131,7 +130,7 @@ async def test_put_into_locked_chest():
     room.add_content(chest)
     player.add_content(lantern)
 
-    response = await engine.process_command("put lantern in chest")
+    response = await engine.process_command("put lantern in chest", "Ada")
 
     assert "lock" in response.lower()
     assert lantern in player.contents
