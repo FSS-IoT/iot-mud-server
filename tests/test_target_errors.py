@@ -354,7 +354,7 @@ async def target_server(tmp_path):
     room.item_id = "market"
     engine._rooms[room.name] = room
     engine.start_room = room
-    room.add_content(Entity("Boulder", "A granite boulder.", weight=20.0,
+    room.add_content(Entity("Boulder", "A granite boulder.", weight=40.0,
                             item_id="boulder"))
     room.add_content(Entity("Gold Key", "A gold key.", weight=0.1,
                             item_id="gold_key"))
@@ -391,7 +391,7 @@ async def test_command_errors_never_drop_the_socket(target_server):
         heavy = await client.next("error")
         assert heavy["id"] == 2
         assert heavy["data"]["code"] == "too_heavy"
-        assert heavy["data"]["capacity"] == 12.0
+        assert heavy["data"]["capacity"] == 30.0
         assert heavy["data"]["used"] == 0.0
 
         await client.input("take key", 3)

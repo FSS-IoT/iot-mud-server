@@ -472,7 +472,7 @@ should treat `text` as presentation.
 `player.inventory.capacity` and `used` are always present in v2.1. Both use
 the same unit as the authored object `weight`: `used` is the sum of the
 carried objects' own weights (nested container contents are not counted a
-second time), rounded to three decimals. The server default is `12.0`.
+second time), rounded to three decimals. The server default is `30.0`.
 
 ### NPC dialogue (v2.1)
 
@@ -613,8 +613,8 @@ put `used` above `capacity`:
   "code":"too_heavy",
   "message":"You cannot carry the Boulder; it is too heavy.",
   "object":{"id":"boulder","kind":"boulder","name":"Boulder"},
-  "weight":20.0,
-  "capacity":12.0,
+  "weight":35.0,
+  "capacity":30.0,
   "used":1.5
 }}
 ```
