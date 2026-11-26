@@ -361,3 +361,38 @@ async def test_dark_room_hides_objects(vault):
     assert state["objects"] == []
     assert state["players"] == []
     assert "dark" in result.events[0].data["text"].lower()
+
+
+@pytest.mark.asyncio
+async def test_object_payloads_carry_weight(vault):
+    """Room listings, object events, and inventory items all carry `weight`."""
+    engine, _player, room, chest, coin, _key = vault
+    chest.remove_content(coin)
+    coin.weight = 2.5
+    room.add_content(coin)
+
+    look = await execute(engine, "Ada", "look")
+    objects = {obj["id"]: obj for obj in look.events[0].data["room"]["objects"]}
+    assert objects["coin"]["weight"] == 2.5
+
+    taken = await execute(engine, "Ada", "take coin")
+    actor = _events(taken, "object.taken", "actor")[0]
+    assert actor.data["object"]["weight"] == 2.5
+
+    inventory = await execute(engine, "Ada", "inventory")
+    items = {item["id"]: item for item in inventory.events[0].data["items"]}
+    assert items["coin"]["weight"] == 2.5
+
+
+@pytest.mark.asyncio
+async def test_weight_defaults_to_zero_and_negatives_are_preserved(vault):
+    engine, _player, room, chest, coin, _key = vault
+    chest.remove_content(coin)
+    room.add_content(coin)  # authored weight defaults to 0.0
+    feather = Entity("Feather", "A feather.", weight=-0.5, item_id="feather")
+    room.add_content(feather)
+
+    look = await execute(engine, "Ada", "look")
+    objects = {obj["id"]: obj for obj in look.events[0].data["room"]["objects"]}
+    assert objects["coin"]["weight"] == 0.0
+    assert objects["feather"]["weight"] == -0.5
