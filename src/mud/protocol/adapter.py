@@ -48,7 +48,12 @@ def _object_data(entity: Entity, collection: list[Entity]) -> dict[str, Any]:
         else:
             ident = base
         entity.instance_id = ident
-    return {"id": ident, "kind": base, "name": entity.name}
+    return {
+        "id": ident,
+        "kind": base,
+        "name": entity.name,
+        "weight": _weight(float(getattr(entity, "weight", 0.0) or 0.0)),
+    }
 
 
 def build_room_state(engine: Engine, player: Player) -> dict[str, Any]:
@@ -198,7 +203,8 @@ def _inventory_data(engine: Engine, player: Player,
             text = "You are not carrying anything."
     payload = []
     for item in items:
-        entry = {"id": item["id"], "name": item["name"]}
+        entry = {"id": item["id"], "name": item["name"],
+                 "weight": item["weight"]}
         if "lit" in item:
             entry["lit"] = item["lit"]
         payload.append(entry)

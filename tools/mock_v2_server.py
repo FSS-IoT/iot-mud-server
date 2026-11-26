@@ -57,31 +57,34 @@ ROOMS = {
 ITEMS = {
     "sign": {
         "id": "sign", "kind": "sign", "name": "Village Sign",
-        "portable": True, "readable": True,
+        "weight": 0.5, "portable": True, "readable": True,
         "description": "A wooden signpost. The arrows point North to the "
                        "Marketplace; the Old Tavern is east of the market.",
     },
     "gold_coin": {
         "id": "gold_coin", "kind": "gold_coin", "name": "Gold Coin",
-        "portable": True, "description": "A shiny, minted copper coin.",
+        "weight": 0.01, "portable": True,
+        "description": "A shiny, minted copper coin.",
     },
     "torch": {
         "id": "torch", "kind": "torch", "name": "Torch",
-        "portable": True, "light_source": True, "lit": False,
+        "weight": 0.5, "portable": True, "light_source": True, "lit": False,
         "description": "A flickering wooden torch.",
     },
     "gold_key": {
         "id": "gold_key", "kind": "gold_key", "name": "Gold Key",
-        "portable": True, "description": "A small gold key, warm to the touch.",
+        "weight": 0.05, "portable": True,
+        "description": "A small gold key, warm to the touch.",
     },
     "brass_lantern": {
         "id": "brass_lantern", "kind": "brass_lantern",
-        "name": "Brass Lantern", "portable": True, "light_source": True,
-        "lit": False, "description": "A brass lantern, its wick still dry.",
+        "name": "Brass Lantern", "weight": 0.8, "portable": True,
+        "light_source": True, "lit": False,
+        "description": "A brass lantern, its wick still dry.",
     },
     "chest": {
         "id": "chest_forest", "kind": "chest_forest", "name": "Chest",
-        "portable": True, "container": True,
+        "weight": 10.0, "portable": True, "container": True,
         "description": "A sturdy oak chest, bound in rusted iron.",
     },
 }
@@ -156,6 +159,7 @@ class Session:
 
     def _item(self, key: str) -> dict:
         item = dict(ITEMS[key])
+        item.setdefault("weight", 0.0)
         if key == "chest":
             item["locked"] = self.world.chest_locked
             item["open"] = self.world.chest_open

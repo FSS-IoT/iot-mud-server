@@ -283,7 +283,7 @@ async def test_disconnect_sleeps_in_place_and_drops_flagged_items(tmp_path):
         assert ok["data"]["player"] == {"name": "Ada"}
         assert state["data"]["room"]["id"] == "shop"
         assert await ada.inventory() == [
-            {"id": "gold_coin", "name": "Gold Coin"},
+            {"id": "gold_coin", "name": "Gold Coin", "weight": 0.01},
         ]
         assert "key_gold_1" in [
             item.item_id for item in engine.get_room("Alchemist Shop").contents]

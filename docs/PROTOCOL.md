@@ -320,8 +320,8 @@ stays in the room and appears in the next `room.state`.
     {"direction": "north", "to": "market", "locked": false}
   ],
   "objects": [
-    {"id": "sign", "kind": "sign", "name": "Village Sign", "portable": true, "readable": true},
-    {"id": "chest_forest", "kind": "chest_forest", "name": "Chest", "portable": true, "container": true, "open": false}
+    {"id": "sign", "kind": "sign", "name": "Village Sign", "weight": 0.5, "portable": true, "readable": true},
+    {"id": "chest_forest", "kind": "chest_forest", "name": "Chest", "weight": 10.0, "portable": true, "container": true, "open": false}
   ],
   "players": [{"name": "Ben"}],
   "npcs": [{"id": "npc_merchant", "name": "Mira the Merchant"}]
@@ -439,7 +439,7 @@ unknown field.
 
 | Type | Data | Recipients |
 |---|---|---|
-| `player.inventory` | `items[]{id,name,lit?}`, `capacity`, `used` | Actor only (v2.1) |
+| `player.inventory` | `items[]{id,name,weight,lit?}`, `capacity`, `used` | Actor only (v2.1) |
 | `player.said` | `from`, `text`, `self` | Room, including actor |
 | `player.emoted` | `from`, `text`, `self` | Room, including actor (v2.1) |
 | `player.told` | `from`, `to`, `text`, `self` | Target and sender (v2.1) |
@@ -612,7 +612,7 @@ put `used` above `capacity`:
 {"type":"error","data":{
   "code":"too_heavy",
   "message":"You cannot carry the Boulder; it is too heavy.",
-  "object":{"id":"boulder","kind":"boulder","name":"Boulder"},
+  "object":{"id":"boulder","kind":"boulder","name":"Boulder","weight":35.0},
   "weight":35.0,
   "capacity":30.0,
   "used":1.5
@@ -649,7 +649,7 @@ nothing moves:
 }}
 ```
 
-`candidates` are the same `{id,kind,name}` objects `object.taken` uses, in the
+`candidates` are the same `{id,kind,name,weight}` objects `object.taken` uses, in the
 same display-name order the index addresses. `ambiguous` is the v2.1 spelling;
 the v2.0 name `ambiguous_target` remains reserved and is not sent by a v2.1
 server. Every command `error` is non-fatal: the socket stays open.
@@ -677,15 +677,15 @@ closes the socket with `4004`.
 
 | Type | Data | Recipients |
 |---|---|---|
-| `object.taken` | `object{id,kind,name}`, `by`, `self` | Room |
-| `object.dropped` | `object{id,kind,name}`, `by`, `self` | Room |
-| `object.opened` | `object{id,kind,name}`, `by`, `self` | Room |
-| `object.closed` | `object{id,kind,name}`, `by`, `self` | Room (v2.1) |
+| `object.taken` | `object{id,kind,name,weight}`, `by`, `self` | Room |
+| `object.dropped` | `object{id,kind,name,weight}`, `by`, `self` | Room |
+| `object.opened` | `object{id,kind,name,weight}`, `by`, `self` | Room |
+| `object.closed` | `object{id,kind,name,weight}`, `by`, `self` | Room (v2.1) |
 | `object.put` | `object{...}`, `container{id,name}`, `by`, `self` | Room |
 | `object.got` | `object{...}`, `container{id,name}`, `by`, `self` | Room (v2.1) |
-| `object.read` | `object{id,name}`, `content` | Actor only |
-| `object.lit` | `object{id,kind,name,lit}`, `by`, `self` | Room |
-| `object.unlocked` | `object{id,kind,name}`, `by`, `self` | Room |
+| `object.read` | `object{id,kind,name,weight}`, `content` | Actor only |
+| `object.lit` | `object{id,kind,name,weight,lit}`, `by`, `self` | Room |
+| `object.unlocked` | `object{id,kind,name,weight}`, `by`, `self` | Room |
 | `exit.locked` | `exit{direction,to}`, `room{id,name}`, `by`, `self` | Room, except actor (v2.1) |
 | `exit.unlocked` | `exit{direction,to}`, `room{id,name}`, `by`, `self` | Room, including actor (v2.1) |
 
@@ -934,7 +934,7 @@ release; a later additive fix still adds a bullet here.
   then a case-insensitive prefix, then the v2.0 substring match; leading
   `the`/`a`/`an` is filler, and `<name> <n>` still selects the 1-based sorted
   match. A miss is `error{not_found}`; a tie is `error{ambiguous}` with
-  `candidates[]{id,kind,name}`. This replaces the v2.0 `ambiguous_target`
+  `candidates[]{id,kind,name,weight}`. This replaces the v2.0 `ambiguous_target`
   spelling, which remains reserved. No command error closes the socket.
 - `room.state` player entries and `room.leave` carry `asleep`/`stone` (and
   `dropped[]` on a sleep) for a stone occupant.
