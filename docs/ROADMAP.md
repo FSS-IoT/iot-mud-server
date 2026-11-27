@@ -16,8 +16,7 @@ Complete 2026-11-21; the v2.0 milestone is closed (issues #35, #36, #37, #39).
   worked reference client (`examples/`).
 - CI runs the suite on every push and PR.
 
-The v1 server remains in the tree as the historical implementation and for its
-tests; the v2 server is the one the club runs.
+The v1 server was retired (#137); the v2 server is the one the club runs.
 
 Doc's TASK-039 `light` verb (`9a25236`) is ported from the joined history
 ([#44](https://github.com/FSS-IoT/iot-mud-server/issues/44)).

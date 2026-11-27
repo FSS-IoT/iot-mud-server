@@ -1,7 +1,7 @@
 """Protocol-v2 websocket server.
 
-The v1 `MudServer` remains untouched. This server speaks the merged v2
-contract and delegates all game logic to `Engine` through the adapter.
+This server speaks the merged v2 contract and delegates all game logic to
+`Engine` through the adapter.
 """
 
 from __future__ import annotations

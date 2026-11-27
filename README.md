@@ -35,8 +35,7 @@ uv run python -m src.mud.net.v2_server
 uv run python -m src.mud.net.v2_server --host 0.0.0.0 --port 9000
 ```
 
-Run one server at a time: the v1 server and the v2 server both default to
-port 8765.
+The v2 server defaults to port 8765.
 
 ## Storage
 
@@ -63,8 +62,8 @@ start with an actionable message.
 uv run pytest
 ```
 
-Stop the server first. The legacy v1 tests bind fixed ports (8765/8766/8769),
-so a running server makes them fail with `address already in use`. The suite
+The suite binds ephemeral ports, so a running server on 8765 does not disturb
+it. The suite
 includes the two-client v2 conformance session (`tests/test_protocol_v2.py`),
 the golden scenarios (`tests/golden/`), and the docs checks
 (`tests/test_docs_examples.py`). CI runs `uv run pytest -m "not load"`; the load
@@ -76,7 +75,6 @@ smoke runs nightly.
 |---|---|
 | `src/mud/engine/` | Authoritative state, commands, event bus |
 | `src/mud/net/v2_server.py` | v2 WebSocket server (the common server) |
-| `src/mud/net/server.py` | v1 server, kept for history and its tests |
 | `src/mud/storage/` | SQLite schema, migrations, and the write-through store |
 | `src/mud/content/` | YAML world model, validator, and effects |
 | `src/mud/world/` | World loader, seeding, geometry, NPC wandering |
@@ -95,9 +93,9 @@ smoke runs nightly.
 | `CONTRIBUTING.md` | Fork, test, review, merge |
 | `NOTICE.md` | Credit and license status |
 
-The v1 server stays in the tree for history and its tests. The interactive v1
-demo (`run_demo.sh` / `scripts/client.py`) is not part of this repo; it lives in
-Doc's client repo. The common server is v2. The frozen five-room conformance
+The interactive v1 demo (`run_demo.sh` / `scripts/client.py`) is not part of
+this repo; it lives in Doc's client repo. The common server is v2. The frozen
+five-room conformance
 fixture at `data/worlds/starting_village.yaml` (and `.json`) is kept for the
 legacy loader tests; it is not the product world.
 
