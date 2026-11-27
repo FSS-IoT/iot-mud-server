@@ -30,9 +30,12 @@ BOOTSTRAP = REPO_ROOT / "BOOTSTRAP.md"
 PROTOCOL = REPO_ROOT / "docs" / "PROTOCOL.md"
 REFERENCE_CLIENT = "examples/reference_client.py"
 
-# The v2.1.4 reference server commit. It includes #90, the first commit whose
-# reference client prints `Server commit:`, and must be an ancestor of HEAD.
-PIN = "0e2b2c3bad33df6f3da062e3eacc4e35572b90c6"
+# The current reference server commit (v2.1.5). It includes the newcomer
+# walkthrough (#90) forward through the typed-outcome, one-actor, lifecycle,
+# v1-retirement, and weight work (#130-#147), and must be an ancestor of HEAD.
+PIN = "d9441661b8e4971b9c82ee0e675e921c583f2e9a"
+# The previous pin, kept in the changelog as history.
+OLD_PIN = "0e2b2c3bad33df6f3da062e3eacc4e35572b90c6"
 COMMIT_RE = re.compile(r"(?<![0-9a-fA-F])[0-9a-f]{40}(?![0-9a-fA-F])")
 
 
@@ -162,11 +165,11 @@ def test_protocol_has_a_changelog() -> None:
 
     changelog = _changelog()
     assert PIN in changelog, (
-        f"the protocol changelog must name the v2.1.4 pin {PIN}"
+        f"the protocol changelog must name the current pin {PIN}"
     )
-    entry = _section(changelog, "### v2.1.4 — protocol 2 reference pin")
+    entry = _section(changelog, "### v2.1.5 — protocol 2 reference pin")
     assert PIN in entry
-    assert "#90" in entry, "the entry must say the pin includes #90"
+    assert "#90" in entry, "the entry must say the pin supersedes #90"
     assert "hello.data.server_commit" in entry
     lowered = entry.lower()
     assert "additive" in lowered, (
@@ -177,6 +180,11 @@ def test_protocol_has_a_changelog() -> None:
         "there were no wire changes"
     )
     assert "no wire changes" not in lowered
+
+    # The earlier pin stays in the changelog as history.
+    assert OLD_PIN in changelog
+    old_entry = _section(changelog, "### v2.1.4 — protocol 2 reference pin")
+    assert OLD_PIN in old_entry
 
 
 def test_commit_comparison_accepts_the_pin_and_explains_a_mismatch():
