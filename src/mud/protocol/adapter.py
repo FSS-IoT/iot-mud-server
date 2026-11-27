@@ -195,12 +195,6 @@ def _inventory_data(engine: Engine, player: Player,
             data["lit"] = bool(getattr(item, "lit", False))
         items.append(data)
     items.sort(key=lambda item: item["name"].lower())
-    if text is None:
-        if items:
-            text = "You are carrying: " + ", ".join(
-                item["name"] for item in items) + "."
-        else:
-            text = "You are not carrying anything."
     payload = []
     for item in items:
         entry = {"id": item["id"], "name": item["name"],
@@ -208,13 +202,17 @@ def _inventory_data(engine: Engine, player: Player,
         if "lit" in item:
             entry["lit"] = item["lit"]
         payload.append(entry)
-    return {
+    data: dict[str, Any] = {
         "items": payload,
         "capacity": _weight(engine.carry_capacity(player)),
         "used": _weight(engine.carry_used(player)),
         "unit": WEIGHT_UNIT,
-        "text": text,
     }
+    # `text` is presentation only: the explicit `inventory` command supplies
+    # the rendered list; state pushes (take/drop/put/get) carry none (#144).
+    if text is not None:
+        data["text"] = text
+    return data
 
 
 def _error(code: str, message: str) -> CommandResult:
