@@ -55,7 +55,7 @@ async def test_look_emits_structured_room_state(vault):
 
 
 @pytest.mark.asyncio
-async def test_take_emits_object_event_without_inventory_relist(vault):
+async def test_take_pushes_state_only_inventory(vault):
     engine, player, room, chest, coin, _key = vault
     chest.remove_content(coin)
     room.add_content(coin)
@@ -67,7 +67,9 @@ async def test_take_emits_object_event_without_inventory_relist(vault):
     inventory = _events(result, "player.inventory", "actor")
 
     assert len(actor) == 1 and len(broadcast) == 1
-    assert inventory == []
+    assert len(inventory) == 1
+    assert "text" not in inventory[0].data
+    assert "coin" in [item["id"] for item in inventory[0].data["items"]]
     assert actor[0].data["object"]["id"] == "coin"
     assert actor[0].data["self"] is True
     assert broadcast[0].data["self"] is False
@@ -77,7 +79,7 @@ async def test_take_emits_object_event_without_inventory_relist(vault):
 
 
 @pytest.mark.asyncio
-async def test_drop_emits_object_event_without_inventory_relist(vault):
+async def test_drop_pushes_state_only_inventory(vault):
     engine, player, room, chest, coin, _key = vault
     chest.remove_content(coin)
     player.add_content(coin)
@@ -89,7 +91,9 @@ async def test_drop_emits_object_event_without_inventory_relist(vault):
     inventory = _events(result, "player.inventory", "actor")
 
     assert len(actor) == 1 and len(broadcast) == 1
-    assert inventory == []
+    assert len(inventory) == 1
+    assert "text" not in inventory[0].data
+    assert "coin" not in [item["id"] for item in inventory[0].data["items"]]
     assert actor[0].data["object"]["id"] == "coin"
     assert actor[0].data["self"] is True
     assert actor[0].data["text"] == "You dropped the Coin."
@@ -98,10 +102,11 @@ async def test_drop_emits_object_event_without_inventory_relist(vault):
     assert coin in room.contents
     assert coin not in player.contents
 
-    # The explicit verb still pushes the now-coinless inventory.
+    # The explicit verb still renders the full list.
     explicit = await execute(engine, "Ada", "inventory")
     pushed = _events(explicit, "player.inventory", "actor")
     assert len(pushed) == 1
+    assert "text" in pushed[0].data
     assert [item["id"] for item in pushed[0].data["items"]] == ["gold_key"]
 
 

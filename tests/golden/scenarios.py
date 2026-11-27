@@ -112,10 +112,11 @@ async def full_tour(directory: Path) -> GoldenRun:
             await command(ada, "take gold key", "object.taken")
             await command(ada, "light torch", "object.lit")
             await command(ada, "read journal", "object.read")
-            # The explicit verb is the golden coverage path for
-            # `player.inventory`; no step waits for the take/drop follow-up
-            # that #54/#56 remove.
-            inventory = await command(ada, "inventory", "player.inventory")
+            # The explicit verb renders the list; state pushes (take/drop/put/
+            # get) carry no `text`, so wait for the reply with text.
+            await ada.input("inventory")
+            inventory = await ada.wait(
+                "player.inventory", lambda m: "text" in m["data"])
             assert inventory["data"]["capacity"] == 30.0
             assert inventory["data"]["unit"] == "stones"
             assert inventory["data"]["items"]

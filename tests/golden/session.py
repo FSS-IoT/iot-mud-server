@@ -61,21 +61,22 @@ async def run_acceptance_session(uri: str) -> None:
             "room.enter", lambda m: m["data"]["actor"]["name"] == "Ben"
         )
 
-        # Steps 6-8: take and drop send no inventory follow-up.
-        marker = len(ada.log)
+        # Steps 6-8: take and drop push a state-only inventory (no list text).
         await command(ada, "take gold coin", "object.taken")
-        assert not _messages_since(ada, marker, "player.inventory")
+        pushed = await ada.wait("player.inventory")
+        assert "text" not in pushed["data"]
         await ben.wait(
             "object.taken", lambda m: m["data"]["by"] == "Ada"
         )
         inventory = await command(ada, "inventory", "player.inventory")
+        assert "text" in inventory["data"]
         assert any(
             item["name"] == "Gold Coin"
             for item in inventory["data"]["items"]
         )
-        marker = len(ada.log)
         await command(ada, "drop gold coin", "object.dropped")
-        assert not _messages_since(ada, marker, "player.inventory")
+        pushed = await ada.wait("player.inventory")
+        assert "text" not in pushed["data"]
 
         # Steps 8 and the social section: say, emote, tell, who.
         await command(ada, "say hello", "player.said")
@@ -129,10 +130,9 @@ async def run_acceptance_session(uri: str) -> None:
         closed = await command(ada, "get brass lantern from chest", "error")
         assert closed["data"]["code"] == "container_closed"
         await command(ada, "open chest", "object.opened")
-        marker = len(ada.log)
         await command(ada, "get brass lantern from chest", "object.got")
-        await ada.wait("player.inventory")
-        assert _messages_since(ada, marker, "player.inventory")
+        pushed = await ada.wait("player.inventory")
+        assert "text" not in pushed["data"]
         await command(ada, "go south", "room.state")
 
         # Sleep and wake: the gold key drops in the room; no queue.
