@@ -226,6 +226,10 @@ async def test_duplicate_instance_ids_stay_stable(vault):
     room.add_content(coin)
     second = Entity("Gold Coin", "Another coin.", item_id="coin")
     room.add_content(second)
+    # Identity is assigned once (the loader does this in production); shaping a
+    # payload no longer invents it (#139).
+    coin.instance_id = "coin-1"
+    second.instance_id = "coin-2"
 
     first = await execute(engine, "Ada", "look")
     first_coins = [obj for obj in first.events[0].data["room"]["objects"]

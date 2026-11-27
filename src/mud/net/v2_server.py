@@ -46,7 +46,7 @@ from src.mud.protocol.v2 import (
     utc_now,
 )
 from src.mud.storage.db import DatabaseError, open_database
-from src.mud.storage.keys import object_key, room_key
+from src.mud.storage.keys import object_key
 from src.mud.storage.store import (
     PlayerStore,
     StorageWriteError,
@@ -581,19 +581,6 @@ class V2Server:
         await self.sessions.broadcast_room(
             room_name, "effect", data, exclude_name=None)
 
-    def _room_by_key(self, room_id: str | None):
-        """The loaded room stored under `room_id`, or None if it is unknown.
-
-        Room ids on disk and on the wire come from `room_key`, while the engine
-        indexes rooms by display name; this is the one translation login needs.
-        """
-        if room_id is None:
-            return None
-        for room in self.engine.rooms.values():
-            if room_key(room) == room_id:
-                return room
-        return None
-
     # ------------------------------------------------------------------
     # Handlers
     # ------------------------------------------------------------------
@@ -774,7 +761,7 @@ class V2Server:
             player = self.engine.register_player(login.name)
             self.engine.restore_player(
                 player,
-                room=self._room_by_key(character.room_id),
+                room=self.engine.get_room_by_id(character.room_id),
                 item_keys=character.items,
             )
 

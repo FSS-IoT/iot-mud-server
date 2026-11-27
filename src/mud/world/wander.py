@@ -112,7 +112,7 @@ class NpcWanderer:
                 continue
             if target is room:
                 continue
-            if self._rooms.get(target.name) is not target:
+            if target not in self._rooms.values():
                 continue
             if room.exit_is_locked(direction):
                 continue
