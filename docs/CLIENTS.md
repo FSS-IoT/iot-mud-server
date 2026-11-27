@@ -202,6 +202,11 @@ The `docs/SESSION.md` session is the acceptance test, not a UI specification.
 Map each event to whatever your client shows; the contract is the event, not
 the layout.
 
+For `player.inventory`, `capacity`, `used`, and `unit` are always present.
+Render the `unit` string verbatim (`"stones"`, `"oz"`, `"tons"`, …) and never
+convert; item weights are already in that display unit, so show them as sent.
+Do not hardcode `"stones"` — use whatever `unit` the server sends.
+
 ## The reference client
 
 `examples/reference_client.py` is a small, readable Python client. It is a
