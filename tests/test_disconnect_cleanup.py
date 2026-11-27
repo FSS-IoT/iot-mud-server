@@ -16,8 +16,8 @@ import logging
 import pytest
 
 from src.mud.engine.core import Engine
-from src.mud.net.v2_server import V2Server
 from src.mud.world.loader import load_demo_village
+from tests.golden.harness import server_harness
 from tools.load_smoke import LoadClient, client_names, load_limits
 
 CLIENTS = 20
@@ -27,29 +27,15 @@ CLIENTS = 20
 async def server(tmp_path):
     engine = Engine()
     await load_demo_village(engine)
-    instance = V2Server(
+    async with server_harness(
         engine,
-        port=0,
         db_path=tmp_path / "cleanup.db",
         auth_required=True,
         limits=load_limits(),
         server_commit="0" * 40,
         idle_poll_seconds=3600.0,
-    )
-    task = asyncio.create_task(instance.run())
-    for _ in range(500):
-        if instance.port:
-            break
-        await asyncio.sleep(0.01)
-    assert instance.port, "v2 server did not bind"
-    try:
-        yield instance
-    finally:
-        instance.stop()
-        try:
-            await asyncio.wait_for(task, timeout=3.0)
-        except TimeoutError:
-            task.cancel()
+    ) as harness:
+        yield harness
 
 
 @pytest.mark.asyncio
@@ -57,7 +43,7 @@ async def test_simultaneous_disconnects_do_not_log_connection_handler_failed(
         server, caplog):
     """Twenty clients in one room close together; cleanup may race a push."""
     caplog.set_level(logging.ERROR, logger="websockets.server")
-    uri = f"ws://localhost:{server.port}"
+    uri = server.uri
     clients = [
         LoadClient(uri, name, []) for name in client_names(CLIENTS)
     ]
@@ -68,11 +54,10 @@ async def test_simultaneous_disconnects_do_not_log_connection_handler_failed(
     # cleanup broadcasts room.leave to the other 19.
     await asyncio.gather(*(client.close() for client in clients))
 
-    for _ in range(200):
-        if server.sessions.is_quiescent:
-            break
-        await asyncio.sleep(0.01)
-    assert server.sessions.is_quiescent, (
+    # close() waits for every handler, so no polling is needed to observe
+    # that the table is empty.
+    await server.instance.close()
+    assert server.instance.sessions.is_quiescent, (
         "a connection handler never finished cleanup")
 
     failures = [

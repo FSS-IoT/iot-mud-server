@@ -82,7 +82,7 @@ smoke runs nightly.
 | `src/mud/world/` | World loader, seeding, geometry, NPC wandering |
 | `tests/` | Server/engine tests; `tests/golden/` covers every room and event |
 | `src/mud/protocol/` | v2 envelope, outbound types, engine adapter |
-| `tools/mock_v2_server.py` | Protocol-only mock server for client authors |
+| `tools/mock_v2_server.py` | Scripted documentation fixture (not the conformance harness) |
 | `examples/reference_client.py` | Minimal worked v2 client (not a template) |
 | `data/worlds/club_world/` | The 34-room product world (YAML, one file per area) |
 | `docs/PROTOCOL.md` | The v2.1 client contract |

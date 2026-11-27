@@ -439,17 +439,6 @@ def write_report(result: LoadResult, path: str | Path,
         encoding="utf-8")
 
 
-async def _wait_for_bind(server: V2Server, task: asyncio.Task,
-                         attempts: int = 500) -> None:
-    for _ in range(attempts):
-        if server.port:
-            return
-        if task.done():
-            await task  # Surface a startup failure instead of timing out.
-        await asyncio.sleep(0.01)
-    raise RuntimeError("v2 server did not bind an ephemeral port")
-
-
 async def _close_all(clients: list[LoadClient]) -> None:
     """Close every client at once.
 
@@ -552,23 +541,17 @@ async def run_load(
         # the timed window instead of racing a once-a-second callback.
         idle_poll_seconds=3600.0,
     )
-    task = asyncio.create_task(server.run())
+    port = await server.start()
     try:
-        await _wait_for_bind(server, task)
         result = await asyncio.wait_for(
             run_scenario(
-                f"ws://localhost:{server.port}",
+                f"ws://localhost:{port}",
                 clients=clients, commands=commands, prefix=prefix),
             timeout=timeout,
         )
         return replace(result, world_rooms=len(engine.rooms))
     finally:
-        server.stop()
-        try:
-            await asyncio.wait_for(task, timeout=5.0)
-        except TimeoutError:
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+        await server.close()
 
 
 def build_arg_parser() -> argparse.ArgumentParser:

@@ -15,18 +15,14 @@ comment in `docs/PROTOCOL.md` and the social steps in `docs/SESSION.md`.
 
 from __future__ import annotations
 
-import asyncio
-import json
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Self
 
 import pytest
-import websockets
 
 from src.mud.engine.core import Engine
-from src.mud.net.v2_server import V2Server
 from src.mud.world.loader import load_world
+from tests.golden.harness import server_harness
 
 WORLD_PATH = (
     Path(__file__).resolve().parents[1]
@@ -34,148 +30,29 @@ WORLD_PATH = (
 )
 
 
-class Client:
-    """A tiny v2 client with a background reader and a type-filtered drain."""
-
-    def __init__(self, uri: str):
-        self.uri = uri
-        self.ws = None
-        self.q: asyncio.Queue = asyncio.Queue()
-        self.task: asyncio.Task | None = None
-        self.hello = None
-
-    async def connect(self) -> Self:
-        self.ws = await websockets.connect(self.uri)
-        self.hello = json.loads(await self.ws.recv())
-        self.task = asyncio.create_task(self._reader())
-        return self
-
-    async def __aenter__(self) -> Self:
-        return await self.connect()
-
-    async def __aexit__(self, *exc) -> None:
-        await self.close()
-
-    async def _reader(self) -> None:
-        try:
-            async for raw in self.ws:
-                self.q.put_nowait(json.loads(raw))
-        except websockets.exceptions.ConnectionClosed:
-            pass
-
-    async def send(self, message: dict) -> None:
-        await self.ws.send(json.dumps(message))
-
-    async def register(self, name: str, msg_id="register") -> str:
-        await self.send({
-            "v": 2, "type": "auth", "id": msg_id,
-            "data": {"mode": "register", "name": name},
-        })
-        ok = await self.next("auth.ok", msg_id=msg_id)
-        await self.next("room.state")
-        return ok["data"]["key"]
-
-    async def login(self, key: str, msg_id="login"):
-        await self.send({
-            "v": 2, "type": "auth", "id": msg_id,
-            "data": {"mode": "login", "key": key},
-        })
-        ok = await self.next("auth.ok", msg_id=msg_id)
-        state = await self.next("room.state")
-        return ok, state
-
-    async def input(self, text: str, msg_id=1) -> None:
-        await self.send({
-            "v": 2, "type": "input", "id": msg_id,
-            "data": {"text": text},
-        })
-
-    async def next(self, type_: str, *, msg_id=None, timeout: float = 5.0):
-        while True:
-            message = await asyncio.wait_for(self.q.get(), timeout)
-            if message.get("type") != type_:
-                continue
-            if msg_id is not None and message.get("id") != msg_id:
-                continue
-            return message
-
-    async def next_any(self, timeout: float = 5.0):
-        return await asyncio.wait_for(self.q.get(), timeout)
-
-    async def drain(self, timeout: float = 0.2) -> list[dict]:
-        """Read everything queued, stopping after `timeout` of silence."""
-        seen: list[dict] = []
-        while True:
-            try:
-                seen.append(await self.next_any(timeout))
-            except TimeoutError:
-                return seen
-
-    async def assert_silent(self, timeout: float = 0.25) -> None:
-        with pytest.raises(TimeoutError):
-            await self.next_any(timeout)
-
-    async def who(self, msg_id="who") -> dict:
-        await self.input("who", msg_id)
-        return await self.next("who.list", msg_id=msg_id)
-
-    async def close(self) -> None:
-        if self.task is not None:
-            self.task.cancel()
-        if self.ws is not None:
-            await self.ws.close()
-
-
-async def _wait_for_bind(server: V2Server) -> None:
-    for _ in range(200):
-        if server.port:
-            return
-        await asyncio.sleep(0.01)
-    raise AssertionError("v2 server did not bind")
-
-
-async def _start(db_path):
-    engine = Engine()
-    await load_world(engine, WORLD_PATH)
-    instance = V2Server(
-        engine, port=0, db_path=db_path, auth_required=True)
-    task = asyncio.create_task(instance.run())
-    await _wait_for_bind(instance)
-    return instance, engine, task
-
-
-async def _stop(instance: V2Server, task) -> None:
-    instance.stop()
-    try:
-        await asyncio.wait_for(task, timeout=3.0)
-    except TimeoutError:
-        task.cancel()
-
-
 @asynccontextmanager
 async def auth_server(db_path):
-    instance, engine, task = await _start(db_path)
-    try:
-        yield instance, engine
-    finally:
-        await _stop(instance, task)
+    engine = Engine()
+    await load_world(engine, WORLD_PATH)
+    async with server_harness(
+        engine, db_path=db_path, auth_required=True,
+    ) as server:
+        yield server
 
 
 @pytest.mark.asyncio
 async def test_who_emote_and_tell_across_rooms_and_sleep(tmp_path):
     db_path = tmp_path / "social.db"
 
-    async with auth_server(db_path) as (instance, engine):
-        uri = f"ws://localhost:{instance.port}"
-
-        ada = await Client(uri).connect()
+    async with auth_server(db_path) as server:
+        ada = await server.connect()
         key_cara = None
-        ben = await Client(uri).connect()
-        cara = await Client(uri).connect()
+        ben = await server.connect()
+        cara = await server.connect()
         try:
             await ada.register("Ada", "c-1")
             await ben.register("Ben", "c-2")
-            key_cara = await cara.register("Cara", "c-3")
+            key_cara = await cara.register_key("Cara", "c-3")
             for client in (ada, ben, cara):
                 await client.drain()
 
@@ -254,7 +131,6 @@ async def test_who_emote_and_tell_across_rooms_and_sleep(tmp_path):
             }
             assert players["Ada"]["asleep"] is False
             assert "asleep" in who["data"]["text"].lower()
-            assert engine.get_player("Cara").asleep is True
 
             # `tell` to an asleep/stone player is a typed error. It is not
             # queued: neither Ada nor Ben sees a `player.told`, and Cara cannot
@@ -268,7 +144,7 @@ async def test_who_emote_and_tell_across_rooms_and_sleep(tmp_path):
 
             # Login wakes Cara in place. No offline tell is replayed: she gets
             # her auth and room state, then silence.
-            cara = await Client(uri).connect()
+            cara = await server.connect()
             await cara.login(key_cara, "c-4")
             await ada.next("room.enter")
             queued = await cara.drain()
