@@ -12,6 +12,7 @@ from src.mud.content.validator import container_cycles
 from src.mud.protocol.v2 import CommandOutcome, SemanticEvent
 from src.mud.storage.keys import object_key, room_key, slug
 from src.mud.storage.store import StorageWriteError
+from src.mud.world.index import WorldIndex
 from src.mud.world.wander import NpcMove, NpcWanderer, npc_key
 
 if TYPE_CHECKING:
@@ -66,6 +67,10 @@ class Engine:
         purely in memory for the v1 server and the unit tests.
         """
         self._rooms: Dict[str, Room] = {}
+        # The one loaded-world index (#139): rooms/objects/NPCs by stable id.
+        # The loader builds it; in-memory engines leave it None and fall back
+        # to `_rooms`.
+        self.index: WorldIndex | None = None
         # The room a freshly registered player spawns in, set by the world
         # loader. There is no legacy single-player slot (#133).
         self.start_room: Optional[Room] = None
@@ -101,8 +106,26 @@ class Engine:
         return self.start_room
 
     def get_room(self, name: str) -> Optional[Room]:
-        """Return the room with this name, or None."""
+        """Return the room with this display name, or None."""
         return self._rooms.get(name)
+
+    def get_room_by_id(self, room_id: str | None) -> Optional[Room]:
+        """Return the room stored under its stable id, or None.
+
+        The loaded world's `WorldIndex` makes this a direct lookup. An
+        in-memory engine that sets `_rooms` directly falls back to a scan.
+        """
+        if room_id is None:
+            return None
+        if self.index is not None:
+            room = self.index.rooms_by_id.get(room_id)
+            if room is not None:
+                return room
+        return next(
+            (room for room in self._rooms.values()
+             if room_key(room) == room_id),
+            None,
+        )
 
     # --- NPC wandering (#82) -------------------------------------------------
 
@@ -117,7 +140,9 @@ class Engine:
         the network layer turns into room-local `npc.leave`/`npc.enter`.
         """
         if self.wanderer is None:
-            self.wanderer = NpcWanderer(self._rooms, self.rng_seed)
+            rooms = (self.index.rooms_by_id if self.index is not None
+                     else self._rooms)
+            self.wanderer = NpcWanderer(rooms, self.rng_seed)
         moves = self.wanderer.step()
         for move in moves:
             await self.emit("npc_moved", move.event_data())
@@ -207,7 +232,9 @@ class Engine:
                 slots.setdefault(object_key(item), (item, holder))
                 walk(item)
 
-        for room in self._rooms.values():
+        rooms = (self.index.rooms_by_id.values()
+                 if self.index is not None else self._rooms.values())
+        for room in rooms:
             walk(room)
         return slots
 
@@ -950,29 +977,12 @@ class Engine:
                          collection: list[Entity] | None = None) -> dict[str, Any]:
         """A stable object descriptor for a semantic event.
 
-        Mirrors the adapter's wire `_object_data` (id, kind, name, weight) so
-        the two agree on instance ids, including the `<kind>-<n>` suffix that
-        tells two of the same prototype apart in one collection.
+        The id is the entity's stable key; the loader assigns it once (#139).
+        Shaping an event never mutates identity.
         """
         base = getattr(entity, "item_id", None) or slug(entity.name)
-        ident = getattr(entity, "instance_id", None)
-        if not ident:
-            siblings = [
-                candidate for candidate in (collection or [])
-                if (getattr(candidate, "item_id", None)
-                    or slug(candidate.name)) == base
-            ]
-            if len(siblings) > 1:
-                try:
-                    index = siblings.index(entity) + 1
-                except ValueError:
-                    index = 1
-                ident = f"{base}-{index}"
-            else:
-                ident = base
-            entity.instance_id = ident
         weight = round(float(getattr(entity, "weight", 0.0) or 0.0), 3)
-        return {"id": ident, "kind": base, "name": entity.name,
+        return {"id": object_key(entity), "kind": base, "name": entity.name,
                 "weight": weight}
 
     async def execute(self, actor: Player, text: str) -> CommandOutcome:

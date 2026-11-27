@@ -18,7 +18,7 @@ from typing import Any
 from src.mud.content import Entity, Player, Room
 from src.mud.engine.core import Engine
 from src.mud.protocol.v2 import CommandResult, Outbound
-from src.mud.storage.keys import room_key, slug
+from src.mud.storage.keys import object_key, room_key, slug
 
 # The display unit for authored weights on the wire (#146). Authors write item
 # weights in kilograms; the server names the unit it renders and clients show
@@ -31,31 +31,14 @@ def _room_id(room: Room) -> str:
 
 
 def _object_data(entity: Entity, collection: Sequence[Entity]) -> dict[str, Any]:
-    """Stable instance id plus the prototype kind.
+    """The object's stable id, prototype kind, name, and weight (#139).
 
-    The world's item id is the prototype. When a collection holds more than one
-    of the same prototype, the instance id gets a numeric suffix so a client can
-    tell two coins apart.
+    Identity comes from the loader (or the entity's own `instance_id`); shaping
+    a payload never assigns one.
     """
     base = getattr(entity, "item_id", None) or slug(entity.name)
-    ident = getattr(entity, "instance_id", None)
-    if not ident:
-        siblings = [
-            candidate for candidate in collection
-            if (getattr(candidate, "item_id", None)
-                or slug(candidate.name)) == base
-        ]
-        if len(siblings) > 1:
-            try:
-                index = siblings.index(entity) + 1
-            except ValueError:
-                index = 1
-            ident = f"{base}-{index}"
-        else:
-            ident = base
-        entity.instance_id = ident
     return {
-        "id": ident,
+        "id": object_key(entity),
         "kind": base,
         "name": entity.name,
         "weight": _weight(float(getattr(entity, "weight", 0.0) or 0.0)),

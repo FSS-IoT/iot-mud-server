@@ -8,6 +8,7 @@ from src.mud.content.validator import validate_world
 from src.mud.content.world import compile_world
 from src.mud.engine.core import Engine
 from src.mud.world.geometry import WorldDataError, validate_geometry
+from src.mud.world.index import build_index
 from src.mud.world.wander import NpcWanderer
 
 YAML_SUFFIXES = frozenset({".yaml", ".yml"})
@@ -149,16 +150,18 @@ async def _load_yaml_world(engine: Engine, data_path: Path) -> None:
             if obj.id not in compiled.contained:
                 room.add_content(entity_map[obj.id])
 
-    # 6. Finalize engine state.
+    # 6. Finalize engine state. The index holds every room by id; `_rooms`
+    # stays a display-name convenience (first room wins on a duplicate name).
     for room in room_map.values():
-        engine._rooms[room.name] = room
+        engine._rooms.setdefault(room.name, room)
+    engine.index = build_index(room_map.values())
     engine.start_room = room_map[compiled.start_room]
 
     # 7. Deterministic world motion (#82). The seed is authored content, not a
     # clock: a reload replays the same NPC paths. The wanderer is built after
     # every room and NPC exists, and moves only `Room.npcs` from here on.
     engine.rng_seed = compiled.rng_seed
-    engine.wanderer = NpcWanderer(engine.rooms, compiled.rng_seed)
+    engine.wanderer = NpcWanderer(engine.index.rooms_by_id, compiled.rng_seed)
 
 
 async def _load_json_world(engine: Engine, data_path: Path) -> None:
@@ -275,7 +278,8 @@ async def _load_json_world(engine: Engine, data_path: Path) -> None:
 
     # 4. Finalize Engine state
     for room in room_map.values():
-        engine._rooms[room.name] = room
+        engine._rooms.setdefault(room.name, room)
+    engine.index = build_index(room_map.values())
 
     start_room_id = data.get("start_location")
     if start_room_id in room_map:
