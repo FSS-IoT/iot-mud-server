@@ -207,7 +207,7 @@ It prints sent/replied counts, wall time, commands per second, p50/p95/p99/max
 latency, and any protocol errors, and exits non-zero when the gate fails. A
 run takes about three seconds on a laptop. `--db` names a database path; the
 default is a temporary directory. The server always binds port 0, so the load
-smoke is safe while a real server still holds 8765, unlike the legacy v1 tests.
+smoke is safe while a real server still holds 8765.
 
 ### Why the limits are injected
 

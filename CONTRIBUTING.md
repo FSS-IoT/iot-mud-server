@@ -18,9 +18,8 @@ reviews.
 3. **Write the failing check first.** A test that fails for the right reason is
    the start of the ticket. Then make it pass.
 4. **Run the suite.** `uv sync --all-extras` once, then `uv run pytest`.
-   Stop the server first: the legacy v1 tests bind fixed ports
-   (8765/8766/8769), and a running server makes them fail with
-   `address already in use`.
+   The suite binds ephemeral ports, so a running server on 8765 does not
+   disturb it.
 5. **Open a PR.** Say what changed, link the issue (`Closes #N`), keep the
    changed paths inside the issue's `Touches:` list (or add `scope:expanded`),
    and include the test result.
@@ -59,7 +58,6 @@ deliberate: it is the same workflow an open-source project uses.
 |---|---|
 | `src/mud/engine/` | Authoritative state, commands, events. The brain. |
 | `src/mud/net/v2_server.py` | v2 WebSocket session and transport. |
-| `src/mud/net/server.py` | v1 server, kept for history and its tests. |
 | `src/mud/protocol/` | v2 envelope, outbound types, engine adapter. |
 | `src/mud/world/` | World loader. |
 | `data/worlds/` | Content. |
