@@ -20,6 +20,11 @@ from src.mud.engine.core import Engine
 from src.mud.protocol.v2 import CommandResult, Outbound
 from src.mud.storage.keys import room_key, slug
 
+# The display unit for authored weights on the wire (#146). Authors write item
+# weights in kilograms; the server names the unit it renders and clients show
+# it verbatim. A world-level override can become additive later.
+WEIGHT_UNIT = "stones"
+
 
 def _room_id(room: Room) -> str:
     return room_key(room)
@@ -207,6 +212,7 @@ def _inventory_data(engine: Engine, player: Player,
         "items": payload,
         "capacity": _weight(engine.carry_capacity(player)),
         "used": _weight(engine.carry_used(player)),
+        "unit": WEIGHT_UNIT,
         "text": text,
     }
 
