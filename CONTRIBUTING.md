@@ -37,6 +37,18 @@ PRs to `main` are squash-merged, keeping `main` linear with no merge commits.
 The required checks are `test`, `docs-examples`, and `claim-guard`. Delete the
 branch after the merge.
 
+## A first contribution, step by step
+
+1. **Pick one issue and assign it.** `gh issue edit <n> --add-assignee @me`.
+2. **Fork, then branch from `main`.** `fix/<issue>-<what>` or
+   `feat/<issue>-<what>`.
+3. **Write the failing test first.** Run it and watch it fail for the right
+   reason.
+4. **Make it pass, then run the suite.** `uv sync --all-extras` once, then
+   `uv run pytest`.
+5. **Open a PR** with `Closes #N` and the test result.
+6. **Merge on green checks, then delete the branch.**
+
 ## What a good ticket looks like
 
 - One behavior, one command, or one protocol field.
