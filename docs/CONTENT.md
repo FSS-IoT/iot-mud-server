@@ -170,8 +170,10 @@ rooms:
   closing at runtime is not written back to SQLite.
 - A readable sets `readable_text`. `description` is what `look` shows; the
   readable text is what `read` returns.
-- `weight` is the carry unit. `portable: false` marks scenery a player cannot
-  lift; `get` from a container refuses it with `error{not_portable}`.
+- `weight` is the carry unit, authored in real-life **kilograms**; the in-game
+  display unit is server-sent as `unit` (currently `"stones"`), never
+  converted. `portable: false` marks scenery a player cannot lift; `get` from
+  a container refuses it with `error{not_portable}`.
 - `light_source: true` lets an object light a dark room. `lit: true` starts it
   lit; otherwise `light <source>` is needed. A carried unlit source is dark.
 - `dropped_on_sleep: true` makes the object fall into the room when its carrier
