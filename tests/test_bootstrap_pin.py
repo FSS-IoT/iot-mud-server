@@ -28,6 +28,7 @@ from tests.golden.harness import golden_client, golden_server
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BOOTSTRAP = REPO_ROOT / "BOOTSTRAP.md"
 PROTOCOL = REPO_ROOT / "docs" / "PROTOCOL.md"
+SESSION = REPO_ROOT / "docs" / "SESSION.md"
 REFERENCE_CLIENT = "examples/reference_client.py"
 
 # The current reference server commit (v2.1.5). It includes the newcomer
@@ -185,6 +186,28 @@ def test_protocol_has_a_changelog() -> None:
     assert OLD_PIN in changelog
     old_entry = _section(changelog, "### v2.1.4 — protocol 2 reference pin")
     assert OLD_PIN in old_entry
+
+
+def test_pin_version_label_matches_the_changelog():
+    """BOOTSTRAP and SESSION label the pin with the changelog's version.
+
+    A pin bump must move the prose labels too: the changelog section that
+    names the current PIN carries the version, and the two onboarding pages
+    must use the same one.
+    """
+    changelog = _changelog()
+    sections = re.split(r"^### ", changelog, flags=re.MULTILINE)[1:]
+    current = next(section for section in sections if PIN in section)
+    version = re.search(r"v\d+\.\d+\.\d+", current.splitlines()[0])
+    assert version is not None, current.splitlines()[0]
+    label = version.group(0)
+
+    bootstrap = BOOTSTRAP.read_text(encoding="utf-8")
+    session = SESSION.read_text(encoding="utf-8")
+    assert f"The {label} reference" in bootstrap, (
+        f"BOOTSTRAP.md must label the pin as {label}")
+    assert f"{label} reference pin" in session, (
+        f"docs/SESSION.md must label the pin as {label}")
 
 
 def test_commit_comparison_accepts_the_pin_and_explains_a_mismatch():

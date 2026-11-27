@@ -37,7 +37,7 @@ any path works — if your acceptance script takes a server path, point it here.
 ### Pin the server commit
 
 Do not chase "latest" while you build. Choose one fixed server commit and
-record its full 40 characters in your client README. The v2.1.4 reference
+record its full 40 characters in your client README. The v2.1.5 reference
 server is:
 
 ```text
