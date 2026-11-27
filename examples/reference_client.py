@@ -13,7 +13,7 @@ It speaks v2 only and expects the server to advertise protocol `2`.
     uv run python examples/reference_client.py --name Ada --uri ws://localhost:8770
     # refuse to start unless hello reports the commit this client targets:
     uv run python examples/reference_client.py --name Ada \
-        --expect-commit 0e2b2c3bad33df6f3da062e3eacc4e35572b90c6
+        --expect-commit d9441661b8e4971b9c82ee0e675e921c583f2e9a
 
 Inside the prompt, `!malformed` sends one broken frame so you can check that an
 error does not close the socket. It is a debugging aid, not a protocol command.

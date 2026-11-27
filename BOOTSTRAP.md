@@ -41,16 +41,17 @@ record its full 40 characters in your client README. The v2.1.4 reference
 server is:
 
 ```text
-0e2b2c3bad33df6f3da062e3eacc4e35572b90c6
+d9441661b8e4971b9c82ee0e675e921c583f2e9a
 ```
 
-It includes #90, the newcomer walkthrough, and is the first commit whose
-reference client prints `Server commit: ...`. Build against that commit:
+It includes the newcomer walkthrough (#90) forward through the typed-outcome,
+one-actor, v2-lifecycle, v1-retirement, and weight work (#130-#147), and is the
+current reference for a new client. Build against that commit:
 
 ```bash
 git clone https://github.com/FSS-IoT/iot-mud-server
 cd iot-mud-server
-git checkout 0e2b2c3bad33df6f3da062e3eacc4e35572b90c6
+git checkout d9441661b8e4971b9c82ee0e675e921c583f2e9a
 uv sync --all-extras
 uv run python -m src.mud.admin seed --db data/mud.db
 ./run_server.sh
@@ -66,7 +67,7 @@ client enforces the pin:
 
 ```bash
 uv run python examples/reference_client.py --name Ada \
-  --expect-commit 0e2b2c3bad33df6f3da062e3eacc4e35572b90c6
+  --expect-commit d9441661b8e4971b9c82ee0e675e921c583f2e9a
 ```
 
 It prints the expected and reported commit and exits `1` on a mismatch or
@@ -115,7 +116,7 @@ Pick a free port if 8766 is busy, and pass the same value to your client's
 `--uri`. The server prints the URI and database it starts with. The CLI rejects
 `--port 0`; choose a free number instead.
 
-Run one server at a time. A v2.1 server requires auth: the first connection
+The v2 server requires auth: the first connection
 registers a character and receives a character key exactly once. Keep the key
 outside your repository; later connections log in with it. A reconnect to the
 same database keeps the world, the characters, and the epoch.

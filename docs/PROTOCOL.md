@@ -858,6 +858,20 @@ version 3. A client that pins a server commit reads this section together with
 `hello.data.server_commit` to see what it may be missing. v2.1 is the current
 release; a later additive fix still adds a bullet here.
 
+### v2.1.5 — protocol 2 reference pin
+
+- The current reference server is commit
+  `d9441661b8e4971b9c82ee0e675e921c583f2e9a`. It supersedes the v2.1.4 pin
+  (#90) and includes the typed-outcome seam (#130), one actor (#133), the v2
+  lifecycle harness (#136), the retired v1 server (#137), the state-only
+  `player.inventory` push (#144), per-item `weight` (#145), the `unit` field
+  (#146), and the weight-unit docs (#147). A client records this full commit in
+  its README and compares it with `hello.data.server_commit` on connect.
+- Additive does not mean the wire is unchanged. Read the entries from the
+  pinned release forward, ignore unknown fields and event types, and treat a
+  different `hello.data.server_commit` as a prompt to check that list. A server
+  reporting `"unknown"` (a copy without `.git`) cannot confirm a pin.
+
 ### v2.1.4 — protocol 2 reference pin
 
 - The v2.1.4 reference server is commit
