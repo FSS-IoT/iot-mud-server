@@ -33,6 +33,10 @@ reviews.
 Work lands through a pull request. Do not push to `main` directly. Forking is
 deliberate: it is the same workflow an open-source project uses.
 
+PRs to `main` are squash-merged, keeping `main` linear with no merge commits.
+The required checks are `test`, `docs-examples`, and `claim-guard`. Delete the
+branch after the merge.
+
 ## What a good ticket looks like
 
 - One behavior, one command, or one protocol field.
