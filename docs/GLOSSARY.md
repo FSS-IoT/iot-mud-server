@@ -21,8 +21,9 @@ result into wire events. It adds only transport concerns: the actor/room split,
 the `self` flag, and broadcasts.
 
 **event** — A server-to-client message with a `type` and a `data` payload, such
-as `room.state` or `object.taken`. Every event carries a presentation
-`data.text`; the structured fields are the contract.
+as `room.state` or `object.taken`. Most events carry a recipient-specific
+`data.text`, but state-only pushes such as `player.inventory` carry none; the
+structured fields are the contract.
 
 **command** — A line a player sends in an `input` message, such as `go north`
 or `take coin`. The server parses it; clients do not send structured actions.
@@ -30,9 +31,9 @@ or `take coin`. The server parses it; clients do not send structured actions.
 **room** — A location in the world. It has an `id`, a `name`, a description,
 exits to other rooms, and the objects, players, and NPCs inside it.
 
-**actor** — The player whose action caused an event, or the player a message is
-addressed to. In `room.enter` and `room.leave`, `actor` names the moving
-player; the actor's copy of an event has `self: true`.
+**actor** — The player whose action caused an event. Some replies, such as
+`object.taken` and `player.said`, carry `self: true` for the actor, but
+`room.enter` and `room.leave` go to the other occupants and have no `self`.
 
 **item** — A kind of object a player can take, drop, and carry, such as a coin
 or a key; in content, `item` is the default object kind (the others are
