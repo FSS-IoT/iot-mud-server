@@ -138,7 +138,7 @@ async def test_move_broadcasts_leave_and_enter(server):
 
 
 @pytest.mark.asyncio
-async def test_take_does_not_relist_inventory(server):
+async def test_take_pushes_state_only_inventory(server):
     """`take` emits both object.taken events and no inventory follow-up."""
     async with V2Client(server) as ada, \
             V2Client(server) as ben:
@@ -161,22 +161,22 @@ async def test_take_does_not_relist_inventory(server):
         assert other["data"]["self"] is False
         assert "Ada picks up" in other["data"]["text"]
 
-        # `take` pushes no unsolicited `player.inventory`: the next inventory
-        # event must answer the explicit request and echo its id. Ambient
-        # events, if any, are skipped.
+        # `take` pushes a state-only inventory (no text, no id) to the actor.
+        pushed = await ada.next("player.inventory")
+        assert "id" not in pushed
+        assert "text" not in pushed["data"]
+        assert [item["id"] for item in pushed["data"]["items"]] == ["gold_coin"]
+
+        # The explicit request is a direct reply and renders the list.
         await ada.input("inventory", 3)
-        while True:
-            message = await ada.next_any()
-            if message.get("type") == "player.inventory":
-                break
-        inventory = message
-        assert inventory.get("id") == 3
+        inventory = await ada.next("player.inventory", msg_id=3)
+        assert "text" in inventory["data"]
         assert [item["id"] for item in inventory["data"]["items"]] == [
             "gold_coin"]
 
 
 @pytest.mark.asyncio
-async def test_drop_does_not_relist_inventory(server):
+async def test_drop_pushes_state_only_inventory(server):
     """`drop` emits both object.dropped events and no inventory follow-up."""
     async with V2Client(server) as ada, \
             V2Client(server) as ben:
@@ -192,6 +192,8 @@ async def test_drop_does_not_relist_inventory(server):
         await ada.input("take gold coin", 2)
         await ada.next("object.taken")
         await ben.next("object.taken")
+        take_push = await ada.next("player.inventory")
+        assert "text" not in take_push["data"]
 
         await ada.input("drop gold coin", 3)
         dropped = await ada.next("object.dropped")
@@ -204,16 +206,16 @@ async def test_drop_does_not_relist_inventory(server):
         assert other_drop["data"]["self"] is False
         assert "Ada drops" in other_drop["data"]["text"]
 
-        # `drop` pushes no unsolicited `player.inventory`: the next inventory
-        # event must answer the explicit request and echo its id. Ambient
-        # events, if any, are skipped.
+        # `drop` also pushes a state-only inventory to the actor.
+        pushed = await ada.next("player.inventory")
+        assert "id" not in pushed
+        assert "text" not in pushed["data"]
+        assert pushed["data"]["items"] == []
+
         await ada.input("inventory", 4)
-        while True:
-            message = await ada.next_any()
-            if message.get("type") == "player.inventory":
-                break
-        assert message.get("id") == 4
-        assert message["data"]["items"] == []
+        inventory = await ada.next("player.inventory", msg_id=4)
+        assert "text" in inventory["data"]
+        assert inventory["data"]["items"] == []
 
 
 @pytest.mark.asyncio

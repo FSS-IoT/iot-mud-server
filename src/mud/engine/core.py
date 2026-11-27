@@ -1125,15 +1125,22 @@ class Engine:
         await self.emit("item_taken", {
             "item_name": item.name.lower(), "owner": actor.name})
         outcome.reply = f"You picked up the {item.name}."
+        obj = self._semantic_object(item, before_room_contents)
         outcome.events.append(SemanticEvent(
             kind="object.taken",
-            data={
-                "object": self._semantic_object(item, before_room_contents),
-                "by": actor.name,
-                "text_actor": outcome.reply,
-                "text_room": f"{actor.name} picks up the {item.name}.",
-            },
-            scope="room",
+            data={"object": obj, "by": actor.name,
+                  "text_actor": outcome.reply},
+            scope="actor",
+        ))
+        outcome.events.append(SemanticEvent(
+            kind="player.inventory", data={"actor": actor},
+            scope="actor", direct=False,
+        ))
+        outcome.events.append(SemanticEvent(
+            kind="object.taken",
+            data={"object": obj, "by": actor.name,
+                  "text_room": f"{actor.name} picks up the {item.name}."},
+            scope="room_others",
         ))
 
     async def _exec_drop(self, outcome: CommandOutcome, actor: Player,
@@ -1165,15 +1172,22 @@ class Engine:
         await self.emit("item_dropped", {
             "item_name": item.name.lower(), "location": room.name})
         outcome.reply = f"You dropped the {item.name}."
+        obj = self._semantic_object(item, room.contents)
         outcome.events.append(SemanticEvent(
             kind="object.dropped",
-            data={
-                "object": self._semantic_object(item, room.contents),
-                "by": actor.name,
-                "text_actor": outcome.reply,
-                "text_room": f"{actor.name} drops the {item.name}.",
-            },
-            scope="room",
+            data={"object": obj, "by": actor.name,
+                  "text_actor": outcome.reply},
+            scope="actor",
+        ))
+        outcome.events.append(SemanticEvent(
+            kind="player.inventory", data={"actor": actor},
+            scope="actor", direct=False,
+        ))
+        outcome.events.append(SemanticEvent(
+            kind="object.dropped",
+            data={"object": obj, "by": actor.name,
+                  "text_room": f"{actor.name} drops the {item.name}."},
+            scope="room_others",
         ))
 
     async def _exec_open(self, outcome: CommandOutcome, actor: Player,

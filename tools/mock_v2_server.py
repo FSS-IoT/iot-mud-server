@@ -223,6 +223,11 @@ class Session:
             text = "You are not carrying anything."
         return {"items": items, "unit": "stones", "text": text}
 
+    def inventory_state(self) -> dict:
+        """The state-only pack push: items and unit, no rendered list (#144)."""
+        items = sorted(self.inventory, key=lambda item: item["name"].lower())
+        return {"items": items, "unit": "stones"}
+
     def error(self, msg_id, code: str, message: str) -> dict:
         return self.envelope("error", {
             "code": code, "message": message, "text": message,
@@ -509,6 +514,7 @@ class MockServer:
             "object": item, "by": session.name, "self": True,
             "text": f"You pick up the {item['name']}.",
         }, msg_id)
+        await session.send("player.inventory", session.inventory_state())
         await session.broadcast("object.taken", {
             "object": item, "by": session.name, "self": False,
             "text": f"{session.name} picks up the {item['name']}.",
@@ -531,6 +537,7 @@ class MockServer:
             "object": item, "by": session.name, "self": True,
             "text": f"You dropped the {item['name']}.",
         }, msg_id)
+        await session.send("player.inventory", session.inventory_state())
         await session.broadcast("object.dropped", {
             "object": item, "by": session.name, "self": False,
             "text": f"{session.name} drops the {item['name']}.",
@@ -574,7 +581,7 @@ class MockServer:
             "text": f"You put the {item['name']} in the Chest.",
         }, msg_id)
         await session.send("player.inventory",
-                           session.inventory_payload())
+                           session.inventory_state())
         await session.broadcast("object.put", {
             "object": item,
             "container": {"id": "chest_forest", "name": "Chest"},
@@ -662,7 +669,7 @@ class MockServer:
             "text": f"You get the {item['name']} from the Chest.",
         }, msg_id)
         await session.send("player.inventory",
-                           session.inventory_payload())
+                           session.inventory_state())
         await session.broadcast("object.got", {
             "object": item, "container": container,
             "by": session.name, "self": False,

@@ -46,12 +46,15 @@ async def test_take_returns_a_typed_outcome(vault):
     assert outcome.status == "success"
     assert outcome.error_code is None
     assert outcome.reply == "You picked up the Coin."
-    assert _kinds(outcome) == ["object.taken"]
-    event = outcome.events[0]
-    assert isinstance(event, SemanticEvent)
-    assert event.scope == "room"
-    assert event.data["object"]["id"] == "coin"
-    assert event.data["by"] == "Ada"
+    assert _kinds(outcome) == [
+        "object.taken", "player.inventory", "object.taken"]
+    actor_event = outcome.events[0]
+    assert isinstance(actor_event, SemanticEvent)
+    assert actor_event.scope == "actor"
+    assert actor_event.data["object"]["id"] == "coin"
+    assert actor_event.data["by"] == "Ada"
+    assert "text" not in outcome.events[1].data
+    assert outcome.events[2].scope == "room_others"
     # The move actually happened in the authoritative engine.
     assert coin in player.contents
     assert coin not in room.contents
@@ -78,8 +81,11 @@ async def test_drop_returns_a_typed_outcome(vault):
 
     assert outcome.status == "success"
     assert outcome.reply == "You dropped the Coin."
-    assert _kinds(outcome) == ["object.dropped"]
-    assert outcome.events[0].scope == "room"
+    assert _kinds(outcome) == [
+        "object.dropped", "player.inventory", "object.dropped"]
+    assert outcome.events[0].scope == "actor"
+    assert "text" not in outcome.events[1].data
+    assert outcome.events[2].scope == "room_others"
     assert coin in room.contents
     assert coin not in player.contents
 

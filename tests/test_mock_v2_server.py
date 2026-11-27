@@ -97,13 +97,15 @@ async def test_mock_runs_the_session_and_container_flow():
 
             await _send(ws, "input", {"text": "take torch"}, 3)
             assert (await _next(ws, "object.taken"))["data"]["object"]["name"] == "Torch"
-            # `take` has no inventory follow-up; the explicit request answers
-            # as the very next frame on this connection.
+            # `take` pushes a state-only inventory (no text, no id).
+            state = await _next(ws, "player.inventory")
+            assert "id" not in state and "text" not in state["data"]
+            assert [item["name"] for item in state["data"]["items"]] == [
+                "Torch"]
             await _send(ws, "input", {"text": "inventory"}, 4)
-            inventory = json.loads(
-                await asyncio.wait_for(ws.recv(), timeout=2.0))
-            assert inventory["type"] == "player.inventory"
+            inventory = await _next(ws, "player.inventory")
             assert inventory["id"] == 4
+            assert "text" in inventory["data"]
             assert [item["name"] for item in inventory["data"]["items"]] == [
                 "Torch"]
             await _send(ws, "input", {"text": "take gold key"}, 5)
@@ -137,11 +139,11 @@ async def test_mock_runs_the_session_and_container_flow():
             await _send(ws, "input", {"text": "put brass lantern in chest"}, 13)
             put = await _next(ws, "object.put")
             assert put["data"]["container"]["id"] == "chest_forest"
-            # `put` keeps the documented inventory push; hold it so the drop
-            # assertion below starts from a known frame.
+            # `put` pushes the state-only inventory.
             put_inventory = json.loads(
                 await asyncio.wait_for(ws.recv(), timeout=2.0))
             assert put_inventory["type"] == "player.inventory"
+            assert "text" not in put_inventory["data"]
             assert [item["name"] for item in put_inventory["data"]["items"]] == [
                 "Gold Key", "Torch"]
 
@@ -149,13 +151,15 @@ async def test_mock_runs_the_session_and_container_flow():
             dropped = await _next(ws, "object.dropped")
             assert dropped["data"]["self"] is True
             assert dropped["data"]["object"]["id"] == "gold_key"
-            # `drop` has no inventory follow-up; the explicit request answers
-            # as the very next frame on this connection.
+            # `drop` pushes a state-only inventory too.
+            state = await _next(ws, "player.inventory")
+            assert "id" not in state and "text" not in state["data"]
+            assert [item["name"] for item in state["data"]["items"]] == [
+                "Torch"]
             await _send(ws, "input", {"text": "inventory"}, 15)
-            inventory = json.loads(
-                await asyncio.wait_for(ws.recv(), timeout=2.0))
-            assert inventory["type"] == "player.inventory"
+            inventory = await _next(ws, "player.inventory")
             assert inventory["id"] == 15
+            assert "text" in inventory["data"]
             assert [item["name"] for item in inventory["data"]["items"]] == [
                 "Torch"]
 

@@ -118,14 +118,15 @@ Use two characters, **Ada** and **Ben**.
    Marketplace. Ada, already there, receives `room.enter` with
    `actor.name: "Ben"` and `reason: "move"`.
 6. **Take.** Ada sends `take gold coin`. Ada receives `object.taken` with
-   `self: true` and the object; `take` sends no `player.inventory` follow-up.
-   An explicit `inventory` still returns `player.inventory` with the coin.
-   Ben receives `object.taken` with `self: false` and a third-person line.
+   `self: true` and the object, then a state-only `player.inventory` (items /
+   capacity / used / unit, **no `text`**). An explicit `inventory` returns
+   `player.inventory` with the rendered list. Ben receives `object.taken` with
+   `self: false` and a third-person line, and no inventory push.
    Commands resolve **display names**; `object.id` is `gold_coin`, but the
    command is `take gold coin`, not `take gold_coin`.
 7. **Drop.** Ada sends `drop gold coin`. Both receive `object.dropped`; Ada
-   receives no `player.inventory` follow-up. An explicit `inventory` still
-   returns `player.inventory` with an empty list.
+   then receives a state-only `player.inventory` (empty `items`, no `text`).
+   An explicit `inventory` returns `player.inventory` with the rendered list.
 8. **Chat.** Ada sends `say hello`. Ada receives `player.said` with
    `self: true`; Ben receives `player.said` with `self: false` and
    `from: "Ada"`.
