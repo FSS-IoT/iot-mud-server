@@ -83,6 +83,8 @@ The engine is authoritative. The server is a terminal: it never mutates world
 state directly, and the protocol adapter never invents a result the engine did
 not produce.
 
+New here? See the [glossary](docs/GLOSSARY.md) for the common terms.
+
 ## Style and checks
 
 - Python 3.12+; asyncio; type hints on public functions.
