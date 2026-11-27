@@ -4,6 +4,7 @@ import asyncio
 import logging
 import re
 from collections.abc import Iterable
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Dict, List, Optional
 from src.mud.content import DEFAULT_CARRY_CAPACITY, NPC, Entity, Player, Room
 from src.mud.content.effects import effect_entries, effect_payload
@@ -17,6 +18,43 @@ if TYPE_CHECKING:
     from src.mud.storage.store import WriteThroughStore
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class SceneExit:
+    """One way out of a room, as the scene renders it (#135)."""
+
+    direction: str
+    to_id: str
+    locked: bool
+    label: str | None = None
+
+
+@dataclass(frozen=True)
+class Scene:
+    """What one actor can see, built once by `Engine.scene_for` (#135).
+
+    `objects`, `occupants`, `npcs`, and `exits` are the *visible* sets: they
+    are empty when `dark`, and `geometry` is None so a map is never leaked to
+    an observer who cannot see the room. `inventory` is always the actor's
+    carried set, because carrying does not depend on sight.
+
+    The value is deliberately domain-level (entities, not wire dicts): the
+    prose renderer in this module and the v2 adapter shape it independently.
+    """
+
+    room: Room | None
+    room_id: str | None
+    name: str
+    description: str
+    dark: bool
+    objects: tuple[Entity, ...] = ()
+    occupants: tuple[Player, ...] = ()
+    npcs: tuple[NPC, ...] = ()
+    exits: tuple[SceneExit, ...] = ()
+    geometry: dict[str, Any] | None = None
+    inventory: tuple[Entity, ...] = ()
+
 
 class Engine:
     def __init__(self, store: WriteThroughStore | None = None):
@@ -356,30 +394,36 @@ class Engine:
         ]
 
     @staticmethod
-    def _describe_movement(destination: Room, direction: str, old_location=None) -> str:
-        """Render the standard movement prose for arriving at `destination`.
+    def _describe_movement(scene: Scene, direction: str, old_location=None) -> str:
+        """Render the standard movement prose from the destination scene (#135).
 
         The reply is the single source of truth for what the mover sees on arrival:
-        travel prose, destination description, exits, and any items in the room.
-        A separate `room_state` push on move is intentionally NOT used here because
+        travel prose, destination description, exits, and any visible items. A
+        separate `room_state` push on move is intentionally NOT used here because
         it would duplicate this reply (one with contents, one without).
         """
         old_name = old_location.name if old_location is not None else "the previous room"
-        exits_list = Engine._exit_labels(destination)
-        exit_str = f"Exits lead {', '.join(exits_list)}."
-
         response = (
-            f"You travel towards {destination.name}.\n"
+            f"You travel towards {scene.name}.\n"
             f"(Prose: You leave the {old_name}).\n\n"
-            f"{destination.description}\n"
-            f"{exit_str}"
         )
+        if scene.dark:
+            return response + "It is too dark to see anything."
 
-        # Show items in the room the mover just entered. Items are physical objects
-        # in the room, so list them from the destination's contents directly.
-        items = [c for c in destination.contents if not isinstance(c, Player)]
-        if items:
-            listed = ", ".join(sorted(c.name for c in items))
+        exits_list = [
+            (
+                f"{exit_.direction.capitalize()} (locked)"
+                if exit_.locked
+                else exit_.direction.capitalize()
+            )
+            for exit_ in scene.exits
+        ]
+        exit_str = f"Exits lead {', '.join(exits_list)}."
+        response += f"{scene.description}\n{exit_str}"
+
+        if scene.objects:
+            listed = ", ".join(
+                sorted(obj.name for obj in scene.objects))
             response += f"\n\nHere you see: {listed}."
 
         return response
@@ -531,18 +575,6 @@ class Engine:
         return None, message
 
 
-    @staticmethod
-    def _held_items(entity) -> List[str]:
-        """Return the display names of the physical items `entity` carries.
-
-        A player's `contents` hold only things it has picked up; rooms are handled
-        by their own code path, so this is the inventory view over a player slot.
-        Names are sorted for deterministic output.
-        """
-        if entity is None:
-            return []
-        return sorted(c.name for c in entity.contents)
-
     # --- Carry limit (#78) ---------------------------------------------------
 
     @staticmethod
@@ -594,36 +626,106 @@ class Engine:
             for c in player.contents
         )
 
-    def visible_room_state(self, player) -> Dict[str, Any]:
-        """The view of the player's current room, ready to render.
+    def scene_for(self, player) -> Scene:
+        """Build the one visible scene both renderers consume (#135).
 
-        This is the single source of truth for what a player sees in their room
-        — the room description, visible items, and visible occupants. It
-        encodes the visibility rules (darkness) so the server terminal can
-        render `room_state` without duplicating them: a dark room with no light
-        reports its name and darkness but hides every item and occupant the
-        player cannot see.
+        This is the single visibility rule: a dark room with no light exposes
+        no objects, occupants, NPCs, exits, or geometry; a carried lit light or
+        a fixed room light keeps it lit. The actor's inventory is always
+        present, because carrying does not depend on sight.
         """
         room = player.location if player is not None else None
-        dark = isinstance(room, Room) and room.dark and not self._room_is_lit(player, room)
+        inventory = tuple(player.contents) if player is not None else ()
+        if not isinstance(room, Room):
+            return Scene(
+                room=None, room_id=None, name="", description="",
+                dark=False, inventory=inventory,
+            )
+
+        dark = room.dark and not self._room_is_lit(player, room)
         if dark:
-            return {
-                "name": room.name if room is not None else "",
-                "description": room.description if room is not None else "",
-                "dark": True,
-                "items": [],
-                "occupants": [],
-            }
-        items = sorted(c.name for c in room.contents if not isinstance(c, Player))
-        occupants = sorted(p.name for p in self._players.values()
-                           if p.location is room and p is not player)
+            return Scene(
+                room=room, room_id=room_key(room), name=room.name,
+                description=room.description, dark=True,
+                inventory=inventory,
+            )
+
+        exits = []
+        for direction, target in room.exits.items():
+            lock = room.exit_locks.get(direction)
+            exits.append(SceneExit(
+                direction=direction,
+                to_id=room_key(target),
+                locked=room.exit_is_locked(direction),
+                label=lock.label if lock is not None else None,
+            ))
+        return Scene(
+            room=room,
+            room_id=room_key(room),
+            name=room.name,
+            description=room.description,
+            dark=False,
+            objects=tuple(
+                content for content in room.contents
+                if not isinstance(content, Player)
+            ),
+            occupants=tuple(
+                other for other in self._players.values()
+                if other.location is room and other is not player
+            ),
+            npcs=tuple(room.npcs),
+            exits=tuple(exits),
+            geometry=room.geometry,
+            inventory=inventory,
+        )
+
+    def visible_room_state(self, player) -> Dict[str, Any]:
+        """Compatibility projection of `scene_for` for the v1 terminal.
+
+        New code should consume `scene_for` directly. #137 retires the v1
+        terminal; until then this keeps its old name-only view available.
+        """
+        scene = self.scene_for(player)
         return {
-            "name": room.name if room is not None else "",
-            "description": room.description if room is not None else "",
-            "dark": False,
-            "items": items,
-            "occupants": occupants,
+            "name": scene.name,
+            "description": scene.description,
+            "dark": scene.dark,
+            "items": sorted(obj.name for obj in scene.objects),
+            "occupants": sorted(person.name for person in scene.occupants),
         }
+
+    @staticmethod
+    def _look_text(scene: Scene) -> str:
+        """The `look` reply from one scene, matching the v2 `text` sets."""
+        if scene.room is None:
+            return "You feel lost in a void."
+        if scene.dark:
+            return "It is too dark to see anything."
+
+        text = scene.description
+        if scene.objects:
+            listed = ", ".join(
+                sorted(obj.name for obj in scene.objects))
+            text += f"\n\nHere you see: {listed}."
+        if scene.npcs:
+            listed = ", ".join(
+                npc.name for npc in sorted(
+                    scene.npcs, key=lambda npc: npc.name.lower()))
+            text += f"\n\nAlso here: {listed}."
+        if scene.occupants:
+            listed = ", ".join(
+                person.name for person in sorted(
+                    scene.occupants, key=lambda person: person.name.lower()))
+            text += f"\n\nOthers in the room: {listed}."
+        return text
+
+    @staticmethod
+    def _inventory_text(scene: Scene) -> str:
+        """The `inventory` reply from one scene's carried set."""
+        names = sorted(item.name for item in scene.inventory)
+        if not names:
+            return "You are not carrying anything."
+        return "You are carrying: " + ", ".join(names) + "."
 
 
     @staticmethod
@@ -1172,7 +1274,7 @@ class Engine:
             return
 
         outcome.reply = self._describe_movement(
-            actor.location, direction, old_location=old_room)
+            self.scene_for(actor), direction, old_location=old_room)
         outcome.events.append(SemanticEvent(
             kind="room.state",
             data={"actor": actor},
@@ -1201,42 +1303,15 @@ class Engine:
 
     async def _exec_look(self, outcome: CommandOutcome, actor: Player,
                          arg: str | None) -> None:
-        """`look`: render the actor's room; the adapter builds `room.state`."""
-        room = actor.location
-        if room is None:
-            outcome.reply = "You feel lost in a void."
-        elif not self._room_is_lit(actor, room):
-            outcome.reply = "It is too dark to see anything."
-        else:
-            outcome.reply = room.description
-            items = [c for c in room.contents if not isinstance(c, Player)]
-            if items:
-                listed = ", ".join(sorted(c.name for c in items))
-                outcome.reply += f"\n\nHere you see: {listed}."
-            if room.npcs:
-                listed = ", ".join(
-                    npc.name for npc in sorted(
-                        room.npcs, key=lambda npc: npc.name.lower()))
-                outcome.reply += f"\n\nAlso here: {listed}."
-            occupants = [
-                p for p in self._players.values()
-                if p.location is room and p.name != actor.name
-            ]
-            if occupants:
-                listed = ", ".join(
-                    p.name for p in sorted(
-                        occupants, key=lambda p: p.name.lower()))
-                outcome.reply += f"\n\nOthers in the room: {listed}."
+        """`look`: render the actor's scene; the adapter builds `room.state`."""
+        outcome.reply = self._look_text(self.scene_for(actor))
         outcome.events.append(SemanticEvent(
             kind="room.state", data={"actor": actor}, scope="actor"))
 
     async def _exec_inventory(self, outcome: CommandOutcome, actor: Player,
                               arg: str | None) -> None:
-        """`inventory`: the actor's pack, rendered by the adapter."""
-        held = self._held_items(actor)
-        outcome.reply = (
-            f"You are carrying: {', '.join(held)}."
-            if held else "You are not carrying anything.")
+        """`inventory`: the actor's pack from the same scene."""
+        outcome.reply = self._inventory_text(self.scene_for(actor))
         outcome.events.append(SemanticEvent(
             kind="player.inventory",
             data={"actor": actor, "text": outcome.reply},

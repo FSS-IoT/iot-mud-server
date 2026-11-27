@@ -12,6 +12,7 @@ It no longer parses verbs, classifies prose, or snapshots world state.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 from src.mud.content import Entity, Player, Room
@@ -24,7 +25,7 @@ def _room_id(room: Room) -> str:
     return room_key(room)
 
 
-def _object_data(entity: Entity, collection: list[Entity]) -> dict[str, Any]:
+def _object_data(entity: Entity, collection: Sequence[Entity]) -> dict[str, Any]:
     """Stable instance id plus the prototype kind.
 
     The world's item id is the prototype. When a collection holds more than one
@@ -57,9 +58,9 @@ def _object_data(entity: Entity, collection: list[Entity]) -> dict[str, Any]:
 
 
 def build_room_state(engine: Engine, player: Player) -> dict[str, Any]:
-    """The actor's view of its room, structured for v2."""
-    room = player.location
-    if room is None:
+    """The actor's view of its room, structured from one scene (#135)."""
+    scene = engine.scene_for(player)
+    if scene.room is None:
         return {
             "room": {
                 "id": "void", "name": "The Void",
@@ -70,13 +71,12 @@ def build_room_state(engine: Engine, player: Player) -> dict[str, Any]:
             "text": "You feel lost in a void.",
         }
 
-    view = engine.visible_room_state(player)
-    if view.get("dark"):
+    if scene.dark:
         return {
             "room": {
-                "id": _room_id(room),
-                "name": room.name,
-                "description": room.description,
+                "id": scene.room_id,
+                "name": scene.name,
+                "description": scene.description,
                 "dark": True,
                 "exits": [],
                 "objects": [],
@@ -87,10 +87,8 @@ def build_room_state(engine: Engine, player: Player) -> dict[str, Any]:
         }
 
     objects = []
-    for entity in room.contents:
-        if isinstance(entity, Player):
-            continue
-        data = _object_data(entity, room.contents)
+    for entity in scene.objects:
+        data = _object_data(entity, scene.objects)
         data["portable"] = bool(getattr(entity, "portable", True))
         if getattr(entity, "readable", False):
             data["readable"] = True
@@ -108,9 +106,7 @@ def build_room_state(engine: Engine, player: Player) -> dict[str, Any]:
     objects.sort(key=lambda obj: obj["name"].lower())
 
     players = []
-    for other in engine.players_in_room(room):
-        if other.name == player.name:
-            continue
+    for other in scene.occupants:
         person = {"name": other.name}
         if getattr(other, "asleep", False):
             # Sleep is the stone state (#72): present but invincible. The
@@ -124,22 +120,21 @@ def build_room_state(engine: Engine, player: Player) -> dict[str, Any]:
             "id": getattr(npc, "item_id", None) or slug(npc.name),
             "name": npc.name,
         }
-        for npc in sorted(room.npcs, key=lambda npc: npc.name.lower())
+        for npc in sorted(scene.npcs, key=lambda npc: npc.name.lower())
     ]
     exits = []
-    for direction, target in sorted(room.exits.items()):
-        lock = room.exit_locks.get(direction)
+    for scene_exit in sorted(scene.exits, key=lambda entry: entry.direction):
         entry: dict[str, Any] = {
-            "direction": direction,
-            "to": _room_id(target),
-            "locked": room.exit_is_locked(direction),
+            "direction": scene_exit.direction,
+            "to": scene_exit.to_id,
+            "locked": scene_exit.locked,
         }
         # The author's door name, when there is one. Additive (#77).
-        if lock is not None and lock.label:
-            entry["label"] = lock.label
+        if scene_exit.label:
+            entry["label"] = scene_exit.label
         exits.append(entry)
 
-    text = f"{room.name}\n{room.description}"
+    text = f"{scene.name}\n{scene.description}"
     if objects:
         text += "\n\nHere you see: " + ", ".join(
             obj["name"] for obj in objects) + "."
@@ -155,9 +150,9 @@ def build_room_state(engine: Engine, player: Player) -> dict[str, Any]:
             npc["name"] for npc in npcs) + "."
 
     payload = {
-        "id": _room_id(room),
-        "name": room.name,
-        "description": room.description,
+        "id": scene.room_id,
+        "name": scene.name,
+        "description": scene.description,
         "dark": False,
         "exits": exits,
         "objects": objects,
@@ -167,9 +162,8 @@ def build_room_state(engine: Engine, player: Player) -> dict[str, Any]:
     # Additive: only rooms with authored geometry carry the field, and the
     # dark branch above omits it so a map is never leaked to an observer who
     # cannot see the room.
-    geometry = getattr(room, "geometry", None)
-    if geometry is not None:
-        payload["geometry"] = geometry
+    if scene.geometry is not None:
+        payload["geometry"] = scene.geometry
 
     return {"room": payload, "text": text}
 
@@ -188,9 +182,10 @@ def _inventory_data(engine: Engine, player: Player,
     Every inventory push (the `inventory` verb and the put/get follow-ups) goes
     through here, so the numbers cannot drift.
     """
+    scene = engine.scene_for(player)
     items = []
-    for item in player.contents:
-        data = _object_data(item, player.contents)
+    for item in scene.inventory:
+        data = _object_data(item, scene.inventory)
         if getattr(item, "light_source", False):
             data["lit"] = bool(getattr(item, "lit", False))
         items.append(data)
