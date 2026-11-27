@@ -546,6 +546,9 @@ class V2Server:
         # Presence, delivery, and idle expiry live in one collaborator; the
         # server never owns either socket map (#134).
         self.sessions = SessionTable(engine)
+        # Serializes close(): a second caller waits for the first cleanup
+        # instead of racing it, and a repeated close is a no-op.
+        self._close_lock = asyncio.Lock()
 
     # ------------------------------------------------------------------
     # Room delivery
@@ -1024,7 +1027,15 @@ class V2Server:
             await self.sessions.disconnect(session)
             await session.close()
 
-    async def run(self) -> None:
+    async def start(self) -> int:
+        """Bind the configured endpoint and start serving.
+
+        Returns the actually bound port, so a caller with `port=0` never
+        polls `server.port` to discover it. The method does not block: the
+        caller decides when to `wait_closed()`/`close()`.
+        """
+        if self._server is not None:
+            raise RuntimeError("v2 server is already started")
         if self.db_path is not None:
             self.db = open_database(self.db_path)
             # The seeded world owns its name and epoch; a database without a
@@ -1048,13 +1059,30 @@ class V2Server:
         try:
             self._server = await websockets.serve(
                 self.handler, self.host, self.port, max_size=65536)
-            self.port = self._server.sockets[0].getsockname()[1]
-            self._idle_task = asyncio.create_task(self._idle_loop())
-            self._wander_task = asyncio.create_task(self._wander_loop())
-            await self._stop_event.wait()
-            self._server.close()
-            await self._server.wait_closed()
-        finally:
+        except BaseException:
+            await self._release_resources()
+            raise
+        self.port = self._server.sockets[0].getsockname()[1]
+        self._idle_task = asyncio.create_task(self._idle_loop())
+        self._wander_task = asyncio.create_task(self._wander_loop())
+        return self.port
+
+    async def close(self) -> None:
+        """Stop accepting, close every client, and await quiescence.
+
+        `websockets.Server.close()` closes the listening socket and every open
+        connection, and `wait_closed()` returns after all connection handlers
+        have run their `finally` path (sleep/leave/persistence). The idle and
+        wander tasks are then cancelled, and the database and event
+        subscription are released. A second call is a no-op.
+        """
+        async with self._close_lock:
+            self._stop_event.set()
+            server = self._server
+            self._server = None
+            if server is not None:
+                server.close()
+                await server.wait_closed()
             if self._idle_task is not None:
                 self._idle_task.cancel()
                 try:
@@ -1069,13 +1097,29 @@ class V2Server:
                 except asyncio.CancelledError:
                     pass
                 self._wander_task = None
-            await self.engine.unsubscribe("effect", self._relay_effect)
-            if self.store is not None:
-                self.engine.attach_store(None)
-                self.store = None
-            if self.db is not None:
-                self.db.close()
-                self.db = None
+            await self._release_resources()
+
+    async def aclose(self) -> None:
+        """Async-context alias for `close()`."""
+        await self.close()
+
+    async def _release_resources(self) -> None:
+        """Undo what `start()` acquired; safe when only some of it exists."""
+        await self.engine.unsubscribe("effect", self._relay_effect)
+        if self.store is not None:
+            self.engine.attach_store(None)
+            self.store = None
+        if self.db is not None:
+            self.db.close()
+            self.db = None
+
+    async def run(self) -> None:
+        """CLI wrapper: start, wait for `stop()`, then close."""
+        await self.start()
+        try:
+            await self._stop_event.wait()
+        finally:
+            await self.close()
 
     def stop(self) -> None:
         self._stop_event.set()

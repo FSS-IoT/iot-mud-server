@@ -23,24 +23,21 @@ module names the behavior the loader, engine, storage, and server must provide:
 
 from __future__ import annotations
 
-import asyncio
 import json
 import subprocess
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Self
 
 import pytest
-import websockets
 import yaml
 
 from src.mud.config import ConfigError, load_config
 from src.mud.engine.core import Engine
-from src.mud.net.v2_server import V2Server
 from src.mud.storage.db import open_database
 from src.mud.storage.store import WriteThroughStore
 from src.mud.world.loader import load_world
+from tests.golden.harness import server_harness
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 WORLD_DIR = REPO_ROOT / "data" / "worlds" / "club_world"
@@ -368,102 +365,20 @@ async def test_disabling_effects_changes_no_gameplay():
 # ---------------------------------------------------------------------------
 
 
-class Client:
-    """A tiny v2 guest client with a background reader and typed drain."""
-
-    def __init__(self, uri: str):
-        self.uri = uri
-        self.ws = None
-        self.q: asyncio.Queue = asyncio.Queue()
-        self.task: asyncio.Task | None = None
-
-    async def connect(self) -> Self:
-        self.ws = await websockets.connect(self.uri)
-        self.hello = json.loads(await self.ws.recv())
-        self.task = asyncio.create_task(self._reader())
-        return self
-
-    async def _reader(self) -> None:
-        try:
-            async for raw in self.ws:
-                self.q.put_nowait(json.loads(raw))
-        except websockets.exceptions.ConnectionClosed:
-            pass
-
-    async def send(self, message: dict) -> None:
-        await self.ws.send(json.dumps(message))
-
-    async def join(self, name: str) -> None:
-        await self.send({
-            "v": 2, "type": "join", "id": "join",
-            "data": {"name": name},
-        })
-        await self.next("session.ok")
-        await self.next("room.state")
-
-    async def input(self, text: str, msg_id=1) -> None:
-        await self.send({
-            "v": 2, "type": "input", "id": msg_id,
-            "data": {"text": text},
-        })
-
-    async def next(self, type_: str, timeout: float = 5.0):
-        while True:
-            message = await asyncio.wait_for(self.q.get(), timeout)
-            if message.get("type") == type_:
-                return message
-
-    async def absent(self, type_: str, timeout: float = 0.3) -> bool:
-        """True when no `type_` message arrives before the timeout."""
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + timeout
-        while True:
-            remaining = deadline - loop.time()
-            if remaining <= 0:
-                return True
-            try:
-                message = await asyncio.wait_for(self.q.get(), remaining)
-            except TimeoutError:
-                return True
-            if message.get("type") == type_:
-                return False
-
-    async def close(self) -> None:
-        if self.task is not None:
-            self.task.cancel()
-        if self.ws is not None:
-            await self.ws.close()
-
-
 @asynccontextmanager
 async def _v2_server(tmp_path: Path, name: str, *, effects: bool):
     config = load_config(_write_config(tmp_path, effects))
     engine = await _engine()
-    server = V2Server(
+    db_path = tmp_path / name
+    async with server_harness(
         engine,
-        port=0,
-        db_path=tmp_path / name,
+        db_path=db_path,
         auth_required=False,
         features=config.features,
         # Keep the 1 Hz NPC tick out of a test that never waits a second.
         tick_seconds=3600.0,
-    )
-    task = asyncio.create_task(server.run())
-    for _ in range(200):
-        if server.port:
-            break
-        await asyncio.sleep(0.01)
-    assert server.port, "v2 server did not bind"
-    client = await Client(f"ws://localhost:{server.port}").connect()
-    try:
-        yield server, client, tmp_path / name
-    finally:
-        await client.close()
-        server.stop()
-        try:
-            await asyncio.wait_for(task, timeout=3.0)
-        except TimeoutError:
-            task.cancel()
+    ) as server, server.client() as client:
+        yield server, client, db_path
 
 
 async def test_disabled_effects_are_bus_and_log_only(tmp_path):
@@ -502,6 +417,8 @@ async def test_enabled_effects_reach_the_room(tmp_path):
         await client.join("Ada")
         await client.input("go north", 1)
         await client.next("room.state")
+        entered = await client.next("effect")
+        assert entered["data"]["trigger"] == "on_enter"
 
         await client.input("talk Mira", 2)
         effect = await client.next("effect")

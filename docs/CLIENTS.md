@@ -60,14 +60,16 @@ The client's `--uri` must name the server's `--port`. A mismatch is a
 connection error, not a protocol error; the server cannot tell you which port
 you meant to use.
 
-The optional mock server is a protocol-only harness for the first steps:
+The optional mock server is a scripted documentation fixture for the first
+steps, not a conformance implementation:
 
 ```bash
 uv run python tools/mock_v2_server.py
 ```
 
 It listens on `ws://localhost:8770` and scripts a small session. It is useful
-while the handshake is new; the real server is the authority for acceptance.
+while the handshake is new; the real server is the authority for acceptance,
+and the suite's protocol harness is `tests/golden/harness.py`.
 
 ## The envelope in one paragraph
 

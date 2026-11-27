@@ -1,16 +1,19 @@
-"""A protocol-v2 mock server for client authors.
+"""A scripted protocol-v2 documentation fixture for client authors.
 
-This is **not** the real server. It is a small, shared-world harness that speaks
-the same v2 handshake and the command/event surface used by `SESSION.md`, so a
-client can be tried without running the engine:
+This is **not** the real server and it is not the conformance harness. It is a
+small, shared-world script that speaks the v2 handshake and the command/event
+surface used by `SESSION.md`, so a client can be tried without running the
+engine:
 
     uv run python tools/mock_v2_server.py
     # client: ws://localhost:8770
 
 It supports join, movement, look, take/drop, say, inventory, the forest chest
 (lock/use/open/get-from/close/put), errors, and quit. The real server remains
-authoritative; the mock is scripted content with no engine, database, or
-persistence.
+authoritative, and `tests/golden/harness.py` is the only harness the suite
+treats as protocol-conformant; the mock is scripted content with no engine,
+database, or persistence, and its tests cover only the scripted session it
+documents.
 """
 
 from __future__ import annotations

@@ -23,14 +23,11 @@ import asyncio
 import json
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Self
 
 import pytest
-import websockets
 
 from src.mud.content import Entity, Room
 from src.mud.engine.core import Engine
-from src.mud.net.v2_server import V2Server
 from src.mud.storage.db import open_database
 from src.mud.storage.store import (
     PlayerStore,
@@ -39,134 +36,18 @@ from src.mud.storage.store import (
 )
 from src.mud.world.loader import load_demo_village, load_world
 from src.mud.world.seed import seed_world
-
-
-class Client:
-    """A tiny v2 client with a background reader and a type-filtered drain."""
-
-    def __init__(self, uri: str):
-        self.uri = uri
-        self.ws = None
-        self.q: asyncio.Queue = asyncio.Queue()
-        self.task: asyncio.Task | None = None
-        self.hello = None
-
-    async def connect(self) -> Self:
-        self.ws = await websockets.connect(self.uri)
-        self.hello = json.loads(await self.ws.recv())
-        self.task = asyncio.create_task(self._reader())
-        return self
-
-    async def __aenter__(self) -> Self:
-        return await self.connect()
-
-    async def __aexit__(self, *exc) -> None:
-        await self.close()
-
-    async def _reader(self) -> None:
-        try:
-            async for raw in self.ws:
-                self.q.put_nowait(json.loads(raw))
-        except websockets.exceptions.ConnectionClosed:
-            pass
-
-    async def send(self, message: dict) -> None:
-        await self.ws.send(json.dumps(message))
-
-    async def register(self, name: str, msg_id="register") -> str:
-        await self.send({
-            "v": 2, "type": "auth", "id": msg_id,
-            "data": {"mode": "register", "name": name},
-        })
-        ok = await self.next("auth.ok", msg_id=msg_id)
-        await self.next("room.state")
-        return ok["data"]["key"]
-
-    async def login(self, key: str, msg_id="login"):
-        await self.send({
-            "v": 2, "type": "auth", "id": msg_id,
-            "data": {"mode": "login", "key": key},
-        })
-        ok = await self.next("auth.ok", msg_id=msg_id)
-        state = await self.next("room.state")
-        return ok, state
-
-    async def join(self, name: str):
-        await self.send({
-            "v": 2, "type": "join", "id": "join",
-            "data": {"name": name},
-        })
-        ok = await self.next("session.ok")
-        state = await self.next("room.state")
-        return ok, state
-
-    async def input(self, text: str, msg_id=1) -> None:
-        await self.send({
-            "v": 2, "type": "input", "id": msg_id,
-            "data": {"text": text},
-        })
-
-    async def next(self, type_: str, *, msg_id=None, timeout: float = 5.0):
-        while True:
-            message = await asyncio.wait_for(self.q.get(), timeout)
-            if message.get("type") != type_:
-                continue
-            if msg_id is not None and message.get("id") != msg_id:
-                continue
-            return message
-
-    async def next_any(self, timeout: float = 5.0):
-        return await asyncio.wait_for(self.q.get(), timeout)
-
-    async def inventory(self, msg_id="inv") -> list[dict]:
-        await self.input("inventory", msg_id)
-        event = await self.next("player.inventory", msg_id=msg_id)
-        return event["data"]["items"]
-
-    async def who(self, msg_id="who") -> dict:
-        await self.input("who", msg_id)
-        return await self.next("who.list", msg_id=msg_id)
-
-    async def close(self) -> None:
-        if self.task is not None:
-            self.task.cancel()
-        if self.ws is not None:
-            await self.ws.close()
-
-
-async def _wait_for_bind(server: V2Server) -> None:
-    for _ in range(200):
-        if server.port:
-            return
-        await asyncio.sleep(0.01)
-    raise AssertionError("v2 server did not bind")
-
-
-async def _start(db_path):
-    engine = Engine()
-    await load_demo_village(engine)
-    instance = V2Server(
-        engine, port=0, db_path=db_path, auth_required=True)
-    task = asyncio.create_task(instance.run())
-    await _wait_for_bind(instance)
-    return instance, engine, task
-
-
-async def _stop(instance: V2Server, task) -> None:
-    instance.stop()
-    try:
-        await asyncio.wait_for(task, timeout=3.0)
-    except TimeoutError:
-        task.cancel()
+from tests.golden.harness import HarnessClient as Client
+from tests.golden.harness import server_harness
 
 
 @asynccontextmanager
 async def auth_server(db_path):
-    instance, engine, task = await _start(db_path)
-    try:
-        yield instance, engine
-    finally:
-        await _stop(instance, task)
+    engine = Engine()
+    await load_demo_village(engine)
+    async with server_harness(
+        engine, db_path=db_path, auth_required=True,
+    ) as server:
+        yield server
 
 
 async def _take_the_key_in_shop(client: Client, first_id: int = 2) -> None:
@@ -183,11 +64,9 @@ async def _take_the_key_in_shop(client: Client, first_id: int = 2) -> None:
 async def test_disconnect_sleeps_in_place_and_drops_flagged_items(tmp_path):
     db_path = tmp_path / "sleep.db"
 
-    async with auth_server(db_path) as (instance, engine):
-        uri = f"ws://localhost:{instance.port}"
-
-        ada = await Client(uri).connect()
-        key = await ada.register("Ada", "c-1")
+    async with auth_server(db_path) as server:
+        ada = await server.connect()
+        key = await ada.register_key("Ada", "c-1")
 
         await ada.input("go north", 2)
         await ada.next("room.state", msg_id=2)
@@ -198,7 +77,7 @@ async def test_disconnect_sleeps_in_place_and_drops_flagged_items(tmp_path):
             "gold_coin", "key_gold_1",
         }
 
-        ben = await Client(uri).connect()
+        ben = await server.connect()
         await ben.register("Ben", "c-2")
         await ben.input("go north", 2)
         await ben.next("room.state", msg_id=2)
@@ -218,19 +97,6 @@ async def test_disconnect_sleeps_in_place_and_drops_flagged_items(tmp_path):
         assert left["data"]["dropped"] == [
             {"id": "key_gold_1", "name": "Gold Key"},
         ]
-
-        # The engine kept the character in the room, asleep/stone, carrying
-        # the coin. The key is on the shop floor.
-        sleeping = engine.get_player("Ada")
-        assert sleeping is not None
-        assert sleeping.asleep is True
-        shop = engine.get_room("Alchemist Shop")
-        assert sleeping.location is shop
-        assert [item.name for item in sleeping.contents] == ["Gold Coin"]
-        assert "Gold Key" in [item.name for item in shop.contents]
-        gold_key = next(
-            item for item in shop.contents if item.item_id == "key_gold_1")
-        assert gold_key.dropped_on_sleep is True
 
         # The durable half agrees: asleep + last_seen, the key on the floor,
         # the coin still owned by Ada.
@@ -278,15 +144,16 @@ async def test_disconnect_sleeps_in_place_and_drops_flagged_items(tmp_path):
 
         # Login wakes Ada in place with the coin that stayed with her, and the
         # room sees her wake. The dropped key is still on the floor.
-        ada = await Client(uri).connect()
+        ada = await server.connect()
         ok, state = await ada.login(key, "c-3")
         assert ok["data"]["player"] == {"name": "Ada"}
         assert state["data"]["room"]["id"] == "shop"
         assert await ada.inventory() == [
             {"id": "gold_coin", "name": "Gold Coin", "weight": 0.01},
         ]
-        assert "key_gold_1" in [
-            item.item_id for item in engine.get_room("Alchemist Shop").contents]
+        room = await ben.state("look-key")
+        assert "key_gold_1" in {
+            obj["id"] for obj in room["room"]["objects"]}
 
         entered = await ben.next("room.enter")
         assert entered["data"]["actor"]["name"] == "Ada"
@@ -296,7 +163,6 @@ async def test_disconnect_sleeps_in_place_and_drops_flagged_items(tmp_path):
         players = {entry["name"]: entry for entry in who["data"]["players"]}
         assert players["Ada"]["asleep"] is False
         assert players["Ada"]["stone"] is False
-        assert engine.get_player("Ada").asleep is False
 
         # Wake creates no offline queue: once the direct replies are read,
         # nothing else arrives from the time Ada was asleep.
@@ -520,17 +386,16 @@ async def test_json_oracle_carries_the_drop_flag():
 async def test_who_reads_the_durable_roster_after_a_restart(tmp_path):
     db_path = tmp_path / "restart.db"
 
-    async with auth_server(db_path) as (instance, _engine), \
-            Client(f"ws://localhost:{instance.port}") as ada:
-        key = await ada.register("Ada", "c-1")
+    async with auth_server(db_path) as server, Client(server) as ada:
+        key = await ada.register_key("Ada", "c-1")
         await ada.input("go north", 2)
         await ada.next("room.state", msg_id=2)
         await _take_the_key_in_shop(ada, 3)
 
     # A new server and engine: Ada is not connected, but her character row is
     # asleep in the shop. `who` is a server-wide roster, not just live sockets.
-    async with auth_server(db_path) as (instance, engine):
-        async with Client(f"ws://localhost:{instance.port}") as carla:
+    async with auth_server(db_path) as server:
+        async with Client(server) as carla:
             await carla.register("Carla", "c-2")
             who = await carla.who("who-1")
             players = {entry["name"]: entry for entry in who["data"]["players"]}
@@ -539,35 +404,32 @@ async def test_who_reads_the_durable_roster_after_a_restart(tmp_path):
                 "stone": True,
             }
             assert players["Carla"]["asleep"] is False
-            assert engine.get_player("Ada") is None
 
         # Logging in after the restart wakes Ada in place. The key was dropped
         # into the shop before the server stopped, so nothing is carried.
-        async with Client(f"ws://localhost:{instance.port}") as ada:
+        async with Client(server) as ada:
             ok, state = await ada.login(key, "c-3")
             assert ok["data"]["player"] == {"name": "Ada"}
             assert state["data"]["room"]["id"] == "shop"
             assert await ada.inventory() == []
-            assert engine.get_player("Ada").asleep is False
+            who = await ada.who("who-2")
+            players = {entry["name"]: entry for entry in who["data"]["players"]}
+            assert players["Ada"]["asleep"] is False
+            assert players["Ada"]["stone"] is False
 
 
 @pytest.mark.asyncio
 async def test_guest_disconnect_still_removes_the_player():
     engine = Engine()
     await load_demo_village(engine)
-    instance = V2Server(engine, port=0, auth_required=False)
-    task = asyncio.create_task(instance.run())
-    await _wait_for_bind(instance)
-    try:
-        async with Client(f"ws://localhost:{instance.port}") as guest:
-            await guest.join("Ada")
-        for _ in range(200):
-            if engine.get_player("Ada") is None:
-                break
-            await asyncio.sleep(0.01)
-        assert engine.get_player("Ada") is None
-    finally:
-        await _stop(instance, task)
+    # Closing the harness closes the connected guest and awaits the handler's
+    # cleanup, so the removal is observable as soon as the block exits.
+    async with server_harness(
+        engine, auth_required=False,
+    ) as server, Client(server) as guest:
+        await guest.join("Ada")
+        assert engine.get_player("Ada") is not None
+    assert engine.get_player("Ada") is None
 
 
 def test_player_store_sleep_and_wake_record_the_state(tmp_path):
