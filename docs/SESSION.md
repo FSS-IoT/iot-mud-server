@@ -35,7 +35,7 @@ render them.
 
 Before the first run, record the full server commit your client targets in its
 README and compare it with `hello.data.server_commit`; `BOOTSTRAP.md` gives the
-v2.1.4 reference pin and the reference client checks it with
+v2.1.5 reference pin and the reference client checks it with
 `--expect-commit <full sha>`. If the commit differs, read the `PROTOCOL.md`
 changelog before the acceptance, not after.
 
