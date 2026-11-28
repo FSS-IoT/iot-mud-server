@@ -252,6 +252,21 @@ class Engine:
             walk(room)
         return slots
 
+    @staticmethod
+    def _slot_allowed(item: Entity, slot: str) -> bool:
+        """Whether a durable runtime slot matches the item's authored slots."""
+        authored = tuple(getattr(item, "equip_slots", ()))
+        if slot in HAND_SLOTS:
+            if "hand" not in authored:
+                return False
+            return not (int(getattr(item, "hands", 1) or 1) == 2
+                        and slot != "hand_1")
+        if slot not in authored:
+            return False
+        if getattr(item, "light_source", False) and getattr(item, "lit", False):
+            return slot in LIGHT_SLOTS
+        return True
+
     def restore_player(
         self,
         player: Player,
@@ -284,11 +299,19 @@ class Engine:
                 continue
             holder.remove_content(item)
             player.add_content(item)
-            if getattr(item, "equipped_slot", None):
+            slot = getattr(item, "equipped_slot", None)
+            if slot:
+                if not self._slot_allowed(item, slot):
+                    self._commit(
+                        ChangeSet("restore").set(item, "slot", None))
+                    item.equipped_slot = None
+                    logger.warning(
+                        "dropped invalid slot %s on %s for %s",
+                        slot, object_key(item), player.name)
+                    continue
                 try:
-                    player.equip(item, item.equipped_slot)
+                    player.equip(item, slot)
                 except ValueError:
-                    slot = item.equipped_slot
                     self._commit(
                         ChangeSet("restore").set(item, "slot", None))
                     item.equipped_slot = None
@@ -1202,11 +1225,17 @@ class Engine:
         changes = ChangeSet("take").place(item, at=actor)
         if lit_slot is not None:
             changes.set(item, "slot", lit_slot)
+        elif getattr(item, "equipped_slot", None) is not None:
+            # A stale slot from a crashed session must not travel into the
+            # pack. The item is not in this actor's equipment.
+            changes.set(item, "slot", None)
         self._commit(changes)
         room.remove_content(item)
         actor.add_content(item)
         if lit_slot is not None:
             actor.equip(item, lit_slot)
+        elif item.equipped_slot is not None:
+            item.equipped_slot = None
         await self.emit("item_taken", {
             "item_name": item.name.lower(), "owner": actor.name})
         outcome.reply = f"You picked up the {item.name}."
@@ -1829,11 +1858,15 @@ class Engine:
         changes = ChangeSet("get").place(item, at=actor)
         if lit_slot is not None:
             changes.set(item, "slot", lit_slot)
+        elif getattr(item, "equipped_slot", None) is not None:
+            changes.set(item, "slot", None)
         self._commit(changes)
         container.remove_content(item)
         actor.add_content(item)
         if lit_slot is not None:
             actor.equip(item, lit_slot)
+        elif item.equipped_slot is not None:
+            item.equipped_slot = None
         await self.emit("item_got", {
             "item_name": item.name.lower(),
             "container": container.name.lower(),
@@ -2067,6 +2100,24 @@ class Engine:
                 target = requested
                 displaced = [candidate]
                 error = None
+            else:
+                blocker = next(
+                    (held for slot, held in actor.equipment.items()
+                     if slot in HAND_SLOTS and held is not item
+                     and int(getattr(held, "hands", 1) or 1) == 2),
+                    None,
+                )
+                if blocker is not None:
+                    if getattr(blocker, "light_source", False) and getattr(
+                            blocker, "lit", False):
+                        self._fail(
+                            outcome, "still_lit",
+                            f"Put out the {blocker.name} before you swap "
+                            "it out.")
+                        return
+                    target = requested
+                    displaced = [blocker]
+                    error = None
         if error is not None:
             if error == "no_slot":
                 self._fail(
@@ -2498,20 +2549,31 @@ class Engine:
             self._notice(outcome, f"The {held_item.name} is already lit.")
             return
         slot = getattr(held_item, "equipped_slot", None)
+        actual = slot is not None and actor.equipment.get(slot) is held_item
         changes = ChangeSet("light")
-        if slot not in LIGHT_SLOTS:
+        if not actual or slot not in LIGHT_SLOTS:
+            if slot is not None:
+                changes.set(held_item, "slot", None)
             slot, error = self._equip_target(
                 actor, held_item, light_only=True)
             if error is not None:
-                self._fail(
-                    outcome, "no_slot" if error == "no_slot" else "bad_args",
-                    f"You have no free hand, belt, or head for the "
-                    f"{held_item.name}.")
+                if error == "bad_args":
+                    self._fail(
+                        outcome, "bad_args",
+                        f"The {held_item.name} cannot be held or worn "
+                        "where it could light the room.")
+                else:
+                    self._fail(
+                        outcome, "no_slot",
+                        f"You have no free hand, belt, or head for the "
+                        f"{held_item.name}.")
                 return
             changes.set(held_item, "slot", slot)
+            actual = False
         changes.set(held_item, "lit", True)
         self._commit(changes)
-        actor.equip(held_item, slot)
+        if not actual:
+            actor.equip(held_item, slot)
         held_item.lit = True
         await self.emit("light_ignited", {
             "item_name": held_item.name.lower()})

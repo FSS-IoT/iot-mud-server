@@ -175,6 +175,9 @@ def _json_equipment(data: dict, item_id: str) -> tuple[tuple[str, ...], int]:
         raise WorldDataError(
             f"item {item_id!r}: equip_slots must be a list of strings")
     slots = tuple(raw_slots)
+    if len(set(slots)) != len(slots):
+        raise WorldDataError(
+            f"item {item_id!r}: equip_slots must not repeat a slot")
     unknown = sorted(set(slots) - EQUIP_SLOTS)
     if unknown:
         raise WorldDataError(
@@ -183,9 +186,9 @@ def _json_equipment(data: dict, item_id: str) -> tuple[tuple[str, ...], int]:
     if isinstance(hands, bool) or hands not in (1, 2):
         raise WorldDataError(
             f"item {item_id!r}: hands must be 1 or 2")
-    if hands == 2 and "hand" not in slots:
+    if hands == 2 and set(slots) != {"hand"}:
         raise WorldDataError(
-            f"item {item_id!r}: hands 2 requires the hand slot")
+            f"item {item_id!r}: hands 2 requires only the hand slot")
     return slots, int(hands)
 
 

@@ -173,8 +173,9 @@ class GameObject(BaseModel):
     def _check_equipment(self) -> GameObject:
         if len(set(self.equip_slots)) != len(self.equip_slots):
             raise ValueError("equip_slots must not repeat a slot")
-        if self.hands == 2 and "hand" not in self.equip_slots:
-            raise ValueError("hands: 2 requires 'hand' in equip_slots")
+        if self.hands == 2 and set(self.equip_slots) != {"hand"}:
+            raise ValueError(
+                "hands: 2 requires only the 'hand' slot")
         return self
 
 

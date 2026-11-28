@@ -485,6 +485,8 @@ async def test_a_swap_clears_the_stowed_slot_in_the_store(tmp_path):
     {"equip_slots": ["tail"], "hands": 1},
     {"equip_slots": ["hand"], "hands": 3},
     {"equip_slots": ["belt"], "hands": 2},
+    {"equip_slots": ["hand", "belt"], "hands": 2},
+    {"equip_slots": ["hand", "hand"], "hands": 1},
 ])
 async def test_json_loader_rejects_bad_equipment(tmp_path, equipment):
     from src.mud.world.geometry import WorldDataError
@@ -541,3 +543,73 @@ async def test_another_players_equipped_light_lights_the_room():
     assert "dark" not in (
         await engine.process_command("look", "Ben")).lower()
     assert ben.location is ada.location
+
+
+async def test_taking_a_stale_durable_slot_clears_it():
+    engine, ada, torch, _lantern, _sword, _stick = _engine()
+    room = ada.location
+    ada.remove_content(torch)
+    torch.equipped_slot = "hand_1"
+    room.add_content(torch)
+
+    await engine.process_command("take torch", "Ada")
+
+    assert torch.equipped_slot is None
+    assert torch not in ada.equipment.values()
+
+
+async def test_a_named_hand_can_swap_out_a_two_hander():
+    engine, ada, torch, _lantern, sword, _stick = _engine()
+    await engine.process_command("equip sword", "Ada")
+
+    await engine.process_command("equip torch on hand 2", "Ada")
+
+    assert ada.equipment["hand_2"] is torch
+    assert sword.equipped_slot is None
+    assert sword in ada.contents
+
+
+async def test_light_can_use_the_head_slot_when_hands_are_full():
+    engine, ada, torch, _lantern, _sword, _stick = _engine()
+    other = Entity("Other", "Another stick.", equip_slots=("hand",), hands=1)
+    ada.add_content(other)
+    headlamp = Entity(
+        "Headlamp", "A head lamp.", light_source=True,
+        equip_slots=("head",), hands=1, item_id="headlamp")
+    ada.add_content(headlamp)
+    await engine.process_command("equip stick", "Ada")
+    await engine.process_command("equip other", "Ada")
+
+    await engine.process_command("light headlamp", "Ada")
+
+    assert headlamp.equipped_slot == "head"
+    assert headlamp.lit is True
+    assert torch.equipped_slot is None
+
+
+async def test_restoring_an_invalid_slot_clears_it(tmp_path):
+    from src.mud.storage.store import ChangeSet, WriteThroughStore
+
+    engine, ada, torch, _lantern, _sword, _stick = _engine()
+    conn = open_database(tmp_path / "restore.db")
+    try:
+        store = WriteThroughStore(conn)
+        engine.attach_store(store)
+        room = ada.location
+        ada.remove_content(torch)
+        room.add_content(torch)
+        store.commit(
+            ChangeSet("test").place(torch, at=room).set(
+                torch, "slot", "belt"))
+        torch.equipped_slot = "belt"
+        ben = engine.register_player("Ben")
+
+        engine.restore_player(ben, room=room, item_keys=("torch",))
+
+        assert torch.equipped_slot is None
+        assert torch in ben.contents
+        state = json.loads(conn.execute(
+            "SELECT state FROM objects WHERE id = 'torch'").fetchone()["state"])
+        assert state["slot"] is None
+    finally:
+        conn.close()
