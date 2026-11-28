@@ -440,7 +440,7 @@ unknown field.
 
 | Type | Data | Recipients |
 |---|---|---|
-| `player.inventory` | `items[]{id,name,weight,lit?}`, `capacity`, `used`, `unit`, `text?` | Actor only (v2.1) |
+| `player.inventory` | `items[]{id,name,weight,lit?,slot?}`, `capacity`, `used`, `unit`, `text?` | Actor only (v2.1) |
 | `player.said` | `from`, `text`, `self` | Room, including actor |
 | `player.emoted` | `from`, `text`, `self` | Room, including actor (v2.1) |
 | `player.told` | `from`, `to`, `text`, `self` | Target and sender (v2.1) |
@@ -477,6 +477,10 @@ verbatim, with no conversion. `used` is the sum of the carried objects' own
 weights (nested container contents are not counted a second time), rounded to
 three decimals. The server default capacity is `30.0`. `text` is presentation only: it is
 present on the explicit `inventory` reply and omitted from state pushes.
+`slot` is additive and appears only on an equipped item: `hand_1`, `hand_2`,
+`head`, `body`, `back`, `belt`, or `feet`. A two-handed item occupies both
+hands but keeps one `slot` value (`hand_1`). A client that ignores `slot`
+still sees the same item list.
 
 ### NPC dialogue (v2.1)
 
@@ -794,7 +798,8 @@ and exits add the declarative lock the design calls for, with one command
 
 `unknown_command`, `bad_args`, `ambiguous`, `not_found`, `not_here`,
 `not_portable`, `container_closed`, `container_cycle`, `no_exit`, `locked`,
-`already_open`, `already_closed`, `too_heavy`, `malformed_message`,
+`already_open`, `already_closed`, `too_heavy`, `no_slot`, `not_equipped`,
+`malformed_message`,
 `unknown_message`,
 `not_joined`, `already_joined`, `name_taken`, `not_authenticated`,
 `invalid_key`, `invalid_name`, `not_awake`, `rate_limited`, `internal`,
@@ -836,7 +841,9 @@ idle close is `4004` after the character is already asleep.
 | `get <x> from <y>` | `object.got` (actor `self:true` + room `self:false`) + state-only `player.inventory`; closed container `error{container_closed}`, item not inside `error{not_here}`, fixed item `error{not_portable}`, over capacity `error{too_heavy}`, ambiguous `error{ambiguous}` with `candidates` |
 | `use <key> on <container>` | `object.unlocked` (or `error{locked}` / `error{already_open}`) |
 | `use <key> on <exit>` | `exit.unlocked` (actor `self:true` + room `self:false`; wrong or missing key `error{locked}`, already open `error{already_open}`) |
-| `light <source>` | `object.lit` (or `notice` if already lit / not a light) |
+| `equip <x> [on <slot>]` | `player.inventory` (private); no free or allowed slot `error{no_slot}`, wrong slot or non-equippable `error{bad_args}`, unknown `error{not_found}` |
+| `unequip <x>` | `player.inventory` (private); item not equipped `error{not_equipped}`, unknown `error{not_found}` |
+| `light <source>` | `object.lit` (or `notice` if already lit / not a light); the source is auto-equipped into a free hand, belt, or head slot, or `error{no_slot}` |
 | `read <x>` | `object.read` (private) |
 | `inventory` / `i` | `player.inventory` (private) |
 | `who` | `who.list` (private, server-wide, includes asleep) |
@@ -857,6 +864,17 @@ Every change to the wire contract gets an entry here, newest version first.
 version 3. A client that pins a server commit reads this section together with
 `hello.data.server_commit` to see what it may be missing. v2.1 is the current
 release; a later additive fix still adds a bullet here.
+
+### Unreleased — equipment slots (#181)
+
+- `player.inventory` items gain optional `slot`: `hand_1`, `hand_2`, `head`,
+  `body`, `back`, `belt`, or `feet`. Present only on an equipped item.
+- New commands `equip <item> [on <slot>]` and `unequip <item>`. Both reply with
+  a private `player.inventory`; no new event type.
+- New error codes `no_slot` and `not_equipped`.
+- A lit light source lights a dark room only while equipped in a hand, on the
+  belt, or on the head. A lit source in the pack no longer lights the room.
+  No field or event is removed.
 
 ### v2.1.5 — protocol 2 reference pin
 

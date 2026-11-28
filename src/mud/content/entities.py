@@ -14,7 +14,8 @@ class Entity:
                  item_id: str | None = None, locked: bool = False,
                  required_key: str | None = None, lit: bool = False,
                  dropped_on_sleep: bool = False, portable: bool = True,
-                 container: bool = False, open: bool = False):
+                 container: bool = False, open: bool = False,
+                 equip_slots: tuple[str, ...] = (), hands: int = 1):
         self.name = name
         self.description = description
         self.weight = weight
@@ -59,6 +60,13 @@ class Entity:
         # refuses to lift a fixed object into inventory (#76); `take` keeps its
         # existing v2.0 behavior.
         self.portable = portable
+        # Where the object can be equipped. `hand` uses one hand, or both when
+        # `hands` is 2. Empty means it cannot be equipped. The live slot is
+        # `equipped_slot` (`hand_1`, `belt`, ...), set by the engine and
+        # persisted in `objects.state.slot` (#181).
+        self.equip_slots = tuple(equip_slots)
+        self.hands = hands
+        self.equipped_slot: str | None = None
         # `container` marks a world object authored as `kind: container`.
         # `open` is the explicit lid state (#76): `open`, `close`, and
         # `get ... from ...` read it. A container starts closed unless the
@@ -140,6 +148,30 @@ class Player(Entity):
         # combat target; login clears the flag. The durable copy lives in
         # `players.asleep`, and the wire exposes it as `asleep`/`stone`.
         self.asleep = False
+        # Equipped items by runtime slot: hand_1, hand_2, head, body, back,
+        # belt, feet. The item also carries `equipped_slot`, so login can
+        # rebuild this map from durable state (#181).
+        self.equipment: dict[str, Entity] = {}
+
+    def equip(self, item: Entity, slot: str) -> None:
+        """Equip `item` in `slot`, replacing its previous slot."""
+        self.unequip(item)
+        if slot in self.equipment:
+            raise ValueError(f"slot {slot!r} is occupied")
+        self.equipment[slot] = item
+        item.equipped_slot = slot
+
+    def unequip(self, item: Entity) -> None:
+        """Remove `item` from whatever slot holds it."""
+        for slot, held in list(self.equipment.items()):
+            if held is item:
+                del self.equipment[slot]
+                item.equipped_slot = None
+
+    @property
+    def equipped_items(self) -> tuple[Entity, ...]:
+        """The equipped items, in slot order."""
+        return tuple(self.equipment[slot] for slot in sorted(self.equipment))
 
 
 class NPC(Entity):

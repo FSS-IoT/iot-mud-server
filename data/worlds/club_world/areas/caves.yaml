@@ -62,6 +62,8 @@ rooms:
         weight: 0.2
         light_source: true
         lit: true
+        equip_slots: [hand]
+        hands: 1
       - id: grotto_carving
         name: Grotto Carving
         description: A spiral cut into the crystal wall, matched to the ruins above.

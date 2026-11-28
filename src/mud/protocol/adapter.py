@@ -176,6 +176,8 @@ def _inventory_data(engine: Engine, player: Player,
         data = _object_data(item, scene.inventory)
         if getattr(item, "light_source", False):
             data["lit"] = bool(getattr(item, "lit", False))
+        if getattr(item, "equipped_slot", None) is not None:
+            data["slot"] = item.equipped_slot
         items.append(data)
     items.sort(key=lambda item: item["name"].lower())
     payload = []
@@ -184,6 +186,8 @@ def _inventory_data(engine: Engine, player: Player,
                  "weight": item["weight"]}
         if "lit" in item:
             entry["lit"] = item["lit"]
+        if "slot" in item:
+            entry["slot"] = item["slot"]
         payload.append(entry)
     data: dict[str, Any] = {
         "items": payload,

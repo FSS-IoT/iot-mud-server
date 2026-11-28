@@ -81,6 +81,8 @@ rooms:
         weight: 0.5
         light_source: true
         lit: false
+        equip_slots: [hand]
+        hands: 1
 
   - id: shop
     name: Alchemist Shop

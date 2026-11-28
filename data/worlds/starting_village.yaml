@@ -120,6 +120,8 @@ rooms:
         description: A flickering wooden torch.
         weight: 0.5
         light_source: true
+        equip_slots: [hand]
+        hands: 1
       - id: key_gold_1
         name: Gold Key
         description: A small gold key, warm to the touch.
@@ -163,6 +165,8 @@ rooms:
         description: A brass lantern, its wick still dry.
         weight: 0.4
         light_source: true
+        equip_slots: [hand, belt]
+        hands: 1
     geometry:
       cells:
         - "#########"
