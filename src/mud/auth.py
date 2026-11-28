@@ -26,7 +26,9 @@ in the value so a future parameter change needs no schema migration. Login
 
 **Login.** An unknown key id, a revoked key, and a bad secret all raise one
 `AuthError("invalid_key")` with the same message. The key is the only lookup;
-no character name is consulted.
+no character name is consulted. A successful login returns the durable room id
+and inventory with the verified key row, so admission does not need a second
+player-store read (#138).
 
 **Offline rekey (#73).** `rekey_character` issues a replacement key for an
 existing character and revokes every key it still holds, in one transaction.
@@ -93,12 +95,17 @@ class Registration:
 
 @dataclass(frozen=True)
 class Login:
-    """The durable character a verified key belongs to."""
+    """The durable character a verified key belongs to.
+
+    `room_id` and `items` are read in the same login lookup, so admission does
+    not need a second `PlayerStore.load()` (#138).
+    """
 
     name: str
     player_id: int
     key_id: str
     room_id: str | None
+    items: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -239,11 +246,20 @@ def login_character(conn: sqlite3.Connection, key: object) -> Login:
     if not verify_key(key, row["salt"], row["hash"]):
         raise AuthError("invalid_key", INVALID_KEY_MESSAGE)
 
+    player_id = int(row["player_id"])
+    items = tuple(
+        item["id"]
+        for item in conn.execute(
+            "SELECT id FROM objects WHERE owner_id = ? ORDER BY id",
+            (player_id,),
+        )
+    )
     return Login(
         name=row["name"],
-        player_id=int(row["player_id"]),
+        player_id=player_id,
         key_id=row["key_id"],
         room_id=row["room_id"],
+        items=items,
     )
 
 
