@@ -477,7 +477,7 @@ unknown field.
 
 | Type | Data | Recipients |
 |---|---|---|
-| `player.inventory` | `items[]{id,name,weight,lit?}`, `capacity`, `used`, `unit`, `text?` | Actor only (v2.1) |
+| `player.inventory` | `items[]{id,name,weight,lit?,slot?}`, `capacity`, `used`, `unit`, `text?` | Actor only (v2.1) |
 | `player.said` | `from`, `text`, `self` | Room, including actor |
 | `player.emoted` | `from`, `text`, `self` | Room, including actor (v2.1) |
 | `player.told` | `from`, `to`, `text`, `self` | Target and sender (v2.1) |
@@ -514,6 +514,10 @@ verbatim, with no conversion. `used` is the sum of the carried objects' own
 weights (nested container contents are not counted a second time), rounded to
 three decimals. The server default capacity is `30.0`. `text` is presentation only: it is
 present on the explicit `inventory` reply and omitted from state pushes.
+`slot` is additive and appears only on an equipped item: `hand_1`, `hand_2`,
+`head`, `body`, `back`, `belt`, or `feet`. A two-handed item occupies both
+hands but keeps one `slot` value (`hand_1`). A client that ignores `slot`
+still sees the same item list.
 
 ### NPC dialogue (v2.1)
 
@@ -831,7 +835,8 @@ and exits add the declarative lock the design calls for, with one command
 
 `unknown_command`, `bad_args`, `ambiguous`, `not_found`, `not_here`,
 `not_portable`, `container_closed`, `container_cycle`, `no_exit`, `locked`,
-`already_open`, `already_closed`, `too_heavy`, `malformed_message`,
+`already_open`, `already_closed`, `too_heavy`, `no_slot`, `not_equipped`,
+`still_lit`, `malformed_message`,
 `unknown_message`,
 `not_joined`, `already_joined`, `name_taken`, `not_authenticated`,
 `invalid_key`, `invalid_name`, `not_awake`, `rate_limited`, `internal`,
@@ -865,15 +870,18 @@ idle close is `4004` after the character is already asleep.
 | `look in <container>` | `notice` (private; container contents); unknown `error{not_found}`, ambiguous `error{ambiguous}` with `candidates` |
 | `exits` | `notice` (private) |
 | `go <dir>` / `n`/`s`/`e`/`w`/`u`/`d` | actor: `room.state`; others: `room.leave` then `room.enter`; a locked exit: `error{locked}` to the actor and `exit.locked` to the room |
-| `take <x>` / `get <x>` | `object.taken` (actor `self:true` + room `self:false`), then a state-only `player.inventory`; over capacity `error{too_heavy}`, unknown `error{not_found}`, ambiguous `error{ambiguous}` with `candidates` |
-| `drop <x>` | `object.dropped` (actor `self:true` + room `self:false`), then a state-only `player.inventory`; unknown `error{not_found}`, ambiguous `error{ambiguous}` with `candidates` |
-| `put <x> in <y>` | `object.put` (actor + room) + state-only `player.inventory`; a self or descendant insertion is `error{container_cycle}` and changes nothing |
+| `take <x>` / `get <x>` | `object.taken` (actor `self:true` + room `self:false`), then a state-only `player.inventory`; a lit source is auto-equipped and `error{no_slot}` if no light slot is free; over capacity `error{too_heavy}`, unknown `error{not_found}`, ambiguous `error{ambiguous}` with `candidates` |
+| `drop <x>` | `object.dropped` (actor `self:true` + room `self:false`), then a state-only `player.inventory`; a lit source stays lit on the floor and lights the room; unknown `error{not_found}`, ambiguous `error{ambiguous}` with `candidates` |
+| `put <x> in <y>` | `object.put` (actor + room) + state-only `player.inventory`; a self or descendant insertion is `error{container_cycle}` and changes nothing; a lit source is `error{still_lit}` |
 | `open <x>` | `object.opened` (contents listed in text and kept inside; an empty unlocked container also emits it; an open one is `error{already_open}`) |
 | `close <x>` | `object.closed` (or `error{already_closed}` / `error{bad_args}` for a non-container) |
 | `get <x> from <y>` | `object.got` (actor `self:true` + room `self:false`) + state-only `player.inventory`; closed container `error{container_closed}`, item not inside `error{not_here}`, fixed item `error{not_portable}`, over capacity `error{too_heavy}`, ambiguous `error{ambiguous}` with `candidates` |
 | `use <key> on <container>` | `object.unlocked` (or `error{locked}` / `error{already_open}`) |
 | `use <key> on <exit>` | `exit.unlocked` (actor `self:true` + room `self:false`; wrong or missing key `error{locked}`, already open `error{already_open}`) |
-| `light <source>` | `object.lit` (or `notice` if already lit / not a light) |
+| `equip <x> [on <slot>]` | `player.inventory` (private); `hand 1`/`hand 2` name a hand; an unlit occupant is stowed in the pack, a lit occupant is `error{still_lit}`; a lit source in a non-light slot is `error{bad_args}`; no free or allowed slot `error{no_slot}`, wrong slot or non-equippable `error{bad_args}`, unknown `error{not_found}` |
+| `unequip <x>` | `player.inventory` (private); item not equipped `error{not_equipped}`, lit source `error{still_lit}`, unknown `error{not_found}` |
+| `extinguish <x>` | `player.inventory` (private); not a light `error{bad_args}`, already out `notice`, unknown `error{not_found}` |
+| `light <source>` | `object.lit` (or `notice` if already lit / not a light); the source is auto-equipped into a free hand, belt, or head slot, or `error{no_slot}` |
 | `read <x>` | `object.read` (private) |
 | `inventory` / `i` | `player.inventory` (private) |
 | `who` | `who.list` (private, server-wide, includes asleep) |
@@ -920,6 +928,22 @@ release; a later additive fix still adds a bullet here.
 - The reference server reports `server_version: "2.1.6"` and feature level
   `1`. This is the first release under the shared versioning standard in
   `docs/PROTOCOL.md#versioning`.
+
+### Unreleased — equipment slots (#181)
+
+- `player.inventory` items gain optional `slot`: `hand_1`, `hand_2`, `head`,
+  `body`, `back`, `belt`, or `feet`. Present only on an equipped item.
+- New commands `equip <item> [on <slot>]` and `unequip <item>`. Both reply with
+  a private `player.inventory`; no new event type. `hand 1`/`hand 2` names a
+  hand; an unlit occupant is stowed to the pack, a lit occupant is `still_lit`.
+- New command `extinguish <item>`. A lit source cannot be unequipped or put in a
+  container (`error{still_lit}`); put it out first.
+- A lit source can be dropped. It stays lit on the floor and lights the room
+  until burn-down lands. Taking a lit source auto-equips it, or `error{no_slot}`.
+- New error codes `no_slot`, `not_equipped`, and `still_lit`.
+- A lit light source lights a dark room only while equipped in a hand, on the
+  belt, or on the head. A lit source in the pack no longer lights the room.
+  No field or event is removed.
 
 ### v2.1.5 — protocol 2 reference pin
 

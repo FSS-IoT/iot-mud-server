@@ -46,8 +46,10 @@ def _world(*, dark: bool = False, geometry: dict | None = None,
     ada.add_content(key)
     if lit_torch:
         torch = Entity("Torch", "A wooden torch.", item_id="torch",
-                       light_source=True, lit=True)
+                       light_source=True, lit=True,
+                       equip_slots=("hand",), hands=1)
         ada.add_content(torch)
+        ada.equip(torch, "hand_1")
     return engine, ada, hall, vault, coin, npc, key
 
 

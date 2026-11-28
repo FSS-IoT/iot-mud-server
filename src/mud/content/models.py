@@ -39,6 +39,7 @@ from pydantic import (
     Field,
     ValidationError,
     field_validator,
+    model_validator,
 )
 
 # Global ids are slugs. The validator also enforces uniqueness across rooms,
@@ -82,6 +83,13 @@ EFFECT_TRIGGERS = frozenset(
 )
 
 EFFECT_TYPE_PATTERN = r"^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$"
+
+# Full body equipment slots. Hand items use one or both hand slots; the model
+# authors `hand` once and the engine picks a free hand at runtime.
+EQUIP_SLOTS = frozenset(
+    {"hand", "head", "body", "back", "belt", "feet"}
+)
+EquipSlot = Literal["hand", "head", "body", "back", "belt", "feet"]
 
 
 def _check_effect_triggers(value: dict[str, list[Effect]]) -> dict:
@@ -156,6 +164,19 @@ class GameObject(BaseModel):
     state: dict[str, Any] = Field(default_factory=dict)
     contains: list[str] = Field(default_factory=list)
     effects: Effects = Field(default_factory=dict)
+    # Where the item can be equipped. `hand` means one free hand, or both when
+    # `hands: 2`. Empty means the item cannot be equipped.
+    equip_slots: list[EquipSlot] = Field(default_factory=list)
+    hands: Literal[1, 2] = 1
+
+    @model_validator(mode="after")
+    def _check_equipment(self) -> GameObject:
+        if len(set(self.equip_slots)) != len(self.equip_slots):
+            raise ValueError("equip_slots must not repeat a slot")
+        if self.hands == 2 and set(self.equip_slots) != {"hand"}:
+            raise ValueError(
+                "hands: 2 requires only the 'hand' slot")
+        return self
 
 
 class NPC(BaseModel):

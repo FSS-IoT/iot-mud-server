@@ -175,9 +175,24 @@ rooms:
   converted. `portable: false` marks scenery a player cannot lift; `get` from
   a container refuses it with `error{not_portable}`.
 - `light_source: true` lets an object light a dark room. `lit: true` starts it
-  lit; otherwise `light <source>` is needed. A carried unlit source is dark.
-  Igniting one commits `lit` to `objects.state`, so it stays lit across a
-  restart (#131).
+  lit; otherwise `light <source>` is needed. A light source must be equipped in
+  a hand, on the belt, or on the head to light the room; one in the pack is
+  dark. Igniting one commits `lit` to `objects.state`, so it stays lit across a
+  restart (#131). A lit source cannot be unequipped or put in a container:
+  `extinguish <source>` first. A lit source can be dropped; it stays lit on the
+  floor and lights the room until it burns out (burn-down is a later item
+  lifecycle). Taking a lit source puts it straight into a hand, belt, or head
+  slot; if none is free the take is refused. A fireproof carrier that can hold
+  embers is a later item capability, not a place for a burning torch.
+- `equip_slots` lists where an item can go: `hand`, `head`, `body`, `back`,
+  `belt`, or `feet`. `hands: 1` uses one hand; `hands: 2` uses both. Empty
+  means the item cannot be equipped. A lantern can use `[hand, belt]`; a torch
+  uses `[hand]`. The runtime slot (`hand_1`, `belt`, ...) is stored in
+  `objects.state.slot` and restored on login (#181). `equip <item> on hand 1`
+  or `hand 2` names a hand. If that hand holds an unlit item, the new item takes
+  the hand and the old one goes to the pack; a lit item is refused with
+  `still_lit`. A lit source can only occupy a hand, belt, or head; another slot
+  is `bad_args`. A two-handed swap must name a hand (`equip sword on hand 1`).
 - `dropped_on_sleep: true` makes the object fall into the room when its carrier
   disconnects and turns to stone (#72). The world marks the five keys so a
   sleeper cannot strand a door key in a pocket.

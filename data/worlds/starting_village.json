@@ -171,7 +171,9 @@
       "name": "Torch",
       "description": "A flickering wooden torch.",
       "weight": 0.5,
-      "light_source": true
+      "light_source": true,
+      "equip_slots": ["hand"],
+      "hands": 1
     },
     {
       "id": "bread",
@@ -200,7 +202,9 @@
       "name": "Brass Lantern",
       "description": "A brass lantern, its wick still dry.",
       "weight": 0.4,
-      "light_source": true
+      "light_source": true,
+      "equip_slots": ["hand", "belt"],
+      "hands": 1
     }
   ]
 }

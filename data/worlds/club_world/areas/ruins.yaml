@@ -122,6 +122,8 @@ rooms:
         weight: 0.2
         light_source: true
         lit: true
+        equip_slots: [hand]
+        hands: 1
 
   - id: crypt
     name: Crypt

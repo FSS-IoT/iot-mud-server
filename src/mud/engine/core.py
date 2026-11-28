@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Dict, List, Optional
 from src.mud.content import DEFAULT_CARRY_CAPACITY, NPC, Entity, Player, Room
 from src.mud.content.effects import effect_entries, effect_payload
-from src.mud.content.models import OPPOSITE_EXITS
+from src.mud.content.models import EQUIP_SLOTS, OPPOSITE_EXITS
 from src.mud.content.validator import container_cycles
 from src.mud.protocol.v2 import CommandOutcome, SemanticEvent
 from src.mud.storage.keys import object_key, room_key, slug
@@ -20,6 +20,11 @@ if TYPE_CHECKING:
     from src.mud.storage.store import WriteThroughStore
 
 logger = logging.getLogger(__name__)
+
+# Slots whose light reaches the room. A lit source in a pack, a back slot, or
+# a container does not light the room (#181).
+LIGHT_SLOTS = frozenset({"hand_1", "hand_2", "belt", "head"})
+HAND_SLOTS = ("hand_1", "hand_2")
 
 
 @dataclass(frozen=True)
@@ -247,6 +252,21 @@ class Engine:
             walk(room)
         return slots
 
+    @staticmethod
+    def _slot_allowed(item: Entity, slot: str) -> bool:
+        """Whether a durable runtime slot matches the item's authored slots."""
+        authored = tuple(getattr(item, "equip_slots", ()))
+        if slot in HAND_SLOTS:
+            if "hand" not in authored:
+                return False
+            return not (int(getattr(item, "hands", 1) or 1) == 2
+                        and slot != "hand_1")
+        if slot not in authored:
+            return False
+        if getattr(item, "light_source", False) and getattr(item, "lit", False):
+            return slot in LIGHT_SLOTS
+        return True
+
     def restore_player(
         self,
         player: Player,
@@ -279,6 +299,25 @@ class Engine:
                 continue
             holder.remove_content(item)
             player.add_content(item)
+            slot = getattr(item, "equipped_slot", None)
+            if slot:
+                if not self._slot_allowed(item, slot):
+                    self._commit(
+                        ChangeSet("restore").set(item, "slot", None))
+                    item.equipped_slot = None
+                    logger.warning(
+                        "dropped invalid slot %s on %s for %s",
+                        slot, object_key(item), player.name)
+                    continue
+                try:
+                    player.equip(item, slot)
+                except ValueError:
+                    self._commit(
+                        ChangeSet("restore").set(item, "slot", None))
+                    item.equipped_slot = None
+                    logger.warning(
+                        "could not restore %s to slot %s for %s",
+                        object_key(item), slot, player.name)
 
     # --- Sleep, stone, and the who roster (#72) -----------------------------
 
@@ -307,9 +346,11 @@ class Engine:
                 changes.place(player, at=room)
                 for item in dropped:
                     changes.place(item, at=room)
+                    changes.set(item, "slot", None)
             changes.set(player, "asleep", True)
             self._commit(changes)
         for item in dropped:
+            player.unequip(item)
             player.remove_content(item)
             room.add_content(item)
         player.asleep = True
@@ -667,11 +708,24 @@ class Engine:
             return True
         if isinstance(room, Room) and room.light_source is not None:
             return True
-        if player is None:
+        if not isinstance(room, Room):
             return False
+        occupants = [c for c in room.contents if isinstance(c, Player)]
+        if player is not None and player not in occupants:
+            occupants.append(player)
+        if any(
+            getattr(item, "light_source", False)
+            and getattr(item, "lit", False)
+            for item in room.contents
+            if not isinstance(item, Player)
+        ):
+            return True
         return any(
-            getattr(c, "light_source", False) and getattr(c, "lit", False)
-            for c in player.contents
+            slot in LIGHT_SLOTS
+            and getattr(item, "light_source", False)
+            and getattr(item, "lit", False)
+            for occupant in occupants
+            for slot, item in occupant.equipment.items()
         )
 
     def scene_for(self, player) -> Scene:
@@ -1046,6 +1100,9 @@ class Engine:
             "get": self._exec_get,
             "close": self._exec_close,
             "use": self._exec_use,
+            "equip": self._exec_equip,
+            "unequip": self._exec_unequip,
+            "extinguish": self._exec_extinguish,
             "talk": self._exec_talk,
             "ask": self._exec_ask,
             "light": self._exec_light,
@@ -1149,10 +1206,36 @@ class Engine:
                 outcome, actor, before_room_contents, arg,
                 f"You cannot carry the {item.name}; it is too heavy.", item)
             return
-        if self.store is not None:
-            self._commit(ChangeSet("take").place(item, at=actor))
+        lit_slot = None
+        if getattr(item, "light_source", False) and getattr(
+                item, "lit", False):
+            lit_slot, error = self._equip_target(
+                actor, item, light_only=True)
+            if error is not None:
+                if error == "bad_args":
+                    self._fail(
+                        outcome, "bad_args",
+                        f"The lit {item.name} cannot be held.")
+                else:
+                    self._fail(
+                        outcome, "no_slot",
+                        f"You have no free hand, belt, or head for the lit "
+                        f"{item.name}.")
+                return
+        changes = ChangeSet("take").place(item, at=actor)
+        if lit_slot is not None:
+            changes.set(item, "slot", lit_slot)
+        elif getattr(item, "equipped_slot", None) is not None:
+            # A stale slot from a crashed session must not travel into the
+            # pack. The item is not in this actor's equipment.
+            changes.set(item, "slot", None)
+        self._commit(changes)
         room.remove_content(item)
         actor.add_content(item)
+        if lit_slot is not None:
+            actor.equip(item, lit_slot)
+        elif item.equipped_slot is not None:
+            item.equipped_slot = None
         await self.emit("item_taken", {
             "item_name": item.name.lower(), "owner": actor.name})
         outcome.reply = f"You picked up the {item.name}."
@@ -1196,8 +1279,11 @@ class Engine:
             self._fail(
                 outcome, "not_found", f"You aren't carrying any {arg}.")
             return
-        if self.store is not None:
-            self._commit(ChangeSet("drop").place(item, at=room))
+        changes = ChangeSet("drop").place(item, at=room)
+        if getattr(item, "equipped_slot", None) is not None:
+            changes.set(item, "slot", None)
+        self._commit(changes)
+        actor.unequip(item)
         actor.remove_content(item)
         room.add_content(item)
         await self.emit("item_dropped", {
@@ -1408,6 +1494,7 @@ class Engine:
             "Commands: look (l), go <direction>, exits, take <item>, "
             "get <item> from <container>, drop <item>, put <item> in <container>, "
             "open <container>, close <container>, use <key> on <container|exit>, "
+            "equip <item> [on <slot>], unequip <item>, extinguish <light>, "
             "examine <thing> (exam), read <thing> (signs, books), look in <chest>, "
             "light <torch/lantern>, inventory (i), who, "
             "say <text>, emote <action> (me), tell <player> <text>, "
@@ -1626,6 +1713,12 @@ class Engine:
                 f"The {container.name} is locked. Find a key and "
                 f"`use <key> on {container.name.lower()}`.")
             return
+        if getattr(held, "light_source", False) and getattr(
+                held, "lit", False):
+            self._fail(
+                outcome, "still_lit",
+                f"Put out the {held.name} before you stow it.")
+            return
         if self._containment_cycle(container, held):
             self._fail(
                 outcome, "container_cycle",
@@ -1637,8 +1730,11 @@ class Engine:
                     container, before_room_contents),
             }
             return
-        if self.store is not None:
-            self._commit(ChangeSet("put").place(held, at=container))
+        changes = ChangeSet("put").place(held, at=container)
+        if getattr(held, "equipped_slot", None) is not None:
+            changes.set(held, "slot", None)
+        self._commit(changes)
+        actor.unequip(held)
         actor.remove_content(held)
         container.add_content(held)
         await self.emit("item_put", {
@@ -1743,10 +1839,34 @@ class Engine:
                 outcome, actor, container.contents, item_arg,
                 f"You cannot carry the {item.name}; it is too heavy.", item)
             return
-        if self.store is not None:
-            self._commit(ChangeSet("get").place(item, at=actor))
+        lit_slot = None
+        if getattr(item, "light_source", False) and getattr(
+                item, "lit", False):
+            lit_slot, error = self._equip_target(
+                actor, item, light_only=True)
+            if error is not None:
+                if error == "bad_args":
+                    self._fail(
+                        outcome, "bad_args",
+                        f"The lit {item.name} cannot be held.")
+                else:
+                    self._fail(
+                        outcome, "no_slot",
+                        f"You have no free hand, belt, or head for the lit "
+                        f"{item.name}.")
+                return
+        changes = ChangeSet("get").place(item, at=actor)
+        if lit_slot is not None:
+            changes.set(item, "slot", lit_slot)
+        elif getattr(item, "equipped_slot", None) is not None:
+            changes.set(item, "slot", None)
+        self._commit(changes)
         container.remove_content(item)
         actor.add_content(item)
+        if lit_slot is not None:
+            actor.equip(item, lit_slot)
+        elif item.equipped_slot is not None:
+            item.equipped_slot = None
         await self.emit("item_got", {
             "item_name": item.name.lower(),
             "container": container.name.lower(),
@@ -1824,6 +1944,280 @@ class Engine:
                   "text_actor": outcome.reply,
                   "text_room": f"{actor.name} closes the {container.name}."},
             scope="room",
+        ))
+
+    def _equip_target(
+        self, actor: Player, item: Entity, requested: str | None = None,
+        *, light_only: bool = False,
+    ) -> tuple[str | None, str | None]:
+        """Pick a free runtime slot for `item`, or return a typed error."""
+        authored = tuple(getattr(item, "equip_slots", ()))
+        if not authored and light_only and getattr(item, "light_source", False):
+            # Backward compatibility for in-memory lights and the frozen v2.0
+            # JSON fixture: an undeclared light can still be held.
+            authored = ("hand",)
+        if not authored:
+            return None, "bad_args"
+        hands = int(getattr(item, "hands", 1) or 1)
+        occupied = {
+            slot: held for slot, held in actor.equipment.items()
+            if held is not item
+        }
+        for slot, held in list(occupied.items()):
+            if slot in HAND_SLOTS and int(
+                    getattr(held, "hands", 1) or 1) == 2:
+                for hand in HAND_SLOTS:
+                    occupied.setdefault(hand, held)
+        light_slots = LIGHT_SLOTS if light_only else None
+
+        def allowed(slot: str) -> bool:
+            return light_slots is None or slot in light_slots
+
+        if requested is not None:
+            if requested in HAND_SLOTS:
+                if "hand" not in authored or not allowed(requested):
+                    return None, "bad_args"
+                if hands == 2 and requested != "hand_1":
+                    return None, "bad_args"
+                if hands == 2:
+                    if any(slot in occupied for slot in HAND_SLOTS):
+                        return None, "no_slot"
+                    return "hand_1", None
+                if requested in occupied:
+                    return None, "no_slot"
+                return requested, None
+            if requested == "hand":
+                if "hand" not in authored or not any(
+                        allowed(slot) for slot in HAND_SLOTS):
+                    return None, "bad_args"
+                if hands == 2:
+                    if any(slot in occupied for slot in HAND_SLOTS):
+                        return None, "no_slot"
+                    return "hand_1", None
+                for slot in HAND_SLOTS:
+                    if slot not in occupied and allowed(slot):
+                        return slot, None
+                return None, "no_slot"
+            if requested not in authored or not allowed(requested):
+                return None, "bad_args"
+            if requested in occupied:
+                return None, "no_slot"
+            return requested, None
+
+        if "hand" in authored:
+            if hands == 2:
+                if all(
+                        slot not in occupied and allowed(slot)
+                        for slot in HAND_SLOTS):
+                    return "hand_1", None
+            else:
+                for slot in HAND_SLOTS:
+                    if slot not in occupied and allowed(slot):
+                        return slot, None
+        for slot in authored:
+            if slot == "hand":
+                continue
+            if slot not in occupied and allowed(slot):
+                return slot, None
+        return None, "no_slot"
+
+    @staticmethod
+    def _slot_label(slot: str) -> str:
+        return "hand" if slot in HAND_SLOTS else slot
+
+    async def _exec_equip(self, outcome: CommandOutcome, actor: Player,
+                          arg: str | None) -> None:
+        """`equip <item> [on <slot>]`: put an item in a body slot."""
+        if not arg:
+            self._fail(
+                outcome, "bad_args",
+                "Equip what? Try `equip <item>` or `equip <item> on belt`.")
+            return
+        normalized = arg.strip()
+        requested = None
+        if " on " in normalized:
+            item_arg, _, slot_arg = normalized.rpartition(" on ")
+            requested = slot_arg.strip().lower()
+            requested = requested.replace("_", " ").replace("-", " ").strip()
+            requested = {
+                "hand 1": "hand_1",
+                "hand 2": "hand_2",
+                "left hand": "hand_1",
+                "right hand": "hand_2",
+            }.get(requested, requested)
+            if requested == "hands":
+                requested = "hand"
+            if requested not in (set(EQUIP_SLOTS) | set(HAND_SLOTS)):
+                self._fail(
+                    outcome, "bad_args",
+                    "Slots are hand, hand 1, hand 2, head, body, back, "
+                    "belt, or feet.")
+                return
+        else:
+            item_arg = normalized
+        item, disambig = self._disambiguate(actor.contents, item_arg.strip())
+        if disambig:
+            self._fail(outcome, "ambiguous", disambig)
+            outcome.error_data = {
+                "candidates": self._candidates(actor.contents, item_arg)}
+            return
+        if item is None:
+            self._fail(
+                outcome, "not_found", f"You aren't carrying any {item_arg}.")
+            return
+        target, error = self._equip_target(
+            actor, item, requested,
+            light_only=bool(item.light_source and item.lit))
+        displaced: list[Entity] = []
+        if error == "no_slot" and requested in HAND_SLOTS:
+            hands = int(getattr(item, "hands", 1) or 1)
+            if hands == 2:
+                candidates = [
+                    actor.equipment.get(slot)
+                    for slot in HAND_SLOTS
+                    if actor.equipment.get(slot) is not None
+                    and actor.equipment.get(slot) is not item
+                ]
+                if any(getattr(candidate, "light_source", False)
+                       and getattr(candidate, "lit", False)
+                       for candidate in candidates):
+                    self._fail(
+                        outcome, "still_lit",
+                        "Put out the lit item before you swap it out.")
+                    return
+                target = "hand_1"
+                displaced = candidates
+                error = None
+            elif requested in actor.equipment:
+                candidate = actor.equipment[requested]
+                if getattr(candidate, "light_source", False) and getattr(
+                        candidate, "lit", False):
+                    self._fail(
+                        outcome, "still_lit",
+                        f"Put out the {candidate.name} before you swap it "
+                        "out.")
+                    return
+                target = requested
+                displaced = [candidate]
+                error = None
+            else:
+                blocker = next(
+                    (held for slot, held in actor.equipment.items()
+                     if slot in HAND_SLOTS and held is not item
+                     and int(getattr(held, "hands", 1) or 1) == 2),
+                    None,
+                )
+                if blocker is not None:
+                    if getattr(blocker, "light_source", False) and getattr(
+                            blocker, "lit", False):
+                        self._fail(
+                            outcome, "still_lit",
+                            f"Put out the {blocker.name} before you swap "
+                            "it out.")
+                        return
+                    target = requested
+                    displaced = [blocker]
+                    error = None
+        if error is not None:
+            if error == "no_slot":
+                self._fail(
+                    outcome, "no_slot",
+                    f"The {item.name} has nowhere to go; free a slot first.")
+            else:
+                self._fail(
+                    outcome, "bad_args",
+                    f"The {item.name} cannot go there.")
+            return
+        changes = ChangeSet("equip").set(item, "slot", target)
+        for stowed in displaced:
+            changes.set(stowed, "slot", None)
+        self._commit(changes)
+        for stowed in displaced:
+            actor.unequip(stowed)
+        actor.equip(item, target)
+        if displaced:
+            names = ", ".join(stowed.name for stowed in displaced)
+            outcome.reply = (
+                f"You equip the {item.name} in your "
+                f"{self._slot_label(target)} and stow the {names}.")
+        else:
+            outcome.reply = (
+                f"You equip the {item.name} in your "
+                f"{self._slot_label(target)}.")
+        outcome.events.append(SemanticEvent(
+            kind="player.inventory",
+            data={"actor": actor, "text": outcome.reply},
+            scope="actor",
+        ))
+
+    async def _exec_unequip(self, outcome: CommandOutcome, actor: Player,
+                            arg: str | None) -> None:
+        """`unequip <item>`: leave the item in the pack, slot free."""
+        if not arg:
+            self._fail(
+                outcome, "bad_args", "Unequip what? Try `unequip <item>`.")
+            return
+        item, disambig = self._disambiguate(actor.contents, arg)
+        if disambig:
+            self._fail(outcome, "ambiguous", disambig)
+            outcome.error_data = {
+                "candidates": self._candidates(actor.contents, arg)}
+            return
+        if item is None:
+            self._fail(
+                outcome, "not_found", f"You aren't carrying any {arg}.")
+            return
+        if getattr(item, "equipped_slot", None) is None:
+            self._fail(
+                outcome, "not_equipped", f"The {item.name} is not equipped.")
+            return
+        if getattr(item, "light_source", False) and getattr(
+                item, "lit", False):
+            self._fail(
+                outcome, "still_lit",
+                f"Put out the {item.name} before you stow it.")
+            return
+        self._commit(ChangeSet("unequip").set(item, "slot", None))
+        actor.unequip(item)
+        outcome.reply = f"You unequip the {item.name}."
+        outcome.events.append(SemanticEvent(
+            kind="player.inventory",
+            data={"actor": actor, "text": outcome.reply},
+            scope="actor",
+        ))
+
+    async def _exec_extinguish(self, outcome: CommandOutcome, actor: Player,
+                               arg: str | None) -> None:
+        """`extinguish <source>`: put out a lit light source."""
+        if not arg:
+            self._fail(
+                outcome, "bad_args",
+                "Extinguish what? Try `extinguish <light>`.")
+            return
+        item, disambig = self._disambiguate(actor.contents, arg)
+        if disambig:
+            self._fail(outcome, "ambiguous", disambig)
+            outcome.error_data = {
+                "candidates": self._candidates(actor.contents, arg)}
+            return
+        if item is None:
+            self._fail(
+                outcome, "not_found", f"You aren't carrying any {arg}.")
+            return
+        if not getattr(item, "light_source", False):
+            self._fail(
+                outcome, "bad_args", f"The {item.name} is not a light.")
+            return
+        if not getattr(item, "lit", False):
+            self._notice(outcome, f"The {item.name} is already out.")
+            return
+        self._commit(ChangeSet("extinguish").set(item, "lit", False))
+        item.lit = False
+        outcome.reply = f"You put out the {item.name}."
+        outcome.events.append(SemanticEvent(
+            kind="player.inventory",
+            data={"actor": actor, "text": outcome.reply},
+            scope="actor",
         ))
 
     async def _exec_use(self, outcome: CommandOutcome, actor: Player,
@@ -2154,9 +2548,32 @@ class Engine:
         if getattr(held_item, "lit", False):
             self._notice(outcome, f"The {held_item.name} is already lit.")
             return
-        if self.store is not None:
-            self._commit(
-                ChangeSet("light").set(held_item, "lit", True))
+        slot = getattr(held_item, "equipped_slot", None)
+        actual = slot is not None and actor.equipment.get(slot) is held_item
+        changes = ChangeSet("light")
+        if not actual or slot not in LIGHT_SLOTS:
+            if slot is not None:
+                changes.set(held_item, "slot", None)
+            slot, error = self._equip_target(
+                actor, held_item, light_only=True)
+            if error is not None:
+                if error == "bad_args":
+                    self._fail(
+                        outcome, "bad_args",
+                        f"The {held_item.name} cannot be held or worn "
+                        "where it could light the room.")
+                else:
+                    self._fail(
+                        outcome, "no_slot",
+                        f"You have no free hand, belt, or head for the "
+                        f"{held_item.name}.")
+                return
+            changes.set(held_item, "slot", slot)
+            actual = False
+        changes.set(held_item, "lit", True)
+        self._commit(changes)
+        if not actual:
+            actor.equip(held_item, slot)
         held_item.lit = True
         await self.emit("light_ignited", {
             "item_name": held_item.name.lower()})

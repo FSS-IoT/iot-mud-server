@@ -42,7 +42,8 @@ def _engine(*items, capacity=2.0):
 
 def test_new_codes_are_in_the_shared_error_vocabulary():
     """The adapter's new codes are part of `ERROR_CODES`, not just the docs."""
-    assert {"too_heavy", "ambiguous"} <= ERROR_CODES
+    assert {"too_heavy", "ambiguous", "no_slot", "not_equipped",
+            "still_lit"} <= ERROR_CODES
     # The v2.0 spelling stays reserved for clients that pinned an old server.
     assert "ambiguous_target" in ERROR_CODES
 

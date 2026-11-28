@@ -26,6 +26,7 @@ from src.mud.auth import (
 from src.mud.content import Entity, Player, Room
 from src.mud.engine.core import Engine
 from src.mud.storage.store import (
+    ChangeSet,
     FailHook,
     RosterEntry,
     StorageWriteError,
@@ -109,6 +110,10 @@ class CharacterAdmission:
         # engine's existing provider or store in that case.
         self._roster_provider = self.roster
         if self.store is not None:
+            if (self.engine.store is not None
+                    and self.engine.store is not self.store):
+                logger.warning(
+                    "admission is replacing an attached engine store")
             self.engine.roster_provider = self._roster_provider
             self.engine.attach_store(self.store)
             # The mutable half of the world is durable (#131): apply committed
@@ -149,14 +154,19 @@ class CharacterAdmission:
         if player is None:
             return GuestSpill(name=name, room=None, dropped=())
         room = player.location
-        dropped: list[Entity] = []
+        items = list(player.contents)
         if room is not None:
-            for item in list(player.contents):
+            changes = ChangeSet("spill")
+            for item in items:
+                changes.place(item, at=room).set(item, "slot", None)
+            if self.store is not None:
+                self.store.commit(changes)
+            for item in items:
+                player.unequip(item)
                 player.remove_content(item)
                 room.add_content(item)
-                dropped.append(item)
         self.engine.remove_player(name)
-        return GuestSpill(name=name, room=room, dropped=tuple(dropped))
+        return GuestSpill(name=name, room=room, dropped=tuple(items))
 
     def resume(self, key: object) -> ResumeResult:
         """Verify a key and return the character in its durable room.

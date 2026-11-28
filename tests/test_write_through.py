@@ -317,7 +317,7 @@ def build_engine():
 
 async def main(path):
     server = V2Server(build_engine(), port=0, db_path=path,
-                      auth_required=False)
+                      auth_required=True)
     task = asyncio.create_task(server.run())
     while not server.port:
         await asyncio.sleep(0.01)
@@ -330,11 +330,17 @@ asyncio.run(main(sys.argv[1]))
 
 
 async def _play(port: int) -> None:
-    """Take, drop, and move over the wire, waiting for each reply."""
+    """Take, drop, and move over the wire, waiting for each reply.
+
+    Registers a durable character rather than joining as a guest: #189 makes a
+    guest spill its inventory on disconnect, which would move the items before
+    the SIGKILL and hide the take/move durability under test.
+    """
     async with websockets.connect(f"ws://localhost:{port}") as ws:
         await ws.recv()  # hello
         await ws.send(json.dumps({
-            "v": 2, "type": "join", "id": "join", "data": {"name": "Ada"},
+            "v": 2, "type": "auth", "id": "join",
+            "data": {"mode": "register", "name": "Ada"},
         }))
         while json.loads(await asyncio.wait_for(ws.recv(), 5))["type"] != "room.state":
             pass
