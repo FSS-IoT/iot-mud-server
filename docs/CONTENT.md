@@ -165,9 +165,9 @@ rooms:
   transitively; the validator and the runtime `put` both refuse a cycle.
 - A locked container names a portable key object with `required_key`. Opening
   it needs `use <key> on <container>`; `open` alone is `error{locked}`.
-- `state.open: true` starts a container open; the default is closed. The
-  product apple basket starts open. The flag is authored state; opening and
-  closing at runtime is not written back to SQLite.
+- `state.open: true` starts a container open; the default is closed. Opening
+  and closing at runtime writes the lid flag to the container's `objects.state`
+  row, so the next server start restores it (#131).
 - A readable sets `readable_text`. `description` is what `look` shows; the
   readable text is what `read` returns.
 - `weight` is the carry unit, authored in real-life **kilograms**; the in-game
@@ -176,14 +176,22 @@ rooms:
   a container refuses it with `error{not_portable}`.
 - `light_source: true` lets an object light a dark room. `lit: true` starts it
   lit; otherwise `light <source>` is needed. A carried unlit source is dark.
+  Igniting one commits `lit` to `objects.state`, so it stays lit across a
+  restart (#131).
 - `dropped_on_sleep: true` makes the object fall into the room when its carrier
   disconnects and turns to stone (#72). The world marks the five keys so a
   sleeper cannot strand a door key in a pocket.
 
 ### Locks and keys
 
-Lock state lives in the running world, not in SQLite. A restart rebuilds the
-authored lock, so a client should expect a door to be locked again.
+Lock, lid, and light state is durable and shared (#131). A lock turned by one
+character is open for every character in the world; the same is true of a
+container lid and a lit torch. Runtime changes are committed to SQLite before
+the in-memory world changes: `objects.state` holds `locked`, `open`, and `lit`
+for an object, and `exits.locked` holds a door's state. A restart overlays those
+committed flags and object placements onto the freshly loaded YAML, so a door
+unlocked before the restart stays unlocked. `admin seed --reset --yes` replaces
+the world rows and therefore rebuilds every authored lock and lid.
 
 The product world uses five keys:
 

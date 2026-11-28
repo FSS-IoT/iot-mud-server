@@ -250,7 +250,7 @@ def test_sleep_drop_commits_before_memory_moves(tmp_path):
     conn = open_database(tmp_path / "fail.db")
 
     def fail(op: str) -> None:
-        if op == "drop":
+        if op == "sleep":
             raise StorageWriteError("disk full")
 
     try:

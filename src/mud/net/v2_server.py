@@ -1039,6 +1039,10 @@ class V2Server:
             # memory or another client (SPEC v2.1.0 criterion 2).
             self.store = WriteThroughStore(self.db)
             self.engine.attach_store(self.store)
+            # The mutable half of the world is durable (#131): overlay the
+            # committed placements and lock/lid/light flags onto the world the
+            # loader just built from YAML, so a restart restores them.
+            self.store.apply_durable_state(self.engine)
         # Authored effects are room events (#84). The engine publishes them
         # for the log either way; this subscriber is the only client path and
         # it is a no-op while `features.effects` is false.

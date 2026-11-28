@@ -8,10 +8,11 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Dict, List, Optional
 from src.mud.content import DEFAULT_CARRY_CAPACITY, NPC, Entity, Player, Room
 from src.mud.content.effects import effect_entries, effect_payload
+from src.mud.content.models import OPPOSITE_EXITS
 from src.mud.content.validator import container_cycles
 from src.mud.protocol.v2 import CommandOutcome, SemanticEvent
 from src.mud.storage.keys import object_key, room_key, slug
-from src.mud.storage.store import StorageWriteError
+from src.mud.storage.store import ChangeSet, StorageWriteError
 from src.mud.world.index import WorldIndex
 from src.mud.world.wander import NpcMove, NpcWanderer, npc_key
 
@@ -94,6 +95,11 @@ class Engine:
     def attach_store(self, store: WriteThroughStore | None) -> None:
         """Persist each mutation to `store` before applying it in memory."""
         self.store = store
+
+    def _commit(self, changes: ChangeSet) -> None:
+        """Commit one command's changes before memory moves (#131)."""
+        if self.store is not None and changes:
+            self.store.commit(changes)
 
     @property
     def rooms(self) -> Dict[str, Room]:
@@ -288,16 +294,21 @@ class Engine:
         room = player.location
         dropped: list[Entity] = []
         if room is not None:
-            for item in list(player.contents):
-                if not getattr(item, "dropped_on_sleep", False):
-                    continue
-                if self.store is not None:
-                    self.store.player(name).drop(item, room=room)
-                player.remove_content(item)
-                room.add_content(item)
-                dropped.append(item)
+            dropped = [
+                item for item in player.contents
+                if getattr(item, "dropped_on_sleep", False)
+            ]
         if self.store is not None:
-            self.store.player(name).sleep(room=room)
+            changes = ChangeSet("sleep")
+            if room is not None:
+                changes.place(player, at=room)
+                for item in dropped:
+                    changes.place(item, at=room)
+            changes.set(player, "asleep", True)
+            self._commit(changes)
+        for item in dropped:
+            player.remove_content(item)
+            room.add_content(item)
         player.asleep = True
         return dropped
 
@@ -311,7 +322,8 @@ class Engine:
         if player is None:
             return None
         if self.store is not None:
-            self.store.player(name).wake()
+            self._commit(
+                ChangeSet("wake").set(player, "asleep", False))
         player.asleep = False
         return player
 
@@ -386,7 +398,8 @@ class Engine:
 
         # Commit first, then apply, then publish (SPEC v2.1.0 criterion 2).
         if self.store is not None:
-            self.store.player(player.name).move(room=destination)
+            self._commit(
+                ChangeSet("move").place(player, at=destination))
 
         old_name = player.location.name
         player.location.remove_content(player)
@@ -1129,7 +1142,7 @@ class Engine:
                 f"You cannot carry the {item.name}; it is too heavy.", item)
             return
         if self.store is not None:
-            self.store.player(actor.name).take(item, room=room)
+            self._commit(ChangeSet("take").place(item, at=actor))
         room.remove_content(item)
         actor.add_content(item)
         await self.emit("item_taken", {
@@ -1176,7 +1189,7 @@ class Engine:
                 outcome, "not_found", f"You aren't carrying any {arg}.")
             return
         if self.store is not None:
-            self.store.player(actor.name).drop(item, room=room)
+            self._commit(ChangeSet("drop").place(item, at=room))
         actor.remove_content(item)
         room.add_content(item)
         await self.emit("item_dropped", {
@@ -1234,6 +1247,9 @@ class Engine:
                     outcome, "already_open",
                     f"The {container.name} is already open.")
                 return
+            if self.store is not None:
+                self._commit(
+                    ChangeSet("open").set(container, "open", True))
             container.open = True
             await self.fire_effects(
                 container, "on_open", actor=actor.name, room=room)
@@ -1613,6 +1629,8 @@ class Engine:
                     container, before_room_contents),
             }
             return
+        if self.store is not None:
+            self._commit(ChangeSet("put").place(held, at=container))
         actor.remove_content(held)
         container.add_content(held)
         await self.emit("item_put", {
@@ -1717,6 +1735,8 @@ class Engine:
                 outcome, actor, container.contents, item_arg,
                 f"You cannot carry the {item.name}; it is too heavy.", item)
             return
+        if self.store is not None:
+            self._commit(ChangeSet("get").place(item, at=actor))
         container.remove_content(item)
         actor.add_content(item)
         await self.emit("item_got", {
@@ -1779,6 +1799,9 @@ class Engine:
                 outcome, "already_closed",
                 f"The {container.name} is already closed.")
             return
+        if self.store is not None:
+            self._commit(
+                ChangeSet("close").set(container, "open", False))
         container.open = False
         await self.emit("container_closed", {
             "item_name": container.name.lower(),
@@ -1858,6 +1881,18 @@ class Engine:
                     f"The {key_item.name} does not fit the lock on the way "
                     f"{direction}.")
                 return
+            opposite = OPPOSITE_EXITS.get(direction)
+            shared = (
+                target
+                if opposite is not None
+                and target.exit_locks.get(opposite) is lock
+                else None
+            )
+            if self.store is not None:
+                self._commit(
+                    ChangeSet("use").set_exit(
+                        room, direction, locked=False, target=shared,
+                        key_item=key_item, label=lock.label))
             lock.locked = False
             await self.emit("exit_unlocked", {
                 "direction": direction,
@@ -1886,6 +1921,9 @@ class Engine:
         if (getattr(lock_item, "required_key", None)
                 and getattr(key_item, "item_id", None)
                 == lock_item.required_key):
+            if self.store is not None:
+                self._commit(
+                    ChangeSet("use").set(lock_item, "locked", False))
             lock_item.locked = False
             await self.emit("item_unlocked", {
                 "item_name": lock_item.name.lower(),
@@ -2108,6 +2146,9 @@ class Engine:
         if getattr(held_item, "lit", False):
             self._notice(outcome, f"The {held_item.name} is already lit.")
             return
+        if self.store is not None:
+            self._commit(
+                ChangeSet("light").set(held_item, "lit", True))
         held_item.lit = True
         await self.emit("light_ignited", {
             "item_name": held_item.name.lower()})
