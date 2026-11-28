@@ -173,7 +173,11 @@ rooms:
 - `weight` is the carry unit, authored in real-life **kilograms**; the in-game
   display unit is server-sent as `unit` (currently `"stones"`), never
   converted. `portable: false` marks scenery a player cannot lift; `get` from
-  a container refuses it with `error{not_portable}`.
+  a container refuses it with `error{not_portable}`. The carry limit is
+  per-character and stored in `players.capacity_base` (default `30.0`); the
+  wire still carries only the computed `capacity`, so an operator changes the
+  base with `admin capacity` and the server adds strength and item modifiers
+  to it later.
 - `light_source: true` lets an object light a dark room. `lit: true` starts it
   lit; otherwise `light <source>` is needed. A light source must be equipped in
   a hand, on the belt, or on the head to light the room; one in the pack is

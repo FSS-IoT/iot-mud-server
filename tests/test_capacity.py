@@ -15,7 +15,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from src.mud.admin import main
-from src.mud.content import DEFAULT_CARRY_CAPACITY, Entity, Player, Room
+from src.mud.content import DEFAULT_CARRY_CAPACITY, Entity, Room
 from src.mud.engine.core import Engine
 from src.mud.protocol.adapter import execute
 from src.mud.storage.db import SCHEMA_VERSION, connect, migrate, open_database
@@ -98,7 +98,7 @@ async def test_a_set_base_survives_a_restart(tmp_path):
 
 
 async def test_a_new_character_has_the_default_base(tmp_path):
-    _engine_, conn, admission = await _admission(tmp_path)
+    _, conn, admission = await _admission(tmp_path)
 
     result = admission.register("Ada")
 

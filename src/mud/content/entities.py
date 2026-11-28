@@ -140,16 +140,17 @@ class ExitLock:
 class Player(Entity):
     """A named player in the world. Owns its current location.
 
-    `capacity` is the carry limit in the same unit as `Entity.weight` (#78).
-    `used` is not stored: the engine sums the weights of `contents`, so memory
-    and the `player.inventory` wire fields can never disagree. A non-positive
-    capacity means no limit.
+    `capacity_base` is the character's base carry limit in the same unit as
+    `Entity.weight` (#78, #149). The engine adds modifiers to it, so it is the
+    base, not the final `player.inventory` `capacity`. `used` is not stored: the
+    engine sums the weights of `contents`, so memory and the wire can never
+    disagree. A non-positive base means no limit.
     """
 
     def __init__(self, name: str, description: str = "A player.",
-                 capacity: float = DEFAULT_CARRY_CAPACITY):
+                 capacity_base: float = DEFAULT_CARRY_CAPACITY):
         super().__init__(name=name, description=description)
-        self.capacity = capacity
+        self.capacity_base = capacity_base
         self.location: Optional[Room] = None
         # Sleep is the stone state (#72): the character stays in its room while
         # its session is gone. It is present, invincible, and not a valid

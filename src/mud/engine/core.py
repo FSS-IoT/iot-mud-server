@@ -673,15 +673,25 @@ class Engine:
     # --- Carry limit (#78) ---------------------------------------------------
 
     @staticmethod
-    def carry_capacity(player) -> float:
-        """The actor's carry limit in `Entity.weight` units.
+    def capacity_modifiers(player) -> float:
+        """Strength and equipment adjustments to the base carry capacity (#149).
 
-        A legacy `Entity` used as the single-player slot has no capacity
-        attribute and keeps the documented default. A non-positive capacity
-        means no limit, so test doubles and old callers do not have to opt in.
+        The seam for later work. There are no modifiers yet, so the limit is
+        the base alone.
         """
-        return float(
-            getattr(player, "capacity", DEFAULT_CARRY_CAPACITY) or 0.0)
+        return 0.0
+
+    def carry_capacity(self, player) -> float:
+        """The actor's carry limit in `Entity.weight` units (#78, #149).
+
+        The limit is the character's durable `capacity_base` plus any strength
+        or equipment modifiers. A legacy `Entity` used as the single-player
+        slot has no base attribute and keeps the documented default. A
+        non-positive limit means no limit, so test doubles and old callers do
+        not have to opt in.
+        """
+        base = getattr(player, "capacity_base", DEFAULT_CARRY_CAPACITY)
+        return float(base or 0.0) + self.capacity_modifiers(player)
 
     @staticmethod
     def carry_used(player) -> float:

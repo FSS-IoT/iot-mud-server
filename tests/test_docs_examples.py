@@ -39,6 +39,7 @@ import yaml
 
 from src.mud.config import ConfigError, load_config
 from src.mud.content.models import Area, GameObject, Room, WorldFile
+from src.mud.storage.db import open_database
 from tests.golden.harness import (
     GoldenClient,
     golden_client,
@@ -368,6 +369,20 @@ def _ensure_backup(sandbox: _Sandbox) -> None:
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def _ensure_character(sandbox: _Sandbox, name: str) -> None:
+    """Seed, then create the bare character an `admin capacity` example names."""
+    _ensure_seeded(sandbox)
+    conn = open_database(sandbox.db)
+    try:
+        with conn:
+            conn.execute(
+                "INSERT INTO players(name, created_at) VALUES (?, ?)",
+                (name, "2026-01-01T00:00:00Z"),
+            )
+    finally:
+        conn.close()
+
+
 def _check_command(
     fence: Fence,
     words: list[str],
@@ -518,12 +533,16 @@ def _run_admin(
 ) -> None:
     assert args, f"{fence.where}: admin command needs a subcommand"
     subcommand = args[0]
-    if subcommand not in {"init-db", "content", "seed", "backup", "restore"}:
+    if subcommand not in {
+        "init-db", "content", "seed", "backup", "restore", "capacity",
+    }:
         raise AssertionError(
             f"{fence.where}: unclassified admin subcommand {subcommand!r}"
         )
     if subcommand == "restore":
         _ensure_backup(sandbox)
+    elif subcommand == "capacity":
+        _ensure_character(sandbox, args[1])
     elif subcommand == "backup" or (
         subcommand == "seed" and "--reset" in args
     ):
@@ -561,6 +580,7 @@ def _run_admin(
         "backup": "backed up",
         "restore": "restored",
         "init-db": "initialized",
+        "capacity": "capacity to",
     }[subcommand]
     if subcommand == "seed" and "--reset" in args:
         expected = "reset"

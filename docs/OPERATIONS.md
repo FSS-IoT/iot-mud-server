@@ -101,6 +101,22 @@ Character keys are not configured here. `admin rekey <name>` issues a new key
 and revokes the old one; it prints the new key once and stores only the key id,
 salt, and scrypt hash. See `PROTOCOL.md`, "v2.1 auth".
 
+## Character capacity
+
+Each character has a durable base carry capacity, stored in
+`players.capacity_base` and defaulting to `30.0`. An operator can change it
+offline while the server is stopped:
+
+```bash
+uv run python -m src.mud.admin capacity Ada 45.0 --db data/mud.db
+```
+
+The command accepts the same `--config`/`--db` flags as `rekey`. It looks the
+character up by name (case-insensitively) and prints the new value. A missing
+character is an error and writes nothing. The server adds strength and item
+modifiers to this base later; for now the base is the whole limit, and the wire
+still carries only the computed `capacity`.
+
 ## Seed and reset
 
 The server does **not** invent a world. Seed the database before the first
