@@ -169,7 +169,12 @@ async def _load_yaml_world(engine: Engine, data_path: Path) -> None:
 
 def _json_equipment(data: dict, item_id: str) -> tuple[tuple[str, ...], int]:
     """Validate the legacy JSON equipment fields like the YAML model."""
-    slots = tuple(data.get("equip_slots", ()))
+    raw_slots = data.get("equip_slots", ())
+    if not isinstance(raw_slots, (list, tuple)) or any(
+            not isinstance(slot, str) for slot in raw_slots):
+        raise WorldDataError(
+            f"item {item_id!r}: equip_slots must be a list of strings")
+    slots = tuple(raw_slots)
     unknown = sorted(set(slots) - EQUIP_SLOTS)
     if unknown:
         raise WorldDataError(

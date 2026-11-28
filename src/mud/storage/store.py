@@ -46,6 +46,12 @@ class StorageWriteError(RuntimeError):
 # the transaction runs. Anything it raises becomes a `StorageWriteError`.
 FailHook = Callable[[str], None]
 
+# Runtime equipment slots written by the engine. The authored ``equip_slots``
+# vocabulary uses ``hand``; the durable state uses the concrete hand.
+RUNTIME_SLOTS = frozenset(
+    {"hand_1", "hand_2", "head", "body", "back", "belt", "feet"}
+)
+
 
 def _utc_now() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
@@ -235,8 +241,9 @@ class WorldStore:
             for flag in ("locked", "open", "lit"):
                 if flag in state:
                     setattr(entity, flag, bool(state[flag]))
-            if state.get("slot") is not None:
-                entity.equipped_slot = str(state["slot"])
+            slot = state.get("slot")
+            if isinstance(slot, str) and slot in RUNTIME_SLOTS:
+                entity.equipped_slot = slot
 
         for row in self._conn.execute(
             "SELECT room_id, direction, locked FROM exits"

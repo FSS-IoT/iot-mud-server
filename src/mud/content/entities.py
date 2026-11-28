@@ -43,13 +43,13 @@ class Entity:
         # Plain items are not; `read <item>` is refused for them.
         self.readable = readable
         # `light_source` marks an object that sheds light — a Torch, a lantern.
-        # Carried by a player it lights wherever they stand; it makes a dark
-        # room visible.
+        # Equipped in a hand, belt, or head slot it lights the room; in a pack
+        # or container it does not.
         self.light_source = light_source
         # `lit` is the ignition state of a `light_source` (Torch, lantern). An
-        # unlit light source sheds no light; `light <item>` sets it. Carried by
-        # a player it lights wherever they stand *only while lit*, so the player
-        # must strike it before a dark room becomes visible.
+        # unlit light source sheds no light; `light <item>` sets it. Only an
+        # equipped lit source lights the room, so `light` equips it first when
+        # a light slot is free.
         self.lit = lit
         # An item that leaves the character when it sleeps and turns to stone
         # (#72). Authored in YAML/JSON as `dropped_on_sleep: true` and
@@ -154,7 +154,10 @@ class Player(Entity):
         self.equipment: dict[str, Entity] = {}
 
     def equip(self, item: Entity, slot: str) -> None:
-        """Equip `item` in `slot`, replacing its previous slot."""
+        """Equip `item` in `slot`, freeing its previous slot first.
+
+        Raises `ValueError` when another item already occupies `slot`.
+        """
         self.unequip(item)
         if slot in self.equipment:
             raise ValueError(f"slot {slot!r} is occupied")

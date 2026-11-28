@@ -330,7 +330,12 @@ asyncio.run(main(sys.argv[1]))
 
 
 async def _play(port: int) -> None:
-    """Take, drop, and move over the wire, waiting for each reply."""
+    """Take, drop, and move over the wire, waiting for each reply.
+
+    Registers a durable character rather than joining as a guest: #189 makes a
+    guest spill its inventory on disconnect, which would move the items before
+    the SIGKILL and hide the take/move durability under test.
+    """
     async with websockets.connect(f"ws://localhost:{port}") as ws:
         await ws.recv()  # hello
         await ws.send(json.dumps({

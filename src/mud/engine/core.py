@@ -289,6 +289,8 @@ class Engine:
                     player.equip(item, item.equipped_slot)
                 except ValueError:
                     slot = item.equipped_slot
+                    self._commit(
+                        ChangeSet("restore").set(item, "slot", None))
                     item.equipped_slot = None
                     logger.warning(
                         "could not restore %s to slot %s for %s",
@@ -1808,9 +1810,30 @@ class Engine:
                 outcome, actor, container.contents, item_arg,
                 f"You cannot carry the {item.name}; it is too heavy.", item)
             return
-        self._commit(ChangeSet("get").place(item, at=actor))
+        lit_slot = None
+        if getattr(item, "light_source", False) and getattr(
+                item, "lit", False):
+            lit_slot, error = self._equip_target(
+                actor, item, light_only=True)
+            if error is not None:
+                if error == "bad_args":
+                    self._fail(
+                        outcome, "bad_args",
+                        f"The lit {item.name} cannot be held.")
+                else:
+                    self._fail(
+                        outcome, "no_slot",
+                        f"You have no free hand, belt, or head for the lit "
+                        f"{item.name}.")
+                return
+        changes = ChangeSet("get").place(item, at=actor)
+        if lit_slot is not None:
+            changes.set(item, "slot", lit_slot)
+        self._commit(changes)
         container.remove_content(item)
         actor.add_content(item)
+        if lit_slot is not None:
+            actor.equip(item, lit_slot)
         await self.emit("item_got", {
             "item_name": item.name.lower(),
             "container": container.name.lower(),

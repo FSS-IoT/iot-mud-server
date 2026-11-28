@@ -513,3 +513,31 @@ async def test_extinguish_rejects_a_non_light_and_reports_an_unlit_source():
 
     assert "already out" in response.lower()
     assert torch.lit is False
+
+
+async def test_get_of_a_lit_source_auto_equips_it():
+    engine, ada, _torch, _lantern, _sword, _stick = _engine()
+    chest = Entity(
+        "Chest", "A chest.", container=True, open=True, item_id="chest")
+    lit = Entity(
+        "Lit Torch", "A burning torch.", light_source=True, lit=True,
+        equip_slots=("hand",), hands=1, item_id="lit_torch")
+    chest.add_content(lit)
+    ada.location.add_content(chest)
+
+    await engine.process_command("get lit torch from chest", "Ada")
+
+    assert lit in ada.contents
+    assert lit.equipped_slot in ("hand_1", "hand_2")
+    assert lit.lit is True
+
+
+async def test_another_players_equipped_light_lights_the_room():
+    engine, ada, _torch, _lantern, _sword, _stick = _engine()
+    ben = engine.register_player("Ben")
+    await engine.process_command("equip torch", "Ada")
+    await engine.process_command("light torch", "Ada")
+
+    assert "dark" not in (
+        await engine.process_command("look", "Ben")).lower()
+    assert ben.location is ada.location
