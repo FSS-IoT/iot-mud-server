@@ -2536,14 +2536,16 @@ class Engine:
         return int(player.skills.get(skill.strip().lower(), 0))
 
     def set_skill(self, name: str, skill: str, level: int) -> None:
-        """Set a skill in memory and, when attached, in the store."""
+        """Set a skill in the store first, then in memory."""
         player = self.get_player(name)
         if player is None:
             raise KeyError(f"no registered player named {name!r}")
         skill = skill.strip().lower()
-        player.skills[skill] = level
+        if level < 0:
+            raise ValueError("a skill level must be non-negative")
         if self.store is not None:
             self.store.player(name).set_skill(skill, level)
+        player.skills[skill] = level
 
     def _fire_random(self, name: str) -> random.Random:
         """The stable per-character stream for fire attempts (#183)."""

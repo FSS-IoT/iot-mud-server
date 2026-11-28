@@ -160,7 +160,13 @@ class CharacterAdmission:
             for item in items:
                 changes.place(item, at=room).set(item, "slot", None)
             if self.store is not None:
-                self.store.commit(changes)
+                try:
+                    self.store.commit(changes)
+                except StorageWriteError:
+                    # A guest is ephemeral. A failed spill must not stop the
+                    # disconnect path; the in-memory spill still completes.
+                    logger.exception(
+                        "could not persist guest spill for %s", name)
             for item in items:
                 player.unequip(item)
                 player.remove_content(item)

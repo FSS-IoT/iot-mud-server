@@ -64,6 +64,7 @@ ERROR_CODES = {
     "not_found", "not_here", "not_portable", "container_closed",
     "container_cycle", "no_exit", "locked", "already_open",
     "already_closed", "too_heavy", "no_slot", "not_equipped", "still_lit",
+    "no_skill", "no_ignition", "no_fuel",
     "malformed_message", "unknown_message",
     "not_joined", "already_joined", "name_taken", "invalid_name",
     "invalid_key", "not_authenticated", "not_awake", "rate_limited",

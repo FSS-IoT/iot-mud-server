@@ -315,7 +315,9 @@ class PlayerStore:
         return {
             str(skill): int(level)
             for skill, level in loaded.items()
-            if isinstance(level, (int, float)) and int(level) >= 0
+            if isinstance(level, (int, float))
+            and not isinstance(level, bool)
+            and int(level) >= 0
         }
 
     def set_skill(self, skill: str, level: int) -> None:

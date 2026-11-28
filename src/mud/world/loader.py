@@ -195,6 +195,21 @@ def _json_equipment(data: dict, item_id: str) -> tuple[tuple[str, ...], int]:
     return slots, int(hands)
 
 
+def _json_fire(data: dict, item_id: str) -> tuple[bool, bool, float]:
+    """Validate the legacy JSON fire fields like the YAML model."""
+    ignition = data.get("ignition", False)
+    fuel = data.get("fuel", False)
+    if not isinstance(ignition, bool) or not isinstance(fuel, bool):
+        raise WorldDataError(
+            f"item {item_id!r}: ignition and fuel must be true or false")
+    bonus = data.get("fire_bonus", 0.0)
+    if (isinstance(bonus, bool) or not isinstance(bonus, (int, float))
+            or not 0.0 <= float(bonus) <= 1.0):
+        raise WorldDataError(
+            f"item {item_id!r}: fire_bonus must be between 0 and 1")
+    return ignition, fuel, float(bonus)
+
+
 async def _load_json_world(engine: Engine, data_path: Path) -> None:
     """Populate the engine from the v2.0 JSON file.
 
@@ -214,6 +229,7 @@ async def _load_json_world(engine: Engine, data_path: Path) -> None:
     # 1. First pass: Create every object, globally.
     for i_data in data.get("items", []):
         equip_slots, hands = _json_equipment(i_data, i_data["id"])
+        ignition, fuel, fire_bonus = _json_fire(i_data, i_data["id"])
         item = Entity(
             name=i_data["name"],
             description=i_data["description"],
@@ -231,9 +247,9 @@ async def _load_json_world(engine: Engine, data_path: Path) -> None:
             open=bool(i_data.get("state", {}).get("open", False)),
             equip_slots=equip_slots,
             hands=hands,
-            ignition=bool(i_data.get("ignition", False)),
-            fuel=bool(i_data.get("fuel", False)),
-            fire_bonus=float(i_data.get("fire_bonus", 0.0)),
+            ignition=ignition,
+            fuel=fuel,
+            fire_bonus=fire_bonus,
         )
         item.instance_id = i_data["id"]
         item_map[i_data["id"]] = item
