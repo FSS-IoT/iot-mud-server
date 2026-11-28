@@ -1,0 +1,15 @@
+[Unit]
+Description=IoT MUD portal (one tailnet port)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/Projects/iot-mud-portal/iot-mud-portal -config %h/.config/iot-mud-portal/portal.json
+Restart=on-failure
+RestartSec=2
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

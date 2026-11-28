@@ -67,6 +67,10 @@ server.log
 client.log
 error_log.txt
 
+# Portal binary and local config
+/iot-mud-portal
+portal/portal.json
+
 # OS Files
 .DS_Store
 Thumbs.db

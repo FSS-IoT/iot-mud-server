@@ -37,6 +37,13 @@ uv run python -m src.mud.net.v2_server --host 0.0.0.0 --port 9000
 
 The v2 server defaults to port 8765.
 
+## Portal
+
+`portal/` is the experimental Go proxy for one client-facing tailnet port. It
+authenticates nothing yet; backends still validate the character key. The
+default path enters the main server. Dev servers are opt-in. See
+[`portal/README.md`](portal/README.md).
+
 ## Storage
 
 The v2 server creates and migrates `data/mud.db` on startup. Override it with
