@@ -1,0 +1,26 @@
+name: portal
+
+on:
+  push:
+    branches: [main]
+    paths: ["portal/**", ".github/workflows/portal.yml"]
+  pull_request:
+    paths: ["portal/**", ".github/workflows/portal.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: portal
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: portal/go.mod
+          cache-dependency-path: portal/go.sum
+      - run: go vet ./...
+      - run: go test ./...
