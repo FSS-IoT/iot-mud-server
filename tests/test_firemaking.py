@@ -237,3 +237,35 @@ def test_content_model_accepts_ignition_and_fuel():
 
     with pytest.raises(ValidationError):
         GameObject(id="bad", name="Bad", fire_bonus=-1.0)
+
+
+async def test_a_lit_torch_lights_a_lantern_in_the_other_hand():
+    engine, ada, torch, lantern, flint, kindling = _engine(skill=0)
+    torch.lit = True
+    ada.equip(torch, "hand_1")
+    ada.equip(lantern, "hand_2")
+    ada.remove_content(flint)
+    ada.remove_content(kindling)
+    engine.fire_chance = lambda *args: (_ for _ in ()).throw(
+        AssertionError("flame transfer must not roll"))
+
+    await engine.process_command("light lantern", "Ada")
+
+    assert lantern.lit is True
+    assert lantern.equipped_slot == "hand_2"
+
+
+async def test_a_lit_lantern_lights_a_torch():
+    engine, ada, torch, lantern, flint, kindling = _engine(skill=0)
+    lantern.lit = True
+    ada.equip(lantern, "belt")
+    ada.equip(torch, "hand_1")
+    ada.remove_content(flint)
+    ada.remove_content(kindling)
+    engine.fire_chance = lambda *args: (_ for _ in ()).throw(
+        AssertionError("flame transfer must not roll"))
+
+    await engine.process_command("light torch", "Ada")
+
+    assert torch.lit is True
+    assert torch.equipped_slot == "hand_1"

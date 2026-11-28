@@ -187,7 +187,9 @@ rooms:
 - `ignition: true` marks a fire-making tool (flint and steel, bow drill). `fuel:
   true` marks kindling or dry wood. `fire_bonus` adds 0.0-1.0 to the chance. An
   unlit source needs `firemaking >= 1`, an ignition tool, and fuel unless
-  another lit source is already equipped or in the room to pass the flame.
+  another lit source is already equipped or in the room to pass the flame. Any
+  lit source can pass the flame by default, including a lantern lighting a
+  torch; an `open_flame: false` opt-out for a sealed lamp is later content.
   Skill 1 comes from the cave lesson (#180); the schema stores it in
   `players.skills` (#183).
 - `equip_slots` lists where an item can go: `hand`, `head`, `body`, `back`,
