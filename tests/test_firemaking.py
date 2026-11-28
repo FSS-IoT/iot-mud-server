@@ -20,7 +20,6 @@ from src.mud.content.models import GameObject
 from src.mud.engine.core import Engine
 from src.mud.protocol.adapter import execute
 from src.mud.storage.db import SCHEMA_VERSION, connect, migrate, open_database
-from src.mud.storage.store import PlayerStore
 from src.mud.world.loader import load_world
 from src.mud.world.seed import seed_world
 from tests.golden.harness import HarnessClient, server_harness
@@ -157,24 +156,31 @@ async def test_an_equipped_lit_source_passes_the_flame_without_tools():
 
 
 async def test_skill_survives_a_restart(tmp_path):
-    conn = open_database(tmp_path / "mud.db")
+    from src.mud.admission import CharacterAdmission
+
     hall = Room("Hall", "A stone hall.")
     hall.item_id = "hall"
+    engine = Engine()
+    engine._rooms[hall.name] = hall
+    engine.start_room = hall
+
+    conn = open_database(tmp_path / "mud.db")
     try:
-        store = PlayerStore(conn, "Ada")
-        store.move(room=hall)
-        store.set_skill("firemaking", 1)
+        admission = CharacterAdmission(engine, conn)
+        key = admission.register("Ada").registration.key
+        engine.set_skill("Ada", "firemaking", 1)
+        admission.suspend("Ada")
+    finally:
+        conn.close()
 
-        state = PlayerStore(conn, "Ada").load()
-        assert state.skills == {"firemaking": 1}
-
-        engine = Engine()
-        engine._rooms[hall.name] = hall
-        engine.start_room = hall
-        player = engine.register_player("Ada")
-        engine.restore_player(
-            player, room=hall, item_keys=(), skills=state.skills)
-        assert player.skills == {"firemaking": 1}
+    engine = Engine()
+    engine._rooms[hall.name] = hall
+    engine.start_room = hall
+    conn = open_database(tmp_path / "mud.db")
+    try:
+        admission = CharacterAdmission(engine, conn)
+        result = admission.resume(key)
+        assert result.player.skills == {"firemaking": 1}
     finally:
         conn.close()
 

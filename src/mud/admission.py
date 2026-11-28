@@ -192,6 +192,7 @@ class CharacterAdmission:
                 room=self.engine.get_room_by_id(login.room_id),
                 item_keys=login.items,
             )
+        player.skills.update(login.skills)
 
         try:
             self.engine.wake_player(login.name)

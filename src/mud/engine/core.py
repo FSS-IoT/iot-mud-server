@@ -279,7 +279,6 @@ class Engine:
         *,
         room: Room | None,
         item_keys: Iterable[str],
-        skills: dict[str, int] | None = None,
     ) -> None:
         """Put a freshly registered player back where the store left it.
 
@@ -290,8 +289,6 @@ class Engine:
         ignored: a world reset clears inventory, and a missing object must not
         fail a login.
         """
-        if skills:
-            player.skills.update(skills)
         if room is not None and player.location is not room:
             if player.location is not None:
                 player.location.remove_content(player)
@@ -2553,7 +2550,7 @@ class Engine:
         key = name.lower()
         rng = self._fire_rngs.get(key)
         if rng is None:
-            seed = self.rng_seed ^ zlib.crc32(f"fire:{key}".encode("utf-8"))
+            seed = self.rng_seed ^ zlib.crc32(f"fire:{key}".encode())
             rng = random.Random(seed)
             self._fire_rngs[key] = rng
         return rng
