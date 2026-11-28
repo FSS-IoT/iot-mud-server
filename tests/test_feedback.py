@@ -18,8 +18,10 @@ import pytest
 
 from src.mud.admin import main
 from src.mud.feedback import (
+    MAX_COMMAND_TEXT,
     FeedbackLimiter,
     FeedbackValidationError,
+    redact_command,
     validate_feedback_category,
     validate_feedback_text,
 )
@@ -145,6 +147,15 @@ def test_limiter_allows_one_per_minute_and_five_per_hour():
 
     # A different character is unaffected.
     assert fresh.allowed("Cara") is True
+
+
+def test_redact_command_bounds_a_long_tell_target_and_keeps_the_body_redacted():
+    target = "a" * 1016
+    body = "the secret body"
+    redacted = redact_command(f"tell {target} {body}")
+    assert len(redacted) <= MAX_COMMAND_TEXT
+    assert "[redacted]" in redacted
+    assert body not in redacted
 
 
 # --- schema ------------------------------------------------------------------
@@ -374,6 +385,34 @@ def test_admin_show_escapes_control_characters(tmp_path, capsys):
     assert "\x00" not in out
     assert "\\x1b" in out
     assert "\\x00" in out
+
+
+def test_admin_show_escapes_control_characters_in_context(tmp_path, capsys):
+    path = tmp_path / "mud.db"
+    assert main(["init-db", "--db", str(path)]) == 0
+    # The server stores context with `ensure_ascii=False`, so a C1 control in
+    # command history (U+009B) survives raw in the stored JSON.
+    context = json.dumps({"commands": [{"text": "look \u009b"}]},
+                         ensure_ascii=False)
+    conn = open_database(path)
+    try:
+        with conn:
+            conn.execute(
+                "INSERT INTO feedback(player_name, text, category, room_id, "
+                "room_name, world_epoch, server_commit, context, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                ("Ada", "ok", "other", "market", "Marketplace", "epoch-1",
+                 "0" * 40, context, "2026-01-01T00:00:00Z"),
+            )
+    finally:
+        conn.close()
+    capsys.readouterr()
+
+    assert main(["feedback", "show", "1", "--db", str(path)]) == 0
+
+    out, _ = capsys.readouterr()
+    assert "\x9b" not in out
+    assert "\\x9b" in out
 
 
 def test_admin_export_markdown_fences_and_is_0600(tmp_path, capsys):

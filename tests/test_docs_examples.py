@@ -319,6 +319,7 @@ def test_every_command_fence_runs_or_is_an_explicit_host_command(tmp_path):
 
     assert {
         "admin content", "admin seed", "admin backup", "admin restore",
+        "admin feedback show", "admin feedback delete",
         "load-smoke",
     } <= executed, (
         "the docs must exercise content check, seed, backup, restore, and the "
