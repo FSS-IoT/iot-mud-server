@@ -25,8 +25,9 @@ render them.
 
    The server port is not part of the protocol. Whatever you choose, pass the
    matching value to your client: `--uri ws://localhost:8766`. A v2.1 server
-   requires auth, so have two character names ready and somewhere outside the
-   repository to keep the keys (for the reference client,
+   offers auth for persistent characters, and a guest join is the fallback.
+   For the full acceptance, have two character names ready and somewhere
+   outside the repository to keep the keys (for the reference client,
    `--save-key ~/.config/iot-mud/ada.key`).
 2. Read `PROTOCOL.md` version 2.1, especially "v2.1 auth" and "Session
    lifecycle", and `CLIENTS.md` for the key and sleep rules.
@@ -96,8 +97,9 @@ dark room omits it until a light makes the room visible.
 Use two characters, **Ada** and **Ben**.
 
 1. **Connect.** Both clients receive `hello` with `v: 2`, `data.protocol`
-   containing `2`, `data.world.epoch`, `data.auth_required: true`, and
-   `data.auth_modes: ["key"]`.
+   containing `2`, `data.server_version`, `data.feature_level`,
+   `data.capabilities`, `data.world.epoch`, `data.auth_required: true`,
+   `data.guest_ok: true`, and `data.auth_modes: ["key"]`.
 2. **Register.** Ada sends `auth` with
    `{"mode":"register","name":"Ada"}`; Ben sends the same with `"Ben"`. Each
    receives `auth.ok` followed by `room.state`. `auth.ok.data.key` is the
@@ -305,14 +307,15 @@ gold key from the exit-lock section.
    in `mud.toml`, restart the server, and do nothing on an authenticated
    socket. When the timeout passes, the room receives the same sleep
    `room.leave` and the socket closes `4004`. A later login wakes the character
-   in place. Guest sessions (`auth_required = false`) are removed on disconnect
-   and are not slept.
+   in place. Guest sessions (`guest_ok = true`, no key) are removed on
+   disconnect and are not slept.
 
 ## What "done" means
 
 Your client is compatible when it can:
 
-- connect and read `hello`, including `auth_required` and `auth_modes`;
+- connect and read `hello`, including `server_version`, `feature_level`,
+  `capabilities`, `auth_required`, `guest_ok`, and `auth_modes`;
 - register (show the key once) or log in with a saved key, then render
   `room.state`;
 - send `input` and pair the direct reply by `id`;
@@ -342,10 +345,13 @@ shown in parentheses as one example; the structured fields are the contract.
 - [ ] **Pin.** Your README records the full 40-character server commit, and
       `hello.data.server_commit` matches it (or you have read the changelog for
       the difference).
-- [ ] **Hello.** `data.protocol` contains `2`, `data.auth_required` is `true`,
+- [ ] **Hello.** `data.protocol` contains `2`, `data.server_version` and
+      `data.feature_level` are readable, `data.capabilities` is a list,
+      `data.auth_required` is `true`, `data.guest_ok` is `true`,
       `data.auth_modes` is `["key"]`, and the world epoch and
-      `data.server_commit` are readable. (`Protocol: 2`, `Auth: required
-      (key)`, `World: ... (epoch ...)`, `Server commit: ...`)
+      `data.server_commit` are readable. (`Protocol: 2`, `Server version:
+      2.1.6 (feature level 1)`, `Auth: required (key); guest join accepted`,
+      `World: ... (epoch ...)`, `Server commit: ...`)
 - [ ] **Register and log in.** Registration shows the key once; a later login
       with the saved key says `mode: "login"`, returns no `key`, and puts the
       character in its stored room. (`Registered as: Ada`; then `Logged in as:
@@ -373,10 +379,11 @@ shown in parentheses as one example; the structured fields are the contract.
 
 ## Troubleshooting
 
-- **The client hangs after `join`.** A v2.1 server rejects `join` with
-  `error{code:"not_authenticated"}` and keeps the socket open: send `auth`
-  first. Check that you are sending `v: 2` and that you handle `auth.ok`,
-  `auth.error`, and `room.state`; a v1 client cannot speak to a v2 server.
+- **The client hangs after `join`.** A server with `guest_ok: false` rejects
+  `join` with `error{code:"not_authenticated"}` and keeps the socket open:
+  send `auth` first. The default server accepts a guest `join`. Check that you
+  are sending `v: 2` and that you handle `auth.ok`, `auth.error`, and
+  `room.state`; a v1 client cannot speak to a v2 server.
 - **Connection refused, or the client talks to the wrong world.** The URI must
   match the server's `--port` (`--uri ws://localhost:8766` for the acceptance
   server). 8765 is the default; 8766 is the scratch example.

@@ -74,12 +74,18 @@ def render_hello(data: dict) -> str:
     auth = "required" if data.get("auth_required") else "not required"
     if modes:
         auth += f" ({modes})"
+    guest = "accepted" if data.get("guest_ok", True) else "disabled"
+    version = data.get("server_version", "?")
+    feature = data.get("feature_level", "?")
+    caps = ", ".join(data.get("capabilities") or []) or "none"
     lines = [
         f"{CYAN}{BOLD}--- {data.get('motd', 'Welcome to the MUD!')} ---{CLEAR}",
         f"{CYAN}Protocol: {protocol or '?'}{CLEAR}",
+        f"{CYAN}Server version: {version} (feature level {feature}){CLEAR}",
         (f"{CYAN}World: {world.get('name', '?')} "
          f"(epoch {world.get('epoch', '?')}){CLEAR}"),
-        f"{CYAN}Auth: {auth}{CLEAR}",
+        f"{CYAN}Auth: {auth}; guest join {guest}{CLEAR}",
+        f"{CYAN}Capabilities: {caps}{CLEAR}",
         f"{CYAN}Server commit: {data.get('server_commit', 'unknown')}{CLEAR}",
     ]
     return "\n".join(lines) + "\n"

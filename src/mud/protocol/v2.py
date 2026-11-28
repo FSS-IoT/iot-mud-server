@@ -13,6 +13,24 @@ PROTOCOL_VERSION = 2
 # The changelog label for the current additive release inside protocol 2.
 PROTOCOL_RELEASE = "2.1"
 
+# `MAJOR.MINOR.PATCH`: MAJOR is the protocol, MINOR is the shared
+# client-facing feature level, PATCH is the server-only counter. See
+# docs/PROTOCOL.md and tests/test_protocol_hello.py.
+SERVER_VERSION = "2.1.6"
+FEATURE_LEVEL = 1
+
+# Additive names a client may use. Unknown names are ignored. A capability
+# means the server implements it, not that a given world uses it.
+CAPABILITIES = (
+    "auth.key",
+    "inventory.capacity",
+    "limits.commands",
+    "idle.sleep",
+    "npc.dialogue",
+    "npc.wander",
+    "locks",
+)
+
 # `hello.data.server_commit` when no commit can be resolved.
 UNKNOWN_SERVER_COMMIT = "unknown"
 
