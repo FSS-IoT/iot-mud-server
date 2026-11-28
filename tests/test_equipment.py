@@ -288,3 +288,81 @@ def test_content_model_accepts_and_validates_equipment_fields():
         GameObject(id="bad", name="Bad", equip_slots=["tail"])
     with pytest.raises(ValidationError):
         GameObject(id="bad", name="Bad", equip_slots=["belt"], hands=2)
+
+
+async def test_unequip_refuses_a_lit_source():
+    engine, _ada, torch, _lantern, _sword, _stick = _engine()
+    await engine.process_command("light torch", "Ada")
+
+    assert await _code(engine, "unequip torch") == "still_lit"
+    assert torch.equipped_slot == "hand_1"
+    assert torch.lit is True
+
+
+async def test_extinguish_lets_a_lit_source_be_stowed():
+    engine, _ada, torch, _lantern, _sword, _stick = _engine()
+    await engine.process_command("light torch", "Ada")
+
+    assert await engine.process_command("extinguish torch", "Ada") == (
+        "You put out the Torch.")
+    assert torch.lit is False
+    await engine.process_command("unequip torch", "Ada")
+    assert torch.equipped_slot is None
+
+
+async def test_put_refuses_a_lit_source():
+    engine, ada, torch, _lantern, _sword, _stick = _engine()
+    chest = Entity(
+        "Chest", "A chest.", container=True, item_id="chest")
+    ada.location.add_content(chest)
+    await engine.process_command("light torch", "Ada")
+
+    assert await _code(engine, "put torch in chest") == "still_lit"
+    assert chest.contents == []
+
+    await engine.process_command("extinguish torch", "Ada")
+    await engine.process_command("put torch in chest", "Ada")
+    assert torch in chest.contents
+
+
+async def test_a_dropped_lit_torch_stays_lit_and_lights_the_room():
+    engine, _ada, torch, _lantern, _sword, _stick = _engine()
+    await engine.process_command("light torch", "Ada")
+    await engine.process_command("drop torch", "Ada")
+
+    assert torch.lit is True
+    assert torch.equipped_slot is None
+    response = await engine.process_command("look", "Ada")
+    assert "dark" not in response.lower()
+    assert "Here you see" in response
+
+
+async def test_taking_a_lit_torch_auto_equips_it():
+    engine, ada, torch, _lantern, _sword, _stick = _engine()
+    room = ada.location
+    ada.remove_content(torch)
+    room.add_content(torch)
+    torch.lit = True
+
+    await engine.process_command("take torch", "Ada")
+
+    assert torch in ada.contents
+    assert torch not in room.contents
+    assert torch.equipped_slot in ("hand_1", "hand_2")
+    assert torch.lit is True
+
+
+async def test_taking_a_lit_torch_with_no_light_slot_is_refused():
+    engine, ada, torch, _lantern, _sword, _stick = _engine()
+    other = Entity("Other", "Another stick.", equip_slots=("hand",), hands=1)
+    ada.add_content(other)
+    await engine.process_command("equip stick", "Ada")
+    await engine.process_command("equip other", "Ada")
+    room = ada.location
+    ada.remove_content(torch)
+    room.add_content(torch)
+    torch.lit = True
+
+    assert await _code(engine, "take torch") == "no_slot"
+    assert torch in room.contents
+    assert torch not in ada.contents

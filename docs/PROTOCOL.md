@@ -836,7 +836,7 @@ and exits add the declarative lock the design calls for, with one command
 `unknown_command`, `bad_args`, `ambiguous`, `not_found`, `not_here`,
 `not_portable`, `container_closed`, `container_cycle`, `no_exit`, `locked`,
 `already_open`, `already_closed`, `too_heavy`, `no_slot`, `not_equipped`,
-`malformed_message`,
+`still_lit`, `malformed_message`,
 `unknown_message`,
 `not_joined`, `already_joined`, `name_taken`, `not_authenticated`,
 `invalid_key`, `invalid_name`, `not_awake`, `rate_limited`, `internal`,
@@ -870,16 +870,17 @@ idle close is `4004` after the character is already asleep.
 | `look in <container>` | `notice` (private; container contents); unknown `error{not_found}`, ambiguous `error{ambiguous}` with `candidates` |
 | `exits` | `notice` (private) |
 | `go <dir>` / `n`/`s`/`e`/`w`/`u`/`d` | actor: `room.state`; others: `room.leave` then `room.enter`; a locked exit: `error{locked}` to the actor and `exit.locked` to the room |
-| `take <x>` / `get <x>` | `object.taken` (actor `self:true` + room `self:false`), then a state-only `player.inventory`; over capacity `error{too_heavy}`, unknown `error{not_found}`, ambiguous `error{ambiguous}` with `candidates` |
-| `drop <x>` | `object.dropped` (actor `self:true` + room `self:false`), then a state-only `player.inventory`; unknown `error{not_found}`, ambiguous `error{ambiguous}` with `candidates` |
-| `put <x> in <y>` | `object.put` (actor + room) + state-only `player.inventory`; a self or descendant insertion is `error{container_cycle}` and changes nothing |
+| `take <x>` / `get <x>` | `object.taken` (actor `self:true` + room `self:false`), then a state-only `player.inventory`; a lit source is auto-equipped and `error{no_slot}` if no light slot is free; over capacity `error{too_heavy}`, unknown `error{not_found}`, ambiguous `error{ambiguous}` with `candidates` |
+| `drop <x>` | `object.dropped` (actor `self:true` + room `self:false`), then a state-only `player.inventory`; a lit source stays lit on the floor and lights the room; unknown `error{not_found}`, ambiguous `error{ambiguous}` with `candidates` |
+| `put <x> in <y>` | `object.put` (actor + room) + state-only `player.inventory`; a self or descendant insertion is `error{container_cycle}` and changes nothing; a lit source is `error{still_lit}` |
 | `open <x>` | `object.opened` (contents listed in text and kept inside; an empty unlocked container also emits it; an open one is `error{already_open}`) |
 | `close <x>` | `object.closed` (or `error{already_closed}` / `error{bad_args}` for a non-container) |
 | `get <x> from <y>` | `object.got` (actor `self:true` + room `self:false`) + state-only `player.inventory`; closed container `error{container_closed}`, item not inside `error{not_here}`, fixed item `error{not_portable}`, over capacity `error{too_heavy}`, ambiguous `error{ambiguous}` with `candidates` |
 | `use <key> on <container>` | `object.unlocked` (or `error{locked}` / `error{already_open}`) |
 | `use <key> on <exit>` | `exit.unlocked` (actor `self:true` + room `self:false`; wrong or missing key `error{locked}`, already open `error{already_open}`) |
 | `equip <x> [on <slot>]` | `player.inventory` (private); no free or allowed slot `error{no_slot}`, wrong slot or non-equippable `error{bad_args}`, unknown `error{not_found}` |
-| `unequip <x>` | `player.inventory` (private); item not equipped `error{not_equipped}`, unknown `error{not_found}` |
+| `unequip <x>` | `player.inventory` (private); item not equipped `error{not_equipped}`, lit source `error{still_lit}`, unknown `error{not_found}` |
+| `extinguish <x>` | `player.inventory` (private); not a light `error{bad_args}`, already out `notice`, unknown `error{not_found}` |
 | `light <source>` | `object.lit` (or `notice` if already lit / not a light); the source is auto-equipped into a free hand, belt, or head slot, or `error{no_slot}` |
 | `read <x>` | `object.read` (private) |
 | `inventory` / `i` | `player.inventory` (private) |
@@ -934,7 +935,11 @@ release; a later additive fix still adds a bullet here.
   `body`, `back`, `belt`, or `feet`. Present only on an equipped item.
 - New commands `equip <item> [on <slot>]` and `unequip <item>`. Both reply with
   a private `player.inventory`; no new event type.
-- New error codes `no_slot` and `not_equipped`.
+- New command `extinguish <item>`. A lit source cannot be unequipped or put in a
+  container (`error{still_lit}`); put it out first.
+- A lit source can be dropped. It stays lit on the floor and lights the room
+  until burn-down lands. Taking a lit source auto-equips it, or `error{no_slot}`.
+- New error codes `no_slot`, `not_equipped`, and `still_lit`.
 - A lit light source lights a dark room only while equipped in a hand, on the
   belt, or on the head. A lit source in the pack no longer lights the room.
   No field or event is removed.

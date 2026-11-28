@@ -686,6 +686,13 @@ class Engine:
         occupants = [c for c in room.contents if isinstance(c, Player)]
         if player is not None and player not in occupants:
             occupants.append(player)
+        if any(
+            getattr(item, "light_source", False)
+            and getattr(item, "lit", False)
+            for item in room.contents
+            if not isinstance(item, Player)
+        ):
+            return True
         return any(
             slot in LIGHT_SLOTS
             and getattr(item, "light_source", False)
@@ -1068,6 +1075,7 @@ class Engine:
             "use": self._exec_use,
             "equip": self._exec_equip,
             "unequip": self._exec_unequip,
+            "extinguish": self._exec_extinguish,
             "talk": self._exec_talk,
             "ask": self._exec_ask,
             "light": self._exec_light,
@@ -1171,10 +1179,25 @@ class Engine:
                 outcome, actor, before_room_contents, arg,
                 f"You cannot carry the {item.name}; it is too heavy.", item)
             return
-        if self.store is not None:
-            self._commit(ChangeSet("take").place(item, at=actor))
+        lit_slot = None
+        if getattr(item, "light_source", False) and getattr(
+                item, "lit", False):
+            lit_slot, error = self._equip_target(
+                actor, item, light_only=True)
+            if error is not None:
+                self._fail(
+                    outcome, "no_slot",
+                    f"You have no free hand, belt, or head for the lit "
+                    f"{item.name}.")
+                return
+        changes = ChangeSet("take").place(item, at=actor)
+        if lit_slot is not None:
+            changes.set(item, "slot", lit_slot)
+        self._commit(changes)
         room.remove_content(item)
         actor.add_content(item)
+        if lit_slot is not None:
+            actor.equip(item, lit_slot)
         await self.emit("item_taken", {
             "item_name": item.name.lower(), "owner": actor.name})
         outcome.reply = f"You picked up the {item.name}."
@@ -1433,7 +1456,7 @@ class Engine:
             "Commands: look (l), go <direction>, exits, take <item>, "
             "get <item> from <container>, drop <item>, put <item> in <container>, "
             "open <container>, close <container>, use <key> on <container|exit>, "
-            "equip <item> [on <slot>], unequip <item>, "
+            "equip <item> [on <slot>], unequip <item>, extinguish <light>, "
             "examine <thing> (exam), read <thing> (signs, books), look in <chest>, "
             "light <torch/lantern>, inventory (i), who, "
             "say <text>, emote <action> (me), tell <player> <text>, "
@@ -1651,6 +1674,12 @@ class Engine:
                 outcome, "locked",
                 f"The {container.name} is locked. Find a key and "
                 f"`use <key> on {container.name.lower()}`.")
+            return
+        if getattr(held, "light_source", False) and getattr(
+                held, "lit", False):
+            self._fail(
+                outcome, "still_lit",
+                f"Put out the {held.name} before you stow it.")
             return
         if self._containment_cycle(container, held):
             self._fail(
@@ -1996,9 +2025,49 @@ class Engine:
             self._fail(
                 outcome, "not_equipped", f"The {item.name} is not equipped.")
             return
+        if getattr(item, "light_source", False) and getattr(
+                item, "lit", False):
+            self._fail(
+                outcome, "still_lit",
+                f"Put out the {item.name} before you stow it.")
+            return
         self._commit(ChangeSet("unequip").set(item, "slot", None))
         actor.unequip(item)
         outcome.reply = f"You unequip the {item.name}."
+        outcome.events.append(SemanticEvent(
+            kind="player.inventory",
+            data={"actor": actor, "text": outcome.reply},
+            scope="actor",
+        ))
+
+    async def _exec_extinguish(self, outcome: CommandOutcome, actor: Player,
+                               arg: str | None) -> None:
+        """`extinguish <source>`: put out a lit light source."""
+        if not arg:
+            self._fail(
+                outcome, "bad_args",
+                "Extinguish what? Try `extinguish <light>`.")
+            return
+        item, disambig = self._disambiguate(actor.contents, arg)
+        if disambig:
+            self._fail(outcome, "ambiguous", disambig)
+            outcome.error_data = {
+                "candidates": self._candidates(actor.contents, arg)}
+            return
+        if item is None:
+            self._fail(
+                outcome, "not_found", f"You aren't carrying any {arg}.")
+            return
+        if not getattr(item, "light_source", False):
+            self._fail(
+                outcome, "bad_args", f"The {item.name} is not a light.")
+            return
+        if not getattr(item, "lit", False):
+            self._notice(outcome, f"The {item.name} is already out.")
+            return
+        self._commit(ChangeSet("extinguish").set(item, "lit", False))
+        item.lit = False
+        outcome.reply = f"You put out the {item.name}."
         outcome.events.append(SemanticEvent(
             kind="player.inventory",
             data={"actor": actor, "text": outcome.reply},
