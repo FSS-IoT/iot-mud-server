@@ -178,7 +178,12 @@ rooms:
   lit; otherwise `light <source>` is needed. A light source must be equipped in
   a hand, on the belt, or on the head to light the room; one in the pack is
   dark. Igniting one commits `lit` to `objects.state`, so it stays lit across a
-  restart (#131).
+  restart (#131). A lit source cannot be unequipped or put in a container:
+  `extinguish <source>` first. A lit source can be dropped; it stays lit on the
+  floor and lights the room until it burns out (burn-down is a later item
+  lifecycle). Taking a lit source puts it straight into a hand, belt, or head
+  slot; if none is free the take is refused. A fireproof carrier that can hold
+  embers is a later item capability, not a place for a burning torch.
 - `equip_slots` lists where an item can go: `hand`, `head`, `body`, `back`,
   `belt`, or `feet`. `hands: 1` uses one hand; `hands: 2` uses both. Empty
   means the item cannot be equipped. A lantern can use `[hand, belt]`; a torch
