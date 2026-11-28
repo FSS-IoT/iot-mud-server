@@ -41,11 +41,12 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import re
 import secrets
 import sqlite3
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
@@ -97,8 +98,8 @@ class Registration:
 class Login:
     """The durable character a verified key belongs to.
 
-    `room_id` and `items` are read in the same login lookup, so admission does
-    not need a second `PlayerStore.load()` (#138).
+    `room_id`, `items`, and `skills` are read in the same login lookup, so
+    admission does not need a second `PlayerStore.load()` (#138, #183).
     """
 
     name: str
@@ -106,6 +107,7 @@ class Login:
     key_id: str
     room_id: str | None
     items: tuple[str, ...] = ()
+    skills: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -235,7 +237,7 @@ def login_character(conn: sqlite3.Connection, key: object) -> Login:
 
     row = conn.execute(
         "SELECT k.key_id, k.player_id, k.salt, k.hash, k.revoked_at, "
-        "p.name, p.room_id "
+        "p.name, p.room_id, p.skills "
         "FROM character_keys k JOIN players p ON p.id = k.player_id "
         "WHERE k.key_id = ?",
         (key_id,),
@@ -254,12 +256,23 @@ def login_character(conn: sqlite3.Connection, key: object) -> Login:
             (player_id,),
         )
     )
+    try:
+        raw_skills = json.loads(row["skills"] or "{}")
+    except ValueError:
+        raw_skills = {}
+    skills = {
+        str(skill): int(level)
+        for skill, level in raw_skills.items()
+        if isinstance(level, (int, float)) and not isinstance(level, bool)
+        and int(level) >= 0
+    } if isinstance(raw_skills, dict) else {}
     return Login(
         name=row["name"],
         player_id=player_id,
         key_id=row["key_id"],
         room_id=row["room_id"],
         items=items,
+        skills=skills,
     )
 
 

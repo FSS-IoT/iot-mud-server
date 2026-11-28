@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from src.mud.content import Entity
 from src.mud.engine.core import Engine
 from src.mud.world.loader import load_world
 from tests.golden.harness import HarnessClient as V2Client
@@ -456,6 +457,11 @@ async def test_container_sequence_over_websocket(server):
     """The lock/open/get/put container path works end-to-end over the socket."""
     async with V2Client(server) as ada:
         await ada.register("Ada")
+        # The frozen five-room fixture predates fire making; a lit brazier
+        # gives this session the same transfer-flame path the product world has.
+        server.engine.get_room("Alchemist Shop").add_content(Entity(
+            "Brazier", "A lit brazier.", light_source=True, lit=True,
+            item_id="test_brazier", portable=False))
         await ada.input("go north", 2)
         await ada.next("room.state")
         await ada.input("go west", 3)
@@ -500,6 +506,11 @@ async def test_container_sequence_over_websocket(server):
 async def test_exits_uses_the_players_current_room(server):
     async with V2Client(server) as ada:
         await ada.register("Ada")
+        # The frozen five-room fixture predates fire making; a lit brazier
+        # gives this session the same transfer-flame path the product world has.
+        server.engine.get_room("Alchemist Shop").add_content(Entity(
+            "Brazier", "A lit brazier.", light_source=True, lit=True,
+            item_id="test_brazier", portable=False))
         await ada.input("go north", 2)
         await ada.next("room.state")
 

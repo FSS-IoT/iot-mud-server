@@ -38,6 +38,13 @@ rooms:
     exits:
       north: cave
     objects:
+      - id: brazier
+        name: Brazier
+        description: A lit brazier.
+        weight: 4.0
+        portable: false
+        light_source: true
+        lit: true
       - id: torch
         name: Torch
         description: A wooden torch.
@@ -94,6 +101,12 @@ def _engine(dark: bool = True):
     for item in (torch, lantern, sword, stick):
         item.instance_id = item.item_id
         ada.add_content(item)
+    ada.skills["firemaking"] = 1
+    flint = Entity("Flint and Steel", "A striker.", ignition=True)
+    kindling = Entity("Kindling", "Dry twigs.", fuel=True)
+    ada.add_content(flint)
+    ada.add_content(kindling)
+    engine.fire_chance = lambda *args: 1.0
     return engine, ada, torch, lantern, sword, stick
 
 

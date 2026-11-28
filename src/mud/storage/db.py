@@ -6,7 +6,7 @@ import sqlite3
 from collections.abc import Callable
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 SCHEMA_FILE = Path(__file__).with_name("schema.sql")
 
 
@@ -36,8 +36,19 @@ def _apply_initial_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA_FILE.read_text(encoding="utf-8"))
 
 
+def _add_player_skills(conn: sqlite3.Connection) -> None:
+    """Schema 2: per-character skills JSON (#183)."""
+    columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(players)")
+    }
+    if "skills" not in columns:
+        conn.execute(
+            "ALTER TABLE players ADD COLUMN skills TEXT NOT NULL DEFAULT '{}'")
+
+
 MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
     0: _apply_initial_schema,
+    1: _add_player_skills,
 }
 
 

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 import re
+import zlib
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Dict, List, Optional
@@ -90,6 +92,10 @@ class Engine:
         # is authoritative over who is where.
         self._players: Dict[str, Player] = {}
         self.store: WriteThroughStore | None = store
+        # Per-character fire-making RNG streams (#183). Lazily seeded from the
+        # world seed and the stable character name, so one character's attempts
+        # do not perturb another's.
+        self._fire_rngs: dict[str, random.Random] = {}
         # Admission owns the durable roster when attached (#138); a bare
         # engine falls back to the store's roster for unit tests.
         self.roster_provider: Callable[[], Iterable[Any]] | None = None
@@ -2522,6 +2528,64 @@ class Engine:
         outcome.events.append(SemanticEvent(
             kind="npc.say", data=data, scope="room"))
 
+    def skill_level(self, name: str, skill: str) -> int:
+        """One character's skill level; missing means 0 (#183)."""
+        player = self.get_player(name)
+        if player is None:
+            return 0
+        return int(player.skills.get(skill.strip().lower(), 0))
+
+    def set_skill(self, name: str, skill: str, level: int) -> None:
+        """Set a skill in the store first, then in memory."""
+        player = self.get_player(name)
+        if player is None:
+            raise KeyError(f"no registered player named {name!r}")
+        skill = skill.strip().lower()
+        if level < 0:
+            raise ValueError("a skill level must be non-negative")
+        if self.store is not None:
+            self.store.player(name).set_skill(skill, level)
+        player.skills[skill] = level
+
+    def _fire_random(self, name: str) -> random.Random:
+        """The stable per-character stream for fire attempts (#183)."""
+        key = name.lower()
+        rng = self._fire_rngs.get(key)
+        if rng is None:
+            seed = self.rng_seed ^ zlib.crc32(f"fire:{key}".encode())
+            rng = random.Random(seed)
+            self._fire_rngs[key] = rng
+        return rng
+
+    def fire_chance(self, actor: Player, tool: Entity, fuel: Entity) -> float:
+        """The chance to light a source, from skill and item bonuses."""
+        level = int(getattr(actor, "skills", {}).get("firemaking", 0))
+        chance = 0.35 + 0.15 * level
+        chance += float(getattr(tool, "fire_bonus", 0.0) or 0.0)
+        chance += float(getattr(fuel, "fire_bonus", 0.0) or 0.0)
+        return max(0.05, min(0.95, chance))
+
+    @staticmethod
+    def _has_flame(actor: Player, source: Entity) -> bool:
+        """Whether a lit source other than `source` is available to transfer."""
+        for slot, item in actor.equipment.items():
+            if item is not source and slot in LIGHT_SLOTS and getattr(
+                    item, "lit", False):
+                return True
+        room = actor.location
+        if room is None:
+            return False
+        for item in room.contents:
+            if isinstance(item, Player):
+                for slot, held in item.equipment.items():
+                    if held is not source and slot in LIGHT_SLOTS and getattr(
+                            held, "lit", False):
+                        return True
+            elif item is not source and getattr(item, "light_source", False) \
+                    and getattr(item, "lit", False):
+                return True
+        return False
+
     async def _exec_light(self, outcome: CommandOutcome, actor: Player,
                           arg: str | None) -> None:
         """`light <source>`: ignite a carried light source."""
@@ -2548,6 +2612,35 @@ class Engine:
         if getattr(held_item, "lit", False):
             self._notice(outcome, f"The {held_item.name} is already lit.")
             return
+        if not self._has_flame(actor, held_item):
+            level = int(getattr(actor, "skills", {}).get("firemaking", 0))
+            if level < 1:
+                self._fail(
+                    outcome, "no_skill",
+                    "You do not know how to make fire.")
+                return
+            tool = next(
+                (item for item in actor.contents
+                 if getattr(item, "ignition", False)), None)
+            if tool is None:
+                self._fail(
+                    outcome, "no_ignition",
+                    "You have nothing to strike a spark.")
+                return
+            fuel = next(
+                (item for item in actor.contents
+                 if getattr(item, "fuel", False)), None)
+            if fuel is None:
+                self._fail(
+                    outcome, "no_fuel",
+                    "You have nothing dry to catch a spark.")
+                return
+            if self._fire_random(actor.name).random() >= self.fire_chance(
+                    actor, tool, fuel):
+                self._notice(
+                    outcome,
+                    f"The spark catches the {fuel.name}, gutters, and dies.")
+                return
         slot = getattr(held_item, "equipped_slot", None)
         actual = slot is not None and actor.equipment.get(slot) is held_item
         changes = ChangeSet("light")
