@@ -157,6 +157,25 @@ rooms:
     name: Alchemist Shop
     description: Vials glimmer on shelves. It smells of sulfur.
     objects:
+      - id: shop_brazier
+        name: Brass Brazier
+        description: A small coal brazier, still warm. A torch can be lit from it.
+        weight: 4.0
+        portable: false
+        light_source: true
+        lit: true
+      - id: flint_and_steel
+        name: Flint and Steel
+        description: A worn striker and a shard of flint.
+        weight: 0.1
+        ignition: true
+        fire_bonus: 0.2
+      - id: kindling
+        name: Kindling
+        description: A bundle of dry twigs.
+        weight: 0.2
+        fuel: true
+        fire_bonus: 0.1
       - id: torch
         name: Torch
         description: A flickering wooden torch.

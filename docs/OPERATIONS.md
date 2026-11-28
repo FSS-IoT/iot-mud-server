@@ -328,7 +328,7 @@ What the command does and refuses:
 Success prints one line:
 
 ```text
-backed up data/mud.db to /var/backups/iot-mud/mud-2026-11-21.db (schema version 1)
+backed up data/mud.db to /var/backups/iot-mud/mud-2026-11-21.db (schema version 2)
 ```
 
 The backup file is one SQLite database. Copy the single file, not `-wal` or

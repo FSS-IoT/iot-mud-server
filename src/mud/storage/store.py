@@ -29,7 +29,7 @@ import json
 import sqlite3
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
@@ -68,10 +68,11 @@ class ObjectLocation:
 
 @dataclass(frozen=True)
 class CharacterState:
-    """A character's durable half: the room it is in and the objects it owns."""
+    """A character's durable half: room, inventory, and skills."""
 
     room_id: str | None
     items: tuple[str, ...]
+    skills: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -298,14 +299,53 @@ class PlayerStore:
         ).fetchall()
         return tuple(row["id"] for row in rows)
 
+    def skills(self) -> dict[str, int]:
+        """The character's skill levels, missing means 0."""
+        row = self._conn.execute(
+            "SELECT skills FROM players WHERE name = ?", (self.name,)
+        ).fetchone()
+        if row is None:
+            return {}
+        try:
+            loaded = json.loads(row["skills"] or "{}")
+        except ValueError:
+            return {}
+        if not isinstance(loaded, dict):
+            return {}
+        return {
+            str(skill): int(level)
+            for skill, level in loaded.items()
+            if isinstance(level, (int, float)) and int(level) >= 0
+        }
+
+    def set_skill(self, skill: str, level: int) -> None:
+        """Write one skill level; the character row must already exist."""
+        skill = skill.strip().lower()
+        if not skill or level < 0:
+            raise ValueError("a skill needs a name and a non-negative level")
+        row = self._conn.execute(
+            "SELECT skills FROM players WHERE name = ?", (self.name,)
+        ).fetchone()
+        if row is None:
+            raise StorageWriteError(
+                f"skill could not be saved: no character {self.name!r}")
+        skills = self.skills()
+        skills[skill] = level
+        with self._conn:
+            self._conn.execute(
+                "UPDATE players SET skills = ? WHERE name = ?",
+                (json.dumps(skills, sort_keys=True), self.name),
+            )
+
     def load(self) -> CharacterState:
-        """Read the character's durable room and inventory in one call.
+        """Read the character's durable room, inventory, and skills in one call.
 
         Login restores exactly this: the room key to place the character in and
         the object keys to find in the freshly loaded world. Both reads are
         plain queries; nothing here writes or moves a row.
         """
-        return CharacterState(room_id=self.room_id, items=self.contents())
+        return CharacterState(
+            room_id=self.room_id, items=self.contents(), skills=self.skills())
 
     def move(self, *, room: Any) -> None:
         """Commit that the player is now in `room`."""

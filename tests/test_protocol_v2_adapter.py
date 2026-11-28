@@ -292,6 +292,10 @@ async def test_light_ignites_a_carried_source_and_lights_the_room(vault):
     engine._rooms["Cave"] = cave
     torch = Entity("Torch", "A torch.", item_id="torch", light_source=True)
     player.add_content(torch)
+    player.skills["firemaking"] = 1
+    player.add_content(Entity("Flint and Steel", "A striker.", ignition=True))
+    player.add_content(Entity("Kindling", "Dry twigs.", fuel=True))
+    engine.fire_chance = lambda *args: 1.0
 
     await execute(engine, "Ada", "go down")
     dark = await execute(engine, "Ada", "look")

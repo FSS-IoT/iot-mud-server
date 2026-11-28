@@ -39,9 +39,13 @@ def _carry_lit_torch(engine, player):
 
 
 def _carry_unlit_torch(engine, player):
-    """Give the player an unlit Torch (default lit state)."""
+    """Give the player an unlit Torch and a way to make fire."""
     torch = Entity("Torch", "A flickering wooden torch.", light_source=True)
     player.add_content(torch)
+    player.skills["firemaking"] = 1
+    player.add_content(Entity("Flint and Steel", "A striker.", ignition=True))
+    player.add_content(Entity("Kindling", "Dry twigs.", fuel=True))
+    engine.fire_chance = lambda *args: 1.0
     return torch
 
 

@@ -15,7 +15,9 @@ class Entity:
                  required_key: str | None = None, lit: bool = False,
                  dropped_on_sleep: bool = False, portable: bool = True,
                  container: bool = False, open: bool = False,
-                 equip_slots: tuple[str, ...] = (), hands: int = 1):
+                 equip_slots: tuple[str, ...] = (), hands: int = 1,
+                 ignition: bool = False, fuel: bool = False,
+                 fire_bonus: float = 0.0):
         self.name = name
         self.description = description
         self.weight = weight
@@ -67,6 +69,12 @@ class Entity:
         self.equip_slots = tuple(equip_slots)
         self.hands = hands
         self.equipped_slot: str | None = None
+        # Fire-making capabilities (#183). `ignition` marks a striker, bow
+        # drill, or matches; `fuel` marks kindling or dry wood. `fire_bonus`
+        # is added to the base chance, 0.0 to 1.0.
+        self.ignition = ignition
+        self.fuel = fuel
+        self.fire_bonus = fire_bonus
         # `container` marks a world object authored as `kind: container`.
         # `open` is the explicit lid state (#76): `open`, `close`, and
         # `get ... from ...` read it. A container starts closed unless the
@@ -152,6 +160,9 @@ class Player(Entity):
         # belt, feet. The item also carries `equipped_slot`, so login can
         # rebuild this map from durable state (#181).
         self.equipment: dict[str, Entity] = {}
+        # Per-character skills, restored from `players.skills` on login
+        # (#183). Missing means level 0.
+        self.skills: dict[str, int] = {}
 
     def equip(self, item: Entity, slot: str) -> None:
         """Equip `item` in `slot`, freeing its previous slot first.

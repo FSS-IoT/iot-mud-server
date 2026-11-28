@@ -143,7 +143,7 @@ def test_seed_fills_a_clean_database_with_the_yaml_world(tmp_path):
     assert main(["seed", "--db", str(path)]) == 0
 
     assert _count(path, "rooms") == 35
-    assert _count(path, "objects") == 75
+    assert _count(path, "objects") == 78
     assert _count(path, "exits") == 72  # 36 declared, 36 reciprocals
     assert _count(path, "npcs") == 11
 
