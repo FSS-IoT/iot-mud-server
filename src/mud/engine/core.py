@@ -85,6 +85,9 @@ class Engine:
         # is authoritative over who is where.
         self._players: Dict[str, Player] = {}
         self.store: WriteThroughStore | None = store
+        # Admission owns the durable roster when attached (#138); a bare
+        # engine falls back to the store's roster for unit tests.
+        self.roster_provider: Callable[[], Iterable[Any]] | None = None
         # Deterministic world motion (#82). The loader sets `rng_seed` from the
         # world file and builds the wanderer once every room and NPC exists;
         # `tick_world` advances it. `rng_seed` defaults to 0 for the legacy
@@ -338,15 +341,20 @@ class Engine:
         """
         live = {name.lower(): player for name, player in self._players.items()}
         entries: dict[str, dict[str, Any]] = {}
-        if self.store is not None:
-            for row in self.store.roster():
-                asleep = bool(row.asleep) or row.name.lower() not in live
-                entries[row.name.lower()] = {
-                    "name": row.name,
-                    "room_id": row.room_id,
-                    "asleep": asleep,
-                    "stone": asleep,
-                }
+        if self.roster_provider is not None:
+            durable = self.roster_provider()
+        elif self.store is not None:
+            durable = self.store.roster()
+        else:
+            durable = ()
+        for row in durable:
+            asleep = bool(row.asleep) or row.name.lower() not in live
+            entries[row.name.lower()] = {
+                "name": row.name,
+                "room_id": row.room_id,
+                "asleep": asleep,
+                "stone": asleep,
+            }
         for key, player in live.items():
             asleep = bool(player.asleep)
             entries[key] = {

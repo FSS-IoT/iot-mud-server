@@ -22,12 +22,8 @@ from typing import Any
 
 import websockets
 
-from src.mud.auth import (
-    AuthError,
-    login_character,
-    normalize_name,
-    register_character,
-)
+from src.mud.admission import CharacterAdmission
+from src.mud.auth import AuthError
 from src.mud.config import (
     AuthConfig,
     ConfigError,
@@ -55,11 +51,6 @@ from src.mud.protocol.v2 import (
 )
 from src.mud.storage.db import DatabaseError, open_database
 from src.mud.storage.keys import object_key
-from src.mud.storage.store import (
-    PlayerStore,
-    StorageWriteError,
-    WriteThroughStore,
-)
 from src.mud.world.wander import NpcMove
 
 logger = logging.getLogger(__name__)
@@ -326,8 +317,10 @@ class SessionTable:
     absent from `_sessions`; `bind` and `forget` are the only writers.
     """
 
-    def __init__(self, engine: Engine):
+    def __init__(self, engine: Engine,
+                 admission: CharacterAdmission | None = None):
         self.engine = engine
+        self.admission = admission or CharacterAdmission(engine, None)
         self._sessions: dict[Any, Session] = {}
         self._ws_by_name: dict[str, Any] = {}
 
@@ -422,18 +415,16 @@ class SessionTable:
         if name is not None:
             player = self.engine.get_player(name)
             if player is not None:
-                room = player.location
                 if session.authenticated:
                     await self._sleep(session)
                 else:
-                    # The explicit guest path keeps the v2.0
-                    # remove-on-disconnect behavior: no durable character.
-                    # Spill the carried items first, so a guest cannot
-                    # permanently remove a world item.
+                    # The guest path goes through admission too: spill the
+                    # carried items, then remove the live avatar. There is no
+                    # durable character.
+                    spill = self.admission.spill_guest(name)
+                    room = spill.room
                     if room is not None:
-                        for item in list(player.contents):
-                            player.remove_content(item)
-                            room.add_content(item)
+                        for item in spill.dropped:
                             await self.broadcast_room(
                                 room.name, "object.dropped", {
                                     "object": _object_data(item,
@@ -448,7 +439,6 @@ class SessionTable:
                             "reason": "disconnect",
                             "text": f"{name} has left.",
                         }, exclude_name=name)
-                    self.engine.remove_player(name)
         self.forget(session)
 
     async def expire_idle(self) -> list[Session]:
@@ -480,19 +470,9 @@ class SessionTable:
         if name is None or session.slept:
             return
         session.slept = True
-        player = self.engine.get_player(name)
-        if player is None:
-            return
-        room = player.location
-        # The durable character sleeps in place (#72). Only items marked
-        # `dropped_on_sleep` drop into the room; the rest of the inventory
-        # stays. The store commits each drop before the engine moves it.
-        dropped = []
-        try:
-            dropped = self.engine.sleep_player(name)
-        except StorageWriteError:
-            logger.exception("could not persist sleep for %s", name)
-            player.asleep = True
+        result = self.admission.suspend(name)
+        room = result.room
+        dropped = result.dropped
         if room is None:
             return
         await self.broadcast_room(room.name, "room.leave", {
@@ -562,7 +542,7 @@ class V2Server:
         # Tests shorten it or call `wander_tick` directly.
         self.tick_seconds = tick_seconds
         self.db: sqlite3.Connection | None = None
-        self.store: WriteThroughStore | None = None
+        self.admission: CharacterAdmission | None = None
         self._stop_event = asyncio.Event()
         self._server = None
         self._idle_task: asyncio.Task | None = None
@@ -573,6 +553,15 @@ class V2Server:
         # Serializes close(): a second caller waits for the first cleanup
         # instead of racing it, and a repeated close is a no-op.
         self._close_lock = asyncio.Lock()
+
+    @property
+    def store(self):
+        """The admitted write-through store, or None before start/after close.
+
+        Lifecycle tests assert that `close()` releases it; the server does not
+        read rows through this property (#138).
+        """
+        return self.admission.store if self.admission is not None else None
 
     # ------------------------------------------------------------------
     # Room delivery
@@ -640,10 +629,13 @@ class V2Server:
         name = name.strip()
 
         try:
-            player = self.engine.register_player(name)
-        except ValueError:
-            await session.send_error(
-                "name_taken", f"The name {name!r} is already in use.", msg_id)
+            if self.admission is None:
+                raise AuthError(
+                    "internal",
+                    "The server cannot create characters right now.")
+            player = self.admission.admit_guest(name).player
+        except AuthError as exc:
+            await session.send_error(exc.code, str(exc), msg_id)
             return
 
         session.bind(name, authenticated=False)
@@ -703,32 +695,20 @@ class V2Server:
     async def _auth_register(self, session: Session, data: dict,
                              msg_id: Any) -> None:
         """Register a name, issue its first key, and enter the world."""
-        try:
-            name = normalize_name(data.get("name"))
-        except AuthError as exc:
-            await session.send_auth_error(exc.code, str(exc), msg_id)
-            return
-
-        if self.engine.get_player(name) is not None:
-            await session.send_auth_error(
-                "name_taken", f"The name {name!r} is already in use.", msg_id)
-            return
-
-        start_room = self.engine.current_location
-        if self.db is None or start_room is None:
+        if self.admission is None:
             await session.send_auth_error(
                 "internal",
                 "The server cannot create characters right now.", msg_id)
             return
 
         try:
-            registration = register_character(
-                self.db, name, start_room=start_room)
+            result = self.admission.register(data.get("name"))
         except AuthError as exc:
             await session.send_auth_error(exc.code, str(exc), msg_id)
             return
 
-        player = self.engine.register_player(registration.name)
+        registration = result.registration
+        player = result.player
         session.bind(registration.name, authenticated=True)
         self.sessions.bind(session)
 
@@ -752,56 +732,24 @@ class V2Server:
                           msg_id: Any) -> None:
         """Verify a key and bind the session to its durable character.
 
-        The request has no name: `login_character` finds the row by key id and
+        The request has no name: admission finds the row by key id and
         verifies the secret. A bad secret, an unknown id, and a revoked key all
         arrive here as one `invalid_key`; the key itself is never echoed or
         logged.
         """
-        if self.db is None:
+        if self.admission is None:
             await session.send_auth_error(
                 "internal", "The server cannot check keys right now.", msg_id)
             return
 
         try:
-            login = login_character(self.db, data.get("key"))
+            result = self.admission.resume(data.get("key"))
         except AuthError as exc:
             await session.send_auth_error(exc.code, str(exc), msg_id)
             return
 
-        existing = self.engine.get_player(login.name)
-        if existing is not None and not existing.asleep:
-            await session.send_auth_error(
-                "name_taken", "That character is already in play.", msg_id)
-            return
-
-        # Login wakes the character where the store left it, carrying what the
-        # store says it owns (#71). The same-process case already has the room
-        # and the remaining inventory in memory because sleep kept them (#72);
-        # after a restart the world was reloaded, so the engine has to move
-        # those objects out of the room or container the loader authored them
-        # into.
-        if existing is not None:
-            player = existing
-        else:
-            character = PlayerStore(self.db, login.name).load()
-            player = self.engine.register_player(login.name)
-            self.engine.restore_player(
-                player,
-                room=self.engine.get_room_by_id(character.room_id),
-                item_keys=character.items,
-            )
-
-        try:
-            self.engine.wake_player(login.name)
-        except StorageWriteError:
-            logger.exception("could not wake %s", login.name)
-            if existing is None:
-                self.engine.remove_player(login.name)
-            await session.send_auth_error(
-                "internal", "The character could not be woken right now.",
-                msg_id)
-            return
-
+        login = result.login
+        player = result.player
         session.bind(login.name, authenticated=True)
         self.sessions.bind(session)
 
@@ -1060,14 +1008,11 @@ class V2Server:
             stored_epoch = read_world_epoch(self.db)
             if stored_epoch is not None:
                 self.epoch = stored_epoch
-            # Every mutation goes through the database before it reaches
-            # memory or another client (SPEC v2.1.0 criterion 2).
-            self.store = WriteThroughStore(self.db)
-            self.engine.attach_store(self.store)
-            # The mutable half of the world is durable (#131): overlay the
-            # committed placements and lock/lid/light flags onto the world the
-            # loader just built from YAML, so a restart restores them.
-            self.store.apply_durable_state(self.engine)
+        # One admission owner composes auth, the store, and the engine (#138).
+        # With no database it still owns the guest lifecycle. With a database
+        # it also applies the durable placements and flags (#131).
+        self.admission = CharacterAdmission(self.engine, self.db)
+        self.sessions.admission = self.admission
         # Authored effects are room events (#84). The engine publishes them
         # for the log either way; this subscriber is the only client path and
         # it is a no-op while `features.effects` is false.
@@ -1122,9 +1067,9 @@ class V2Server:
     async def _release_resources(self) -> None:
         """Undo what `start()` acquired; safe when only some of it exists."""
         await self.engine.unsubscribe("effect", self._relay_effect)
-        if self.store is not None:
-            self.engine.attach_store(None)
-            self.store = None
+        if self.admission is not None:
+            self.admission.detach()
+            self.admission = None
         if self.db is not None:
             self.db.close()
             self.db = None
