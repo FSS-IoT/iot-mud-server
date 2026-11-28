@@ -1,6 +1,6 @@
 # IoT MUD protocol 2
 
-**Version:** 2.1.7. The wire field `v` remains `2`: every v2.1 change is
+**Version:** 2.1.8. The wire field `v` remains `2`: every v2.1 change is
 additive. This is the normative contract between the common server and every
 member client. A breaking change becomes version 3.
 
@@ -93,7 +93,7 @@ Rules:
 {"v":2,"type":"hello","event_id":"h1","seq":1,"ts":"...","data":{
   "server":"iot-mud-server",
   "protocol":[2],
-  "server_version":"2.1.7",
+  "server_version":"2.1.8",
   "feature_level":1,
   "capabilities":["auth.key","inventory.capacity","locks"],
   "world":{"name":"Starting Village","epoch":"2026-11-21T18:00:00Z"},
@@ -904,17 +904,9 @@ version 3. A client that pins a server commit reads this section together with
 `hello.data.server_commit` to see what it may be missing. v2.1 is the current
 release; a later additive fix still adds a bullet here.
 
-### Unreleased — fire making (#183)
+### v2.1.8 — protocol 2 equipment slots and fire making (#181, #183)
 
-- `light` on an unlit source now needs `firemaking >= 1`, an ignition tool, and
-  fuel, unless a lit source is equipped or in the room to pass the flame. Any
-  lit source can pass flame by default, including a lantern lighting a torch.
-- New error codes `no_skill`, `no_ignition`, and `no_fuel`. A failed chance is a
-  private `notice`, not an error, and leaves the source unlit.
-- `players.skills` stores the skill level; schema version 2. No new event type
-  and no wire field.
-
-### Unreleased — equipment slots (#181)
+`client-impact: optional`.
 
 - `player.inventory` items gain optional `slot`: `hand_1`, `hand_2`, `head`,
   `body`, `back`, `belt`, or `feet`. Present only on an equipped item.
@@ -928,7 +920,13 @@ release; a later additive fix still adds a bullet here.
 - New error codes `no_slot`, `not_equipped`, and `still_lit`.
 - A lit light source lights a dark room only while equipped in a hand, on the
   belt, or on the head. A lit source in the pack no longer lights the room.
-  No field or event is removed.
+- `light` on an unlit source now needs `firemaking >= 1`, an ignition tool, and
+  fuel, unless a lit source is equipped or in the room to pass the flame. Any
+  lit source can pass flame by default, including a lantern lighting a torch.
+- New error codes `no_skill`, `no_ignition`, and `no_fuel`. A failed chance is a
+  private `notice`, not an error, and leaves the source unlit.
+- `players.skills` stores the skill level; schema version 2. No new event type
+  and no wire field.
 
 ### v2.1.7 — protocol 2 admission refactor
 

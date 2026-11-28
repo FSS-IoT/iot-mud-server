@@ -16,7 +16,7 @@ PROTOCOL_RELEASE = "2.1"
 # `MAJOR.MINOR.PATCH`: MAJOR is the protocol, MINOR is the shared
 # client-facing feature level, PATCH is the server-only counter. See
 # docs/PROTOCOL.md and tests/test_protocol_hello.py.
-SERVER_VERSION = "2.1.7"
+SERVER_VERSION = "2.1.8"
 FEATURE_LEVEL = 1
 
 # Additive names a client may use. Unknown names are ignored. A capability
