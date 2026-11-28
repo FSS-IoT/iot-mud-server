@@ -763,6 +763,7 @@ class V2Server:
                 player,
                 room=self.engine.get_room_by_id(character.room_id),
                 item_keys=character.items,
+                skills=character.skills,
             )
 
         try:

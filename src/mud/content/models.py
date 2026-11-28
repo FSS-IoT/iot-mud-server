@@ -168,6 +168,10 @@ class GameObject(BaseModel):
     # `hands: 2`. Empty means the item cannot be equipped.
     equip_slots: list[EquipSlot] = Field(default_factory=list)
     hands: Literal[1, 2] = 1
+    # Fire-making capabilities (#183): an ignition tool or burnable fuel.
+    ignition: bool = False
+    fuel: bool = False
+    fire_bonus: float = Field(default=0.0, ge=0.0, le=1.0)
 
     @model_validator(mode="after")
     def _check_equipment(self) -> GameObject:

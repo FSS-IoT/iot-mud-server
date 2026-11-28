@@ -184,6 +184,12 @@ rooms:
   lifecycle). Taking a lit source puts it straight into a hand, belt, or head
   slot; if none is free the take is refused. A fireproof carrier that can hold
   embers is a later item capability, not a place for a burning torch.
+- `ignition: true` marks a fire-making tool (flint and steel, bow drill). `fuel:
+  true` marks kindling or dry wood. `fire_bonus` adds 0.0-1.0 to the chance. An
+  unlit source needs `firemaking >= 1`, an ignition tool, and fuel unless
+  another lit source is already equipped or in the room to pass the flame.
+  Skill 1 comes from the cave lesson (#180); the schema stores it in
+  `players.skills` (#183).
 - `equip_slots` lists where an item can go: `hand`, `head`, `body`, `back`,
   `belt`, or `feet`. `hands: 1` uses one hand; `hands: 2` uses both. Empty
   means the item cannot be equipped. A lantern can use `[hand, belt]`; a torch

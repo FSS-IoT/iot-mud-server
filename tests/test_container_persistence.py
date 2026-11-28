@@ -43,6 +43,13 @@ rooms:
         key: key_brass
         label: brass door
     objects:
+      - id: brazier
+        name: Brazier
+        description: A small coal brazier, still warm.
+        weight: 4.0
+        portable: false
+        light_source: true
+        lit: true
       - id: coin
         name: Coin
         description: A gold coin.

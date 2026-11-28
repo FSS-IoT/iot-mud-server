@@ -22,7 +22,8 @@ CREATE TABLE IF NOT EXISTS players (
     room_id    TEXT REFERENCES rooms(id) ON DELETE SET NULL,
     created_at TEXT NOT NULL,
     last_seen  TEXT,
-    asleep     INTEGER NOT NULL DEFAULT 0 CHECK (asleep IN (0, 1))
+    asleep     INTEGER NOT NULL DEFAULT 0 CHECK (asleep IN (0, 1)),
+    skills     TEXT NOT NULL DEFAULT '{}'
 );
 
 CREATE TABLE IF NOT EXISTS character_keys (

@@ -120,7 +120,7 @@ def test_newer_schema_refuses_to_open(tmp_path):
     path = tmp_path / "future.db"
     raw = sqlite3.connect(path)
     try:
-        raw.execute("PRAGMA user_version = 2")
+        raw.execute(f"PRAGMA user_version = {SCHEMA_VERSION + 1}")
         raw.commit()
     finally:
         raw.close()
@@ -184,7 +184,7 @@ async def test_server_refuses_a_newer_schema_before_binding(tmp_path):
     path = tmp_path / "future.db"
     raw = sqlite3.connect(path)
     try:
-        raw.execute("PRAGMA user_version = 2")
+        raw.execute(f"PRAGMA user_version = {SCHEMA_VERSION + 1}")
         raw.commit()
     finally:
         raw.close()

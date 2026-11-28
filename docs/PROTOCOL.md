@@ -799,7 +799,8 @@ and exits add the declarative lock the design calls for, with one command
 `unknown_command`, `bad_args`, `ambiguous`, `not_found`, `not_here`,
 `not_portable`, `container_closed`, `container_cycle`, `no_exit`, `locked`,
 `already_open`, `already_closed`, `too_heavy`, `no_slot`, `not_equipped`,
-`still_lit`, `malformed_message`,
+`still_lit`, `no_skill`, `no_ignition`, `no_fuel`,
+`malformed_message`,
 `unknown_message`,
 `not_joined`, `already_joined`, `name_taken`, `not_authenticated`,
 `invalid_key`, `invalid_name`, `not_awake`, `rate_limited`, `internal`,
@@ -844,7 +845,7 @@ idle close is `4004` after the character is already asleep.
 | `equip <x> [on <slot>]` | `player.inventory` (private); `hand 1`/`hand 2` name a hand; an unlit occupant is stowed in the pack, a lit occupant is `error{still_lit}`; no free or allowed slot `error{no_slot}`, wrong slot or non-equippable `error{bad_args}`, unknown `error{not_found}` |
 | `unequip <x>` | `player.inventory` (private); item not equipped `error{not_equipped}`, lit source `error{still_lit}`, unknown `error{not_found}` |
 | `extinguish <x>` | `player.inventory` (private); not a light `error{bad_args}`, already out `notice`, unknown `error{not_found}` |
-| `light <source>` | `object.lit` (or `notice` if already lit / not a light); the source is auto-equipped into a free hand, belt, or head slot, or `error{no_slot}` |
+| `light <source>` | `object.lit` (or `notice` if already lit / not a light). The source is auto-equipped into a free hand, belt, or head slot; no free slot is `error{no_slot}`. An unlit source needs a flame, or `firemaking >= 1` plus an ignition tool and fuel: otherwise `error{no_skill}`, `error{no_ignition}`, or `error{no_fuel}`. A failed chance is a private `notice` and leaves the source unlit. |
 | `read <x>` | `object.read` (private) |
 | `inventory` / `i` | `player.inventory` (private) |
 | `who` | `who.list` (private, server-wide, includes asleep) |
@@ -865,6 +866,15 @@ Every change to the wire contract gets an entry here, newest version first.
 version 3. A client that pins a server commit reads this section together with
 `hello.data.server_commit` to see what it may be missing. v2.1 is the current
 release; a later additive fix still adds a bullet here.
+
+### Unreleased — fire making (#183)
+
+- `light` on an unlit source now needs `firemaking >= 1`, an ignition tool, and
+  fuel, unless a lit source is equipped or in the room to pass the flame.
+- New error codes `no_skill`, `no_ignition`, and `no_fuel`. A failed chance is a
+  private `notice`, not an error, and leaves the source unlit.
+- `players.skills` stores the skill level; schema version 2. No new event type
+  and no wire field.
 
 ### Unreleased — equipment slots (#181)
 

@@ -76,6 +76,9 @@ async def _load_yaml_world(engine: Engine, data_path: Path) -> None:
                 open=bool(obj.state.get("open", False)),
                 equip_slots=tuple(obj.equip_slots),
                 hands=obj.hands,
+                ignition=obj.ignition,
+                fuel=obj.fuel,
+                fire_bonus=obj.fire_bonus,
             )
             entity.instance_id = obj.id
             # Authored triggers travel with the object into the running world
@@ -201,6 +204,9 @@ async def _load_json_world(engine: Engine, data_path: Path) -> None:
             open=bool(i_data.get("state", {}).get("open", False)),
             equip_slots=tuple(i_data.get("equip_slots", ())),
             hands=int(i_data.get("hands", 1)),
+            ignition=bool(i_data.get("ignition", False)),
+            fuel=bool(i_data.get("fuel", False)),
+            fire_bonus=float(i_data.get("fire_bonus", 0.0)),
         )
         item.instance_id = i_data["id"]
         item_map[i_data["id"]] = item
