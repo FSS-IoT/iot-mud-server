@@ -371,12 +371,13 @@ def test_auth_config_defaults_without_a_config_file(tmp_path, monkeypatch):
 
     assert config.auth.max_attempts == 20
     assert config.auth.window_seconds == 60.0
+    assert config.auth.guest_ok is True
 
 
 def test_auth_config_is_read_from_mud_toml(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "mud.toml").write_text(
-        "[auth]\nmax_attempts = 3\nwindow_seconds = 2.5\n",
+        "[auth]\nmax_attempts = 3\nwindow_seconds = 2.5\nguest_ok = false\n",
         encoding="utf-8",
     )
 
@@ -384,6 +385,7 @@ def test_auth_config_is_read_from_mud_toml(tmp_path, monkeypatch):
 
     assert config.auth.max_attempts == 3
     assert config.auth.window_seconds == 2.5
+    assert config.auth.guest_ok is False
 
 
 @pytest.mark.parametrize("body", [
@@ -395,6 +397,8 @@ def test_auth_config_is_read_from_mud_toml(tmp_path, monkeypatch):
     "[auth]\nwindow_seconds = -1\n",
     '[auth]\nwindow_seconds = "60"\n',
     "[auth]\nwindow_seconds = inf\n",
+    '[auth]\nguest_ok = "yes"\n',
+    "[auth]\nguest_ok = 1\n",
 ])
 def test_auth_config_rejects_unsafe_values(tmp_path, body):
     path = tmp_path / "bad.toml"

@@ -83,7 +83,9 @@ a client that is waiting for anything else has already missed a message.
 
 ## Your character key
 
-v2.1 requires auth by default. Registration returns `auth.ok.data.key` once:
+v2.1 offers key auth for persistent characters, with a guest join as the
+fallback when `hello.guest_ok` is `true`. Registration returns
+`auth.ok.data.key` once:
 
 ```text
 mud1-<public key id>-<32 bytes of base64url secret>

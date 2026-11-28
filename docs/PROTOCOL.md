@@ -1,6 +1,6 @@
 # IoT MUD protocol 2
 
-**Version:** 2.1. The wire field `v` remains `2`: every v2.1 change is
+**Version:** 2.1.6. The wire field `v` remains `2`: every v2.1 change is
 additive. This is the normative contract between the common server and every
 member client. A breaking change becomes version 3.
 
@@ -8,6 +8,32 @@ member client. A breaking change becomes version 3.
 SQLite persistence, YAML worlds, social commands, container open state, exit
 locks, NPCs, effects, configurable limits, and idle sleep. Later versions add
 IoT and LLM layers. See `ROADMAP.md` for the split.
+
+## Versioning
+
+The full version is `MAJOR.MINOR.PATCH`, SemVer 2.0.0 with fixed meanings:
+
+- **MAJOR** is the protocol version in the wire field `v`. A client on major
+  `2` connects to any `2.x.y` server. A breaking change becomes `3.0.0`.
+- **MINOR** is one shared, project-wide client-facing feature level. Any
+  feature a client can see or adopt advances it. The client tracks
+  `MAJOR.MINOR`.
+- **PATCH** is the artifact's local change counter. On the server it counts
+  server-only changes and fixes. It never affects compatibility.
+
+Tags are `vMAJOR.MINOR.PATCH`; a pre-release is `v2.2.0-dev.3`. The full commit
+stays in `hello.data.server_commit` and in the release notes as evidence. The
+commit is not the compatibility boundary.
+
+`hello.data` carries `server_version`, `feature_level`, and `capabilities`.
+`capabilities` is a list of additive names such as `auth.key` and
+`firemaking`; a client ignores names it does not know. A capability is a
+detail the client may use, not a second compatibility gate.
+
+Every protocol change records `client-impact: none | optional | required` in
+this changelog and in the pull request. `required` means the paired client
+must adopt the feature to use it; it does not mean an old client is locked
+out. If an old client would fail, the change is a MAJOR bump, not a MINOR.
 
 ## Transport
 
@@ -67,9 +93,13 @@ Rules:
 {"v":2,"type":"hello","event_id":"h1","seq":1,"ts":"...","data":{
   "server":"iot-mud-server",
   "protocol":[2],
+  "server_version":"2.1.6",
+  "feature_level":1,
+  "capabilities":["auth.key","inventory.capacity","locks"],
   "world":{"name":"Starting Village","epoch":"2026-11-21T18:00:00Z"},
   "server_commit":"0123456789abcdef0123456789abcdef01234567",
   "auth_required":true,
+  "guest_ok":true,
   "auth_modes":["key"],
   "motd":"Welcome to the IoT MUD!",
   "text":"Welcome to the IoT MUD!"
@@ -87,14 +117,17 @@ value is skipped and the next source is tried. A copy without `.git` (a Nix
 store path, an exported tarball) still serves and reports `"unknown"`. The
 lookup is cached for the life of the process, not repeated per connection.
 
-2. **Authenticate or join.** A v2.1 server requires auth by default
+2. **Authenticate or join.** A v2.1 server offers key auth by default
    (`hello.auth_required` is `true`): the client sends `auth` and receives
    `auth.ok` followed by `room.state` (see [v2.1 auth](#v21-auth-additive)).
-   The v2.0 guest path below works only when `hello.auth_required` is `false`.
+   A guest `join` remains the fallback when `hello.guest_ok` is `true` (the
+   default). A server that sets `guest_ok: false` rejects `join` with
+   `error{code:"not_authenticated"}` and keeps the socket open so the client
+   can authenticate on it.
 
-   A `join` on a server that requires auth is rejected with
-   `error{code:"not_authenticated"}`, and the socket stays open so the client
-   can authenticate on it. The same error answers `input` before auth.
+   A guest does not persist. Its inventory spills to the ground when it
+   leaves, so it cannot permanently remove a world item. `input` before any
+   join is `error{code:"not_joined"}`.
 
    Guest `join`:
 
@@ -145,10 +178,11 @@ On a guest server, `input` before `join` is `error{code:"not_joined"}`.
 
 ### v2.1 auth (additive)
 
-When `hello.auth_required` is `true`, the client sends `auth` instead of
-`join`. This is the v2.1 server default; a server started for guest play sets
-`auth_required` to `false` explicitly. `hello.auth_modes` lists the accepted
-methods; a v2.1 server sends `["key"]`.
+When `hello.auth_required` is `true`, the client may send `auth` to play a
+persistent character. A guest `join` is still accepted when
+`hello.guest_ok` is `true`; a server that sets `guest_ok: false` accepts only
+`auth`. `hello.auth_modes` lists the accepted methods; a v2.1 server sends
+`["key"]`.
 
 Register with a name; the server returns the key exactly once:
 
@@ -215,17 +249,20 @@ The limits are set in `mud.toml`:
 [auth]
 max_attempts = 20
 window_seconds = 60
+guest_ok = true
 ```
 
 `max_attempts` must be a positive integer and `window_seconds` a positive
-finite number. `rate_limited` is non-fatal: the server does not close the
-socket for a bad key or for reaching the limit. Close code `4005` is reserved
-for deliberate policy abuse and is not used for a normal failed attempt.
+finite number. `guest_ok` must be `true` or `false`. `rate_limited` is
+non-fatal: the server does not close the socket for a bad key or for reaching
+the limit. Close code `4005` is reserved for deliberate policy abuse and is
+not used for a normal failed attempt.
 
-The v2.0 guest path remains available only when `auth_required` is `false`. A
-`join` on a server that requires auth gets `not_authenticated`, and the socket
-stays open; so does `input` before auth. After a successful `auth`, `input`
-works without a separate `join`.
+The v2.0 guest path is the fallback while `guest_ok` is `true`. A server that
+sets `guest_ok = false` gets `not_authenticated` for `join` and keeps the
+socket open so the client can `auth` on it. `input` before any join is
+`not_joined`. After a successful `auth`, `input` works without a separate
+`join`.
 
 ### Command rate limit and idle timeout (v2.1)
 
@@ -258,8 +295,8 @@ the server runs the #72 sleep path: the character stays in its room, commits
 `asleep = 1`, the room receives `room.leave` with `reason: "disconnect"`,
 `asleep: true`, `stone: true`, and `dropped[]`, and then the socket closes with
 `4004`. `who` still lists the character, and a later login wakes it in place.
-The v2.0 guest path (`auth_required: false`) has no durable character and is
-not subject to the idle sleep.
+The v2.0 guest path (`guest_ok: true`, no durable character) is not subject to
+the idle sleep.
 
 ## Client messages
 
@@ -285,7 +322,7 @@ vs "Ada takes the coin.").
 
 | Type | Data |
 |---|---|
-| `hello` | `server`, `protocol`, `world{name,epoch}`, `server_commit`, `auth_required`, `auth_modes?`, `motd`, `text` |
+| `hello` | `server`, `protocol`, `server_version`, `feature_level`, `capabilities[]`, `world{name,epoch}`, `server_commit`, `auth_required`, `guest_ok`, `auth_modes?`, `motd`, `text` |
 | `session.ok` | `player{name}`, `world{name,epoch}`, `mode`, `text` |
 | `auth.ok` | `player{name}`, `world{name,epoch}`, `mode` (`register`\|`login`), `key?` (v2.1; register only) |
 | `auth.error` | `code`, `message`, `text` (v2.1) |
@@ -673,7 +710,7 @@ A sleeping character is stone: present, invincible, and not a valid target for
 future combat. `who.list` and `room.state` player entries expose the state.
 Login clears `players.asleep`, sends `room.state`, and restores the remaining
 inventory. `dropped_on_sleep` items that were dropped stay where they landed.
-The v2.0 guest path (`auth_required: false`, no durable character) keeps the
+The v2.0 guest path (`guest_ok: true`, no durable character) keeps the
 remove-on-disconnect behavior. The idle timeout uses this same path before it
 closes the socket with `4004`.
 
@@ -858,6 +895,24 @@ version 3. A client that pins a server commit reads this section together with
 `hello.data.server_commit` to see what it may be missing. v2.1 is the current
 release; a later additive fix still adds a bullet here.
 
+### v2.1.6 — protocol 2 version fields and the guest fallback
+
+`client-impact: optional`.
+
+- `hello.data` adds `server_version`, `feature_level`, `capabilities`, and
+  `guest_ok`. `server_version` is the full `MAJOR.MINOR.PATCH` string;
+  `feature_level` is the MINOR; `capabilities` is a list of additive names.
+  A v2.0 client ignores them.
+- The server accepts a guest `join` while `guest_ok` is `true` (the default),
+  even when `auth_required` is `true`. A guest does not save and spills its
+  inventory when it leaves. `[auth].guest_ok = false` restores an auth-only
+  server; `join` then gets `not_authenticated`.
+- `input` before any join is `not_joined`, not `not_authenticated`. The latter
+  now answers only a refused `join`.
+- The reference server reports `server_version: "2.1.6"` and feature level
+  `1`. This is the first release under the shared versioning standard in
+  `docs/PROTOCOL.md#versioning`.
+
 ### v2.1.5 — protocol 2 reference pin
 
 - The current reference server is commit
@@ -896,7 +951,8 @@ release; a later additive fix still adds a bullet here.
   `hello.data.auth_modes`, the `auth` client message, the `auth.ok` and
   `auth.error` events, and one-time character keys. A `join` or `input` before
   auth is `error{not_authenticated}` and keeps the socket open; the v2.0 guest
-  path is an explicit `auth_required: false` opt-out.
+  path is an explicit `auth_required: false` opt-out. **Superseded in v2.1.6:**
+  the guest fallback is `guest_ok`, and `input` before join is `not_joined`.
 - Registration names are 2-24 characters, starting with a letter; uniqueness
   is case-insensitive. Bad names are `auth.error{invalid_name}` and duplicate
   names `auth.error{name_taken}`.
