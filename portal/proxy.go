@@ -15,18 +15,19 @@ import (
 
 const (
 	protocolVersion = 1
-	maxMessageBytes = 1 << 20
+	// The v2 backend limits a WebSocket message to 64 KiB. Match it here so a
+	// frame is rejected at the portal instead of killing the backend.
+	maxMessageBytes = 65536
 )
 
 type Portal struct {
-	cfgPath string
-	mu      sync.RWMutex
-	cfg     *Config
-	log     *slog.Logger
+	mu  sync.RWMutex
+	cfg *Config
+	log *slog.Logger
 }
 
-func NewPortal(cfgPath string, cfg *Config, log *slog.Logger) *Portal {
-	return &Portal{cfgPath: cfgPath, cfg: cfg, log: log}
+func NewPortal(cfg *Config, log *slog.Logger) *Portal {
+	return &Portal{cfg: cfg, log: log}
 }
 
 func (p *Portal) SetConfig(cfg *Config) {
@@ -59,11 +60,7 @@ func (p *Portal) health(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (p *Portal) portal(w http.ResponseWriter, r *http.Request) {
-	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		// The dev portal is reachable only on the tailnet. Tighten this when
-		// a browser client gets a fixed origin.
-		OriginPatterns: []string{"*"},
-	})
+	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{})
 	if err != nil {
 		p.log.Warn("accept failed", "error", err)
 		return
@@ -102,7 +99,11 @@ func (p *Portal) portal(w http.ResponseWriter, r *http.Request) {
 			var data struct {
 				Dev bool `json:"dev"`
 			}
-			_ = json.Unmarshal(msg.Data, &data)
+			if err := json.Unmarshal(msg.Data, &data); err != nil {
+				p.sendError(ctx, ws, msg.ID, "bad_args",
+					"Login data must be an object with an optional dev flag.")
+				continue
+			}
 			cfg := p.Config()
 			if !data.Dev && cfg.DefaultServer != "" {
 				if p.enterServer(ctx, ws, msg.ID, cfg.DefaultServer) {
@@ -184,16 +185,20 @@ func (p *Portal) enterServer(ctx context.Context, client *websocket.Conn,
 func relay(ctx context.Context, client, backend *websocket.Conn) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	errc := make(chan error, 2)
+	type relayEnd struct {
+		err        error
+		fromClient bool
+	}
+	errc := make(chan relayEnd, 2)
 	go func() {
 		for {
 			typ, data, err := client.Read(ctx)
 			if err != nil {
-				errc <- err
+				errc <- relayEnd{err: err, fromClient: true}
 				return
 			}
 			if err := backend.Write(ctx, typ, data); err != nil {
-				errc <- err
+				errc <- relayEnd{err: err, fromClient: true}
 				return
 			}
 		}
@@ -202,18 +207,30 @@ func relay(ctx context.Context, client, backend *websocket.Conn) error {
 		for {
 			typ, data, err := backend.Read(ctx)
 			if err != nil {
-				errc <- err
+				errc <- relayEnd{err: err, fromClient: false}
 				return
 			}
 			if err := client.Write(ctx, typ, data); err != nil {
-				errc <- err
+				errc <- relayEnd{err: err, fromClient: false}
 				return
 			}
 		}
 	}()
-	err := <-errc
+	end := <-errc
 	cancel()
-	return err
+	if code := websocket.CloseStatus(end.err); code != -1 {
+		reason := ""
+		var closeErr *websocket.CloseError
+		if errors.As(end.err, &closeErr) {
+			reason = closeErr.Reason
+		}
+		peer := backend
+		if !end.fromClient {
+			peer = client
+		}
+		_ = peer.Close(code, reason)
+	}
+	return end.err
 }
 
 type portalMessage struct {

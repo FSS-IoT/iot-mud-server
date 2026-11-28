@@ -1,18 +1,18 @@
 {
-  "listen": "127.0.0.1:8770",
+  "listen": "127.0.0.1:8780",
   "default_server": "main",
   "servers": [
     {
       "id": "main",
       "name": "The Commons (main)",
-      "url": "ws://127.0.0.1:8774",
+      "url": "ws://127.0.0.1:8781",
       "lease": "authoritative",
       "tags": ["main"]
     },
     {
       "id": "dev-fire",
       "name": "Firemaking (dev)",
-      "url": "ws://127.0.0.1:8771",
+      "url": "ws://127.0.0.1:8782",
       "lease": "isolated",
       "tags": ["dev", "fire"]
     }

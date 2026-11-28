@@ -25,7 +25,7 @@ func testPortal(t *testing.T, backendURL string) (*httptest.Server, *Portal) {
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	portal := NewPortal("", cfg, slog.New(slog.NewTextHandler(
+	portal := NewPortal(cfg, slog.New(slog.NewTextHandler(
 		&strings.Builder{}, nil)))
 	server := httptest.NewServer(portal.Handler())
 	t.Cleanup(server.Close)
@@ -197,7 +197,7 @@ func testPortalDefault(t *testing.T, backendURL string) *httptest.Server {
 	if err := cfg.Validate(); err != nil {
 		t.Fatal(err)
 	}
-	portal := NewPortal("", cfg, slog.New(slog.NewTextHandler(
+	portal := NewPortal(cfg, slog.New(slog.NewTextHandler(
 		&strings.Builder{}, nil)))
 	server := httptest.NewServer(portal.Handler())
 	t.Cleanup(server.Close)
@@ -237,5 +237,48 @@ func TestLoginDevShowsList(t *testing.T) {
 	servers := data["servers"].([]any)
 	if servers[0].(map[string]any)["default"] != true {
 		t.Fatalf("default flag: %v", servers)
+	}
+}
+
+func fakeCloser(t *testing.T) *httptest.Server {
+	t.Helper()
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{})
+		if err != nil {
+			return
+		}
+		defer ws.CloseNow()
+		ctx := r.Context()
+		_ = ws.Write(ctx, websocket.MessageText, []byte(`{"type":"hello"}`))
+		_, _, _ = ws.Read(ctx)
+		_ = ws.Close(4003, "upgrade the client")
+		return
+	})
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	return server
+}
+
+func TestPortalRelaysBackendCloseCode(t *testing.T) {
+	backend := fakeCloser(t)
+	server, _ := testPortal(t,
+		"ws"+strings.TrimPrefix(backend.URL, "http"))
+	ws := dialPortal(t, server)
+	_ = readText(t, ws)
+	writeText(t, ws, `{"type":"portal.enter","id":"1","data":{"server":"fake"}}`)
+	if msg := readText(t, ws); msg["type"] != "portal.enter.ok" {
+		t.Fatalf("enter: %v", msg)
+	}
+	_ = readText(t, ws) // backend hello
+	writeText(t, ws, `{"type":"input","id":2,"data":{"text":"look"}}`)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, _, err := ws.Read(ctx)
+	code := websocket.CloseStatus(err)
+	if code == -1 {
+		t.Fatalf("want close frame, got %T %v", err, err)
+	}
+	if code != 4003 {
+		t.Fatalf("want 4003, got %d", code)
 	}
 }

@@ -37,7 +37,7 @@ func main() {
 		log.Error("config", "error", err)
 		os.Exit(1)
 	}
-	portal := NewPortal(*configPath, cfg, log)
+	portal := NewPortal(cfg, log)
 
 	server := &http.Server{
 		Addr:              cfg.Listen,
@@ -54,6 +54,12 @@ func main() {
 				log.Error("reload failed", "error", err)
 				continue
 			}
+			if next.Listen != server.Addr {
+				log.Error("reload rejected",
+					"reason", "listen address cannot change without restart",
+					"current", server.Addr, "next", next.Listen)
+				continue
+			}
 			portal.SetConfig(next)
 			log.Info("config reloaded", "servers", len(next.Servers))
 		}
@@ -63,17 +69,21 @@ func main() {
 		context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	serveErr := make(chan error, 1)
 	go func() {
 		log.Info("portal listening", "addr", cfg.Listen,
 			"servers", len(cfg.Servers))
-		if err := server.ListenAndServe(); err != nil &&
-			!errors.Is(err, http.ErrServerClosed) {
-			log.Error("serve", "error", err)
-			stop()
-		}
+		serveErr <- server.ListenAndServe()
 	}()
 
-	<-ctx.Done()
+	select {
+	case <-ctx.Done():
+	case err := <-serveErr:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Error("serve", "error", err)
+			os.Exit(1)
+		}
+	}
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {
