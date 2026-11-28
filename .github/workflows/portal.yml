@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  portal:
     runs-on: ubuntu-latest
     defaults:
       run:

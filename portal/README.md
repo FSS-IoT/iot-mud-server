@@ -29,7 +29,7 @@ Reload the server list with `kill -HUP <pid>`.
 
 ```json
 {
-  "listen": "100.125.204.103:8770",
+  "listen": "127.0.0.1:8770",
   "default_server": "main",
   "servers": [
     {
