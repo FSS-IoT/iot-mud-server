@@ -1904,6 +1904,18 @@ class Engine:
             return light_slots is None or slot in light_slots
 
         if requested is not None:
+            if requested in HAND_SLOTS:
+                if "hand" not in authored or not allowed(requested):
+                    return None, "bad_args"
+                if hands == 2 and requested != "hand_1":
+                    return None, "bad_args"
+                if hands == 2:
+                    if any(slot in occupied for slot in HAND_SLOTS):
+                        return None, "no_slot"
+                    return "hand_1", None
+                if requested in occupied:
+                    return None, "no_slot"
+                return requested, None
             if requested == "hand":
                 if "hand" not in authored or not any(
                         allowed(slot) for slot in HAND_SLOTS):
@@ -1956,12 +1968,20 @@ class Engine:
         if " on " in normalized:
             item_arg, _, slot_arg = normalized.rpartition(" on ")
             requested = slot_arg.strip().lower()
+            requested = requested.replace("_", " ").replace("-", " ").strip()
+            requested = {
+                "hand 1": "hand_1",
+                "hand 2": "hand_2",
+                "left hand": "hand_1",
+                "right hand": "hand_2",
+            }.get(requested, requested)
             if requested == "hands":
                 requested = "hand"
-            if requested not in EQUIP_SLOTS:
+            if requested not in (set(EQUIP_SLOTS) | set(HAND_SLOTS)):
                 self._fail(
                     outcome, "bad_args",
-                    "Slots are hand, head, body, back, belt, or feet.")
+                    "Slots are hand, hand 1, hand 2, head, body, back, "
+                    "belt, or feet.")
                 return
         else:
             item_arg = normalized
@@ -1976,6 +1996,21 @@ class Engine:
                 outcome, "not_found", f"You aren't carrying any {item_arg}.")
             return
         target, error = self._equip_target(actor, item, requested)
+        displaced = None
+        if (error == "no_slot" and requested in HAND_SLOTS
+                and requested in actor.equipment):
+            candidate = actor.equipment[requested]
+            if int(getattr(item, "hands", 1) or 1) == 1:
+                if getattr(candidate, "light_source", False) and getattr(
+                        candidate, "lit", False):
+                    self._fail(
+                        outcome, "still_lit",
+                        f"Put out the {candidate.name} before you swap it "
+                        "out.")
+                    return
+                target = requested
+                displaced = candidate
+                error = None
         if error is not None:
             if error == "no_slot":
                 self._fail(
@@ -1986,10 +2021,22 @@ class Engine:
                     outcome, "bad_args",
                     f"The {item.name} cannot go there.")
             return
-        self._commit(ChangeSet("equip").set(item, "slot", target))
+        changes = ChangeSet("equip").set(item, "slot", target)
+        if displaced is not None:
+            changes.set(displaced, "slot", None)
+        self._commit(changes)
+        if displaced is not None:
+            actor.unequip(displaced)
         actor.equip(item, target)
-        outcome.reply = (
-            f"You equip the {item.name} in your {self._slot_label(target)}.")
+        if displaced is not None:
+            outcome.reply = (
+                f"You equip the {item.name} in your "
+                f"{self._slot_label(target)} and stow the "
+                f"{displaced.name}.")
+        else:
+            outcome.reply = (
+                f"You equip the {item.name} in your "
+                f"{self._slot_label(target)}.")
         outcome.events.append(SemanticEvent(
             kind="player.inventory",
             data={"actor": actor, "text": outcome.reply},
