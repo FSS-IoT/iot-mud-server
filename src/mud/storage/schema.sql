@@ -82,6 +82,19 @@ CREATE TABLE IF NOT EXISTS event_log (
     payload  TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS feedback (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    player_name   TEXT NOT NULL,
+    text          TEXT NOT NULL,
+    category      TEXT NOT NULL DEFAULT 'other',
+    room_id       TEXT,
+    room_name     TEXT,
+    world_epoch   TEXT,
+    server_commit TEXT,
+    context       TEXT NOT NULL,
+    created_at    TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_character_keys_player
     ON character_keys(player_id);
 CREATE INDEX IF NOT EXISTS idx_players_room ON players(room_id);
@@ -90,3 +103,4 @@ CREATE INDEX IF NOT EXISTS idx_objects_owner ON objects(owner_id);
 CREATE INDEX IF NOT EXISTS idx_objects_container ON objects(container_id);
 CREATE INDEX IF NOT EXISTS idx_npcs_room ON npcs(room_id);
 CREATE INDEX IF NOT EXISTS idx_event_log_room ON event_log(room_id, seq);
+CREATE INDEX IF NOT EXISTS idx_feedback_created_at ON feedback(created_at);

@@ -117,6 +117,64 @@ character is an error and writes nothing. The server adds strength and item
 modifiers to this base later; for now the base is the whole limit, and the wire
 still carries only the computed `capacity`.
 
+## Player feedback
+
+An authenticated client can submit a feedback report in the game; the server
+stores the text plus a bounded snapshot of recent context and replies with the
+report id only (`PROTOCOL.md`, "Player feedback"). Reports are **not** published
+automatically. The operator reviews each one offline and redacts names before
+the text goes anywhere public.
+
+Every command below accepts the usual `--config` / `--db` flags. `list` prints
+one line per report — id, time, player, category, and a short preview — with
+control characters shown as escapes:
+
+```bash
+uv run python -m src.mud.admin feedback list --db data/mud.db
+```
+
+`show <id>` prints one report in full, with control characters escaped so a
+stored ESC cannot rewrite the terminal. Long output pages through `less` when
+stdout is a terminal; redirect it to a file with `> file` when it is not:
+
+```bash
+uv run python -m src.mud.admin feedback show 1 --db data/mud.db
+```
+
+Export the reports as a ready-to-file issue body. Markdown fences each text with
+a fence longer than any backtick run inside it; JSON uses `json.dumps`. The file
+is written with mode `0600`, and its name never contains the feedback text:
+
+```bash
+uv run python -m src.mud.admin feedback export --format markdown \
+  --output feedback-export.md --db data/mud.db
+```
+
+```bash
+uv run python -m src.mud.admin feedback export --format json \
+  --output feedback-export.json --db data/mud.db
+```
+
+Delete one report with `feedback delete <id>`. It needs `--yes`, logs only the
+id (never the text), and exits non-zero for a missing id:
+
+```bash
+uv run python -m src.mud.admin feedback delete 1 --yes --db data/mud.db
+```
+
+Retention is 90 days. `prune` deletes every report older than the window and
+prints the count:
+
+```bash
+uv run python -m src.mud.admin feedback prune --older-than 90d \
+  --db data/mud.db
+```
+
+`--older-than` takes a number and a unit (`s`, `m`, `h`, `d`, or `w`), for
+example `90d` or `12h`. The export default name is a generated timestamp id, and
+`--output` is operator-chosen; the feedback text is never part of a filename or
+a shell command.
+
 ## Seed and reset
 
 The server does **not** invent a world. Seed the database before the first

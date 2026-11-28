@@ -38,6 +38,16 @@ async def session(directory: Path) -> GoldenRun:
             assert ok["data"]["mode"] == "register"
             assert ok["data"]["key"].startswith("mud1-")
             run.note_room(state["data"]["room"]["id"])
+
+            # A report is the direct `feedback.saved {id}` reply (#177).
+            await ada.send({
+                "v": 2, "type": "feedback", "id": "fb",
+                "data": {"text": "the torch would not light",
+                         "category": "bug"},
+            })
+            saved = await ada.wait("feedback.saved")
+            assert saved["data"]["id"] >= 1
+
             run.collect(ada)
             key = ok["data"]["key"]
 
