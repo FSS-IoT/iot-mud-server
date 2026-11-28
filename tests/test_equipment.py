@@ -366,3 +366,48 @@ async def test_taking_a_lit_torch_with_no_light_slot_is_refused():
     assert await _code(engine, "take torch") == "no_slot"
     assert torch in room.contents
     assert torch not in ada.contents
+
+
+async def test_two_lit_torches_can_be_taken_one_per_hand():
+    engine, ada, torch, _lantern, _sword, _stick = _engine()
+    room = ada.location
+    other = Entity(
+        "Other Torch", "Another wooden torch.", light_source=True,
+        equip_slots=("hand",), hands=1, item_id="other_torch")
+    room.add_content(other)
+    ada.remove_content(torch)
+    room.add_content(torch)
+    torch.lit = True
+    other.lit = True
+
+    await engine.process_command("take torch", "Ada")
+    await engine.process_command("take other torch", "Ada")
+
+    assert ada.equipment["hand_1"] is torch
+    assert ada.equipment["hand_2"] is other
+    assert torch.lit is True and other.lit is True
+
+
+async def test_equip_on_hand_swaps_an_unlit_item_to_the_pack():
+    engine, ada, torch, lantern, _sword, _stick = _engine()
+    await engine.process_command("equip torch", "Ada")
+    await engine.process_command("equip lantern", "Ada")
+    assert ada.equipment["hand_1"] is torch
+    assert ada.equipment["hand_2"] is lantern
+
+    await engine.process_command("equip lantern on hand 1", "Ada")
+
+    assert ada.equipment["hand_1"] is lantern
+    assert torch.equipped_slot is None
+    assert torch in ada.contents
+
+
+async def test_swapping_out_a_lit_item_is_refused():
+    engine, ada, torch, lantern, _sword, _stick = _engine()
+    await engine.process_command("equip torch", "Ada")
+    await engine.process_command("light torch", "Ada")
+    await engine.process_command("equip lantern", "Ada")
+
+    assert await _code(engine, "equip lantern on hand 1") == "still_lit"
+    assert ada.equipment["hand_1"] is torch
+    assert ada.equipment["hand_2"] is lantern
