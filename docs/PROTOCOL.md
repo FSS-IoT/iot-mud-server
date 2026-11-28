@@ -312,7 +312,7 @@ the stored id only. It never sends the text or the captured context back.
 Direct reply:
 
 ```json
-{"v":2,"type":"feedback.saved","event_id":"f1","seq":9,"ts":"...","data":{"id":12}}
+{"v":2,"type":"feedback.saved","id":"c-9","event_id":"f1","seq":9,"ts":"...","data":{"id":12}}
 ```
 
 - `text` must be a string. It is trimmed, must not be empty, and must be 2000

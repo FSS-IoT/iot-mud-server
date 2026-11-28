@@ -129,15 +129,23 @@ class FeedbackLimiter:
 def redact_command(text: str) -> str:
     """The context copy of one command: bounded, with `tell` bodies redacted.
 
-    A `tell <player> <body>` becomes `tell <player> [redacted]`; nothing else
-    reads the body. Other commands keep their text, truncated to
+    A `tell <player> <body>` becomes `tell <player> [redacted]`; the target is
+    bounded so the whole entry stays within `MAX_COMMAND_TEXT`, and nothing
+    else reads the body. Other commands keep their text, truncated to
     `MAX_COMMAND_TEXT` code points.
     """
     stripped = text.strip()
     words = stripped.split()
     if words and words[0].lower() == "tell":
         target = words[1] if len(words) > 1 else None
-        return f"tell {target} [redacted]" if target else "tell [redacted]"
+        if target is None:
+            return "tell [redacted]"
+        # Bound the target so the "[redacted]" marker survives: "tell " (5) and
+        # " [redacted]" (11) take 16 of the 200-code-point budget. The final
+        # slice is the hard guarantee on the whole entry.
+        limit = MAX_COMMAND_TEXT - len("tell ") - len(" [redacted]")
+        entry = f"tell {target[:limit]} [redacted]"
+        return entry[:MAX_COMMAND_TEXT]
     return stripped[:MAX_COMMAND_TEXT]
 
 

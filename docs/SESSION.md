@@ -142,7 +142,12 @@ Use two characters, **Ada** and **Ben**.
     `error` with `code: "unknown_command"` and do not close the socket. In the
     reference client, type `!malformed` to send the broken frame; the error
     renders with its code, for example `[malformed_message]`.
-12. **Quit.** Ada sends the `quit` message. Ben receives `room.leave` with
+12. **Feedback.** Ada sends the top-level `feedback` message with request id
+    `"c-9"` and data `{"text":"The torch would not light.","category":"bug"}`.
+    She receives `feedback.saved`, which echoes the request id `"c-9"` and
+    whose `data` carries `{id}` only: the stored report id. The reply never
+    echoes the text or the captured context.
+13. **Quit.** Ada sends the `quit` message. Ben receives `room.leave` with
     `reason: "disconnect"`, `asleep: true`, and `stone: true` because Ada is an
     authenticated character; the character stays in the room. Ada's socket
     closes with code `1000`. The reference client prints

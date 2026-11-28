@@ -761,7 +761,7 @@ def _feedback_show(args: argparse.Namespace) -> int:
         lines.append(escape_controls(row["text"]))
         if row["context"]:
             lines.append("context:")
-            lines.append(row["context"])
+            lines.append(escape_controls(_pretty_context(row["context"])))
         _emit_report("\n".join(lines) + "\n")
         return 0
     finally:
@@ -854,6 +854,23 @@ def _preview(text: str, limit: int = 60) -> str:
     if len(escaped) <= limit:
         return escaped
     return escaped[: limit - 1] + "\u2026"
+
+
+def _pretty_context(raw: str) -> str:
+    """Decode and pretty-print the stored context JSON, or return it unchanged.
+
+    The context is one JSON object written by `record_feedback`. Decoding then
+    re-encoding keeps it readable for the operator; a value that is not JSON is
+    shown as stored. Callers still escape the result before printing, so a C1
+    control stored in command history never reaches the terminal raw.
+    """
+    try:
+        value = json.loads(raw)
+    except ValueError:
+        return raw
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, indent=2, ensure_ascii=False, sort_keys=True)
+    return raw
 
 
 def _export_row(row: sqlite3.Row) -> dict:

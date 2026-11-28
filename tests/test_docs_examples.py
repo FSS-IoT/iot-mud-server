@@ -384,6 +384,26 @@ def _ensure_character(sandbox: _Sandbox, name: str) -> None:
         conn.close()
 
 
+def _ensure_feedback(sandbox: _Sandbox) -> None:
+    """Seed, then insert one feedback row so `show`/`delete` have id 1."""
+    _ensure_seeded(sandbox)
+    conn = open_database(sandbox.db)
+    try:
+        row = conn.execute("SELECT id FROM feedback WHERE id = 1").fetchone()
+        if row is None:
+            with conn:
+                conn.execute(
+                    "INSERT INTO feedback(id, player_name, text, category, "
+                    "room_id, room_name, world_epoch, server_commit, context, "
+                    "created_at) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    ("Ada", "the torch is broken", "bug", "market",
+                     "Marketplace", "epoch-1", "0" * 40, "{}",
+                     "2026-01-01T00:00:00Z"),
+                )
+    finally:
+        conn.close()
+
+
 def _check_command(
     fence: Fence,
     words: list[str],
@@ -544,7 +564,7 @@ def _run_admin(
     feedback_sub = ""
     if subcommand == "feedback":
         feedback_sub = args[1] if len(args) > 1 else ""
-        if feedback_sub not in {"list", "export", "prune"}:
+        if feedback_sub not in {"list", "show", "export", "delete", "prune"}:
             raise AssertionError(
                 f"{fence.where}: unclassified admin feedback subcommand "
                 f"{feedback_sub!r}"
@@ -553,6 +573,8 @@ def _run_admin(
         _ensure_backup(sandbox)
     elif subcommand == "capacity":
         _ensure_character(sandbox, args[1])
+    elif subcommand == "feedback" and feedback_sub in {"show", "delete"}:
+        _ensure_feedback(sandbox)
     elif (subcommand in {"backup", "feedback"}
           or (subcommand == "seed" and "--reset" in args)):
         _ensure_seeded(sandbox)
@@ -588,7 +610,9 @@ def _run_admin(
     if subcommand == "feedback":
         expected = {
             "list": "feedback",
+            "show": "id: 1",
             "export": "exported",
+            "delete": "deleted feedback",
             "prune": "pruned",
         }[feedback_sub]
     else:

@@ -137,7 +137,7 @@ uv run python -m src.mud.admin feedback list --db data/mud.db
 stored ESC cannot rewrite the terminal. Long output pages through `less` when
 stdout is a terminal; redirect it to a file with `> file` when it is not:
 
-```text
+```bash
 uv run python -m src.mud.admin feedback show 1 --db data/mud.db
 ```
 
@@ -158,7 +158,7 @@ uv run python -m src.mud.admin feedback export --format json \
 Delete one report with `feedback delete <id>`. It needs `--yes`, logs only the
 id (never the text), and exits non-zero for a missing id:
 
-```text
+```bash
 uv run python -m src.mud.admin feedback delete 1 --yes --db data/mud.db
 ```
 
