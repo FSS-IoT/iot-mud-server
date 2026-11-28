@@ -10,6 +10,13 @@ One paragraph. One idea per PR.
 
 The spec criterion or user-visible behavior this answers.
 
+## Client impact
+
+`client-impact:` `none` / `optional` / `required`
+
+`required` means the paired client must adopt the feature to use it. An old
+client on the same major still connects unless the change is a major bump.
+
 ## Check
 
 - [ ] The failing run is recorded (red) and the passing run after (green).

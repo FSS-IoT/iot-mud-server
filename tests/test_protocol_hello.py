@@ -10,6 +10,7 @@ import asyncio
 import json
 import re
 import subprocess
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -73,6 +74,39 @@ async def test_hello_carries_the_configured_commit(engine):
     assert hello["type"] == "hello"
     assert hello["v"] == 2
     assert hello["data"]["server_commit"] == VALID_COMMIT
+
+
+@pytest.mark.asyncio
+async def test_hello_carries_the_version_fields(engine):
+    hello = await _hello(engine)
+
+    data = hello["data"]
+    assert data["server_version"] == v2.SERVER_VERSION
+    assert data["feature_level"] == v2.FEATURE_LEVEL
+    assert data["capabilities"] == list(v2.CAPABILITIES)
+    assert data["protocol"] == [v2.PROTOCOL_VERSION]
+
+
+def test_the_manifest_version_matches_the_protocol_constant():
+    manifest = tomllib.loads(
+        (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    assert manifest["project"]["version"] == v2.SERVER_VERSION
+
+
+def test_the_feature_level_is_the_version_minor():
+    major, minor, _patch = v2.SERVER_VERSION.split(".")
+    assert int(major) == v2.PROTOCOL_VERSION
+    assert int(minor) == v2.FEATURE_LEVEL
+
+
+def test_version_tags_are_semver():
+    assert re.fullmatch(r"\d+\.\d+\.\d+", v2.SERVER_VERSION)
+
+
+def test_protocol_doc_names_the_current_server_version():
+    text = PROTOCOL_DOC.read_text(encoding="utf-8")
+    assert f"**Version:** {v2.SERVER_VERSION}" in text
+    assert "## Versioning" in text
 
 
 @pytest.mark.asyncio

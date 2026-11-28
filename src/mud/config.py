@@ -52,6 +52,9 @@ class AuthConfig:
 
     max_attempts: int = DEFAULT_AUTH_MAX_ATTEMPTS
     window_seconds: float = DEFAULT_AUTH_WINDOW_SECONDS
+    # Keep the v2.0 guest join as the fallback even when auth is available.
+    # A deployment that needs every character to persist sets this to false.
+    guest_ok: bool = True
 
 
 @dataclass(frozen=True)
@@ -151,6 +154,10 @@ def load_config(path: str | Path | None = None) -> Config:
         raise ConfigError(
             f"{path}: [auth].window_seconds must be a positive number")
 
+    raw_guest = auth.get("guest_ok", True)
+    if not isinstance(raw_guest, bool):
+        raise ConfigError(f"{path}: [auth].guest_ok must be true or false")
+
     limits = data.get("limits", {})
     if not isinstance(limits, dict):
         raise ConfigError(f"{path}: [limits] must be a table")
@@ -176,6 +183,7 @@ def load_config(path: str | Path | None = None) -> Config:
         auth=AuthConfig(
             max_attempts=raw_attempts,
             window_seconds=float(raw_window),
+            guest_ok=raw_guest,
         ),
         limits=LimitsConfig(
             commands_per_second=_positive_number(

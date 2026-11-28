@@ -98,6 +98,28 @@ def test_unknown_event_is_ignored():
 def test_render_hello_shows_the_session_step_one_fields():
     out = render_hello({
         "protocol": [2],
+        "server_version": "2.1.6",
+        "feature_level": 1,
+        "capabilities": ["auth.key", "locks"],
+        "world": {"name": "The Commons", "epoch": "epoch-1"},
+        "auth_required": True,
+        "guest_ok": True,
+        "auth_modes": ["key"],
+        "server_commit": "a" * 40,
+        "motd": "Welcome",
+    })
+
+    assert "Protocol: 2" in out
+    assert "Server version: 2.1.6 (feature level 1)" in out
+    assert "World: The Commons (epoch epoch-1)" in out
+    assert "Auth: required (key); guest join accepted" in out
+    assert "Capabilities: auth.key, locks" in out
+    assert f"Server commit: {'a' * 40}" in out
+
+
+def test_render_hello_tolerates_an_old_server_without_the_new_fields():
+    out = render_hello({
+        "protocol": [2],
         "world": {"name": "The Commons", "epoch": "epoch-1"},
         "auth_required": True,
         "auth_modes": ["key"],
@@ -105,10 +127,9 @@ def test_render_hello_shows_the_session_step_one_fields():
         "motd": "Welcome",
     })
 
-    assert "Protocol: 2" in out
-    assert "World: The Commons (epoch epoch-1)" in out
-    assert "Auth: required (key)" in out
-    assert f"Server commit: {'a' * 40}" in out
+    assert "Server version: ? (feature level ?)" in out
+    assert "guest join accepted" in out
+    assert "Capabilities: none" in out
 
 
 def test_render_error_includes_the_typed_code():

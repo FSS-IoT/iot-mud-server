@@ -36,10 +36,18 @@ from src.mud.config import (
     load_config,
 )
 from src.mud.engine.core import Engine
-from src.mud.protocol.adapter import _room_id, build_room_state, execute
+from src.mud.protocol.adapter import (
+    _object_data,
+    _room_id,
+    build_room_state,
+    execute,
+)
 from src.mud.protocol.v2 import (
     AUTH_MODES,
+    CAPABILITIES,
+    FEATURE_LEVEL,
     PROTOCOL_VERSION,
+    SERVER_VERSION,
     UNKNOWN_SERVER_COMMIT,
     envelope,
     is_server_commit,
@@ -420,7 +428,20 @@ class SessionTable:
                 else:
                     # The explicit guest path keeps the v2.0
                     # remove-on-disconnect behavior: no durable character.
+                    # Spill the carried items first, so a guest cannot
+                    # permanently remove a world item.
                     if room is not None:
+                        for item in list(player.contents):
+                            player.remove_content(item)
+                            room.add_content(item)
+                            await self.broadcast_room(
+                                room.name, "object.dropped", {
+                                    "object": _object_data(item,
+                                                           room.contents),
+                                    "by": name,
+                                    "self": False,
+                                    "text": f"{name} drops the {item.name}.",
+                                }, exclude_name=name)
                         await self.broadcast_room(room.name, "room.leave", {
                             "room": {"id": _room_id(room), "name": room.name},
                             "actor": {"name": name},
@@ -501,6 +522,7 @@ class V2Server:
         db_path: str | Path | None = None,
         server_commit: str | None = None,
         auth_required: bool = True,
+        guest_ok: bool = True,
         auth_limits: AuthConfig | None = None,
         limits: LimitsConfig | None = None,
         features: FeaturesConfig | None = None,
@@ -515,10 +537,12 @@ class V2Server:
         self.epoch = epoch or utc_now()
         self.db_path = Path(db_path) if db_path is not None else None
         self.server_commit = resolve_server_commit(server_commit)
-        # v2.1 is the product: a session authenticates before it can join or
-        # send input. The v2.0 guest path is an explicit opt-out for legacy
-        # tests and a deliberate guest server.
+        # Auth is the persistent path. `guest_ok` keeps the v2.0 guest join as
+        # a fallback for testing and old clients; `auth_required` controls
+        # whether `hello` advertises the key modes. A deployment that sets
+        # `guest_ok=False` refuses `join` with `not_authenticated`.
         self.auth_required = auth_required
+        self.guest_ok = guest_ok
         # The limiter is per connection and in memory, and the window is read
         # from this clock, so tests advance time instead of sleeping.
         self.auth_limits = auth_limits if auth_limits is not None else AuthConfig()
@@ -593,9 +617,11 @@ class V2Server:
                                      msg_id)
             return
 
-        if self.auth_required:
-            await session.send_error("not_authenticated",
-                                     "Authenticate before joining.", msg_id)
+        if not self.guest_ok:
+            await session.send_error(
+                "not_authenticated",
+                "This server requires authentication before joining.",
+                msg_id)
             return
 
         data = msg.get("data")
@@ -796,13 +822,8 @@ class V2Server:
     async def _handle_input(self, session: Session, msg: dict) -> int | None:
         msg_id = msg.get("id")
         if not session.joined or session.player_name is None:
-            if self.auth_required:
-                await session.send_error(
-                    "not_authenticated",
-                    "Authenticate before sending commands.", msg_id)
-            else:
-                await session.send_error(
-                    "not_joined", "Join before sending commands.", msg_id)
+            await session.send_error(
+                "not_joined", "Join before sending commands.", msg_id)
             return None
         if session.slept:
             # An idle frame that was already in flight must not run a command
@@ -975,9 +996,13 @@ class V2Server:
             hello = {
                 "server": "iot-mud-server",
                 "protocol": [PROTOCOL_VERSION],
+                "server_version": SERVER_VERSION,
+                "feature_level": FEATURE_LEVEL,
+                "capabilities": list(CAPABILITIES),
                 "world": {"name": self.world_name, "epoch": self.epoch},
                 "server_commit": self.server_commit,
                 "auth_required": self.auth_required,
+                "guest_ok": self.guest_ok,
                 "motd": "Welcome to the IoT MUD!",
                 "text": "Welcome to the IoT MUD!",
             }
@@ -1171,6 +1196,7 @@ if __name__ == "__main__":
         await load_demo_village(engine)
         server = V2Server(engine, host=args.host, port=args.port,
                           db_path=db_path, auth_limits=config.auth,
+                          guest_ok=config.auth.guest_ok,
                           limits=config.limits, features=config.features)
         print(f"Protocol-v2 server on ws://{args.host}:{args.port} "
               f"(db: {db_path})")
