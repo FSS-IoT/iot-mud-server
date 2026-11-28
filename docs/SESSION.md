@@ -350,7 +350,7 @@ shown in parentheses as one example; the structured fields are the contract.
       `data.auth_required` is `true`, `data.guest_ok` is `true`,
       `data.auth_modes` is `["key"]`, and the world epoch and
       `data.server_commit` are readable. (`Protocol: 2`, `Server version:
-      2.1.6 (feature level 1)`, `Auth: required (key); guest join accepted`,
+      2.1.7 (feature level 1)`, `Auth: required (key); guest join accepted`,
       `World: ... (epoch ...)`, `Server commit: ...`)
 - [ ] **Register and log in.** Registration shows the key once; a later login
       with the saved key says `mode: "login"`, returns no `key`, and puts the

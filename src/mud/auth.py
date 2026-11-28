@@ -26,7 +26,9 @@ in the value so a future parameter change needs no schema migration. Login
 
 **Login.** An unknown key id, a revoked key, and a bad secret all raise one
 `AuthError("invalid_key")` with the same message. The key is the only lookup;
-no character name is consulted.
+no character name is consulted. A successful login returns the durable room id
+and inventory with the verified key row, so admission does not need a second
+player-store read (#138).
 
 **Offline rekey (#73).** `rekey_character` issues a replacement key for an
 existing character and revokes every key it still holds, in one transaction.
@@ -39,11 +41,12 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import re
 import secrets
 import sqlite3
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
@@ -93,12 +96,18 @@ class Registration:
 
 @dataclass(frozen=True)
 class Login:
-    """The durable character a verified key belongs to."""
+    """The durable character a verified key belongs to.
+
+    `room_id` and `items` are read in the same login lookup, so admission does
+    not need a second `PlayerStore.load()` (#138).
+    """
 
     name: str
     player_id: int
     key_id: str
     room_id: str | None
+    items: tuple[str, ...] = ()
+    skills: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -228,7 +237,7 @@ def login_character(conn: sqlite3.Connection, key: object) -> Login:
 
     row = conn.execute(
         "SELECT k.key_id, k.player_id, k.salt, k.hash, k.revoked_at, "
-        "p.name, p.room_id "
+        "p.name, p.room_id, p.skills "
         "FROM character_keys k JOIN players p ON p.id = k.player_id "
         "WHERE k.key_id = ?",
         (key_id,),
@@ -239,11 +248,31 @@ def login_character(conn: sqlite3.Connection, key: object) -> Login:
     if not verify_key(key, row["salt"], row["hash"]):
         raise AuthError("invalid_key", INVALID_KEY_MESSAGE)
 
+    player_id = int(row["player_id"])
+    items = tuple(
+        item["id"]
+        for item in conn.execute(
+            "SELECT id FROM objects WHERE owner_id = ? ORDER BY id",
+            (player_id,),
+        )
+    )
+    try:
+        stored_skills = json.loads(row["skills"] or "{}")
+    except (TypeError, ValueError):
+        stored_skills = {}
+    skills = {
+        str(name): int(level)
+        for name, level in (stored_skills.items()
+                            if isinstance(stored_skills, dict) else ())
+        if isinstance(level, (int, float)) and not isinstance(level, bool)
+    }
     return Login(
         name=row["name"],
-        player_id=int(row["player_id"]),
+        player_id=player_id,
         key_id=row["key_id"],
         room_id=row["room_id"],
+        items=items,
+        skills=skills,
     )
 
 

@@ -1,6 +1,6 @@
 [project]
 name = "iot-mud-server"
-version = "2.1.6"
+version = "2.1.7"
 description = "The common club IoT MUD server: authoritative engine, protocol v2, WebSocket terminal."
 readme = "README.md"
 license = {text = "MIT"}
