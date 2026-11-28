@@ -50,6 +50,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
+from src.mud.content import DEFAULT_CARRY_CAPACITY
 from src.mud.storage.keys import room_key
 from src.mud.storage.store import ensure_room
 
@@ -98,8 +99,9 @@ class Registration:
 class Login:
     """The durable character a verified key belongs to.
 
-    `room_id`, `items`, and `skills` are read in the same login lookup, so
-    admission does not need a second `PlayerStore.load()` (#138, #183).
+    `room_id`, `items`, `skills`, and `capacity_base` are read in the same login
+    lookup, so admission does not need a second `PlayerStore.load()`
+    (#138, #183, #149).
     """
 
     name: str
@@ -108,6 +110,7 @@ class Login:
     room_id: str | None
     items: tuple[str, ...] = ()
     skills: dict[str, int] = field(default_factory=dict)
+    capacity_base: float = DEFAULT_CARRY_CAPACITY
 
 
 @dataclass(frozen=True)
@@ -237,7 +240,7 @@ def login_character(conn: sqlite3.Connection, key: object) -> Login:
 
     row = conn.execute(
         "SELECT k.key_id, k.player_id, k.salt, k.hash, k.revoked_at, "
-        "p.name, p.room_id, p.skills "
+        "p.name, p.room_id, p.skills, p.capacity_base "
         "FROM character_keys k JOIN players p ON p.id = k.player_id "
         "WHERE k.key_id = ?",
         (key_id,),
@@ -273,6 +276,7 @@ def login_character(conn: sqlite3.Connection, key: object) -> Login:
         room_id=row["room_id"],
         items=items,
         skills=skills,
+        capacity_base=float(row["capacity_base"]),
     )
 
 

@@ -26,6 +26,7 @@ from src.mud.storage.db import (
     migrate,
     open_database,
 )
+from src.mud.storage.store import PlayerStore, StorageWriteError
 from src.mud.world.geometry import WorldDataError
 from src.mud.world.seed import SeedError, SeedResult, seed_world
 
@@ -113,6 +114,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--db", type=Path, default=None,
         help="SQLite database path (overrides [storage].path)")
 
+    capacity = commands.add_parser(
+        "capacity", help="set a character's base carry capacity")
+    capacity.add_argument(
+        "name", help="character name (case-insensitive)")
+    capacity.add_argument(
+        "value", type=float, help="the new base carry capacity")
+    capacity.add_argument(
+        "--config", type=Path, default=None,
+        help="TOML config file (default: ./mud.toml if it exists)")
+    capacity.add_argument(
+        "--db", type=Path, default=None,
+        help="SQLite database path (overrides [storage].path)")
+
     backup = commands.add_parser(
         "backup", help="copy the database to a file (server must be offline)")
     backup.add_argument(
@@ -184,6 +198,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "rekey":
         return _rekey(args)
+
+    if args.command == "capacity":
+        return _capacity(args)
 
     if args.command == "backup":
         return _backup(args)
@@ -310,6 +327,48 @@ def _rekey(args: argparse.Namespace) -> int:
         "stored in plaintext",
         file=sys.stderr,
     )
+    return 0
+
+
+def _capacity(args: argparse.Namespace) -> int:
+    """Set one character's base carry capacity and print the new value.
+
+    The character is found by name (case-insensitively, as `players.name` is
+    `COLLATE NOCASE`); the stored casing is kept. A missing character is an
+    error and writes nothing.
+    """
+    try:
+        config = load_config(args.config)
+    except ConfigError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    path = args.db or config.storage.path
+    if not path.is_file():
+        print(f"error: database not found: {path}", file=sys.stderr)
+        return 1
+
+    try:
+        conn = open_database(path)
+    except (DatabaseError, sqlite3.Error) as exc:
+        print(f"error: could not open {path}: {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        row = conn.execute(
+            "SELECT name FROM players WHERE name = ?", (args.name,)
+        ).fetchone()
+        if row is None:
+            print(f"error: no character named {args.name!r}", file=sys.stderr)
+            return 1
+        PlayerStore(conn, row["name"]).set_capacity_base(args.value)
+    except (sqlite3.Error, StorageWriteError) as exc:
+        print(f"error: could not set capacity in {path}: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        conn.close()
+
+    print(f"set {row['name']} capacity to {args.value}")
     return 0
 
 

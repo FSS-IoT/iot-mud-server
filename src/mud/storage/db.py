@@ -6,7 +6,7 @@ import sqlite3
 from collections.abc import Callable
 from pathlib import Path
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 SCHEMA_FILE = Path(__file__).with_name("schema.sql")
 
 
@@ -46,9 +46,21 @@ def _add_player_skills(conn: sqlite3.Connection) -> None:
             "ALTER TABLE players ADD COLUMN skills TEXT NOT NULL DEFAULT '{}'")
 
 
+def _add_player_capacity(conn: sqlite3.Connection) -> None:
+    """Schema 3: per-character base carry capacity (#149)."""
+    columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(players)")
+    }
+    if "capacity_base" not in columns:
+        conn.execute(
+            "ALTER TABLE players ADD COLUMN capacity_base "
+            "REAL NOT NULL DEFAULT 30.0")
+
+
 MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
     0: _apply_initial_schema,
     1: _add_player_skills,
+    2: _add_player_capacity,
 }
 
 

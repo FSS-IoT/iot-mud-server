@@ -34,7 +34,7 @@ def _engine(*items, capacity=2.0):
     engine._rooms[room.name] = room
     engine.start_room = room
     player = engine.register_player("Ada")
-    player.capacity = capacity
+    player.capacity_base = capacity
     for item in items:
         room.add_content(item)
     return engine, player, room

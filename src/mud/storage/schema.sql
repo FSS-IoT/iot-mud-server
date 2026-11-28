@@ -23,7 +23,8 @@ CREATE TABLE IF NOT EXISTS players (
     created_at TEXT NOT NULL,
     last_seen  TEXT,
     asleep     INTEGER NOT NULL DEFAULT 0 CHECK (asleep IN (0, 1)),
-    skills     TEXT NOT NULL DEFAULT '{}'
+    skills     TEXT NOT NULL DEFAULT '{}',
+    capacity_base REAL NOT NULL DEFAULT 30.0
 );
 
 CREATE TABLE IF NOT EXISTS character_keys (

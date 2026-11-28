@@ -199,6 +199,7 @@ class CharacterAdmission:
                 item_keys=login.items,
             )
         player.skills.update(login.skills)
+        player.capacity_base = login.capacity_base
 
         try:
             self.engine.wake_player(login.name)

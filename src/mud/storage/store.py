@@ -33,7 +33,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-from src.mud.content import Entity, Player, Room
+from src.mud.content import DEFAULT_CARRY_CAPACITY, Entity, Player, Room
 from src.mud.content.models import OPPOSITE_EXITS
 from src.mud.storage.keys import object_key, room_key
 
@@ -68,11 +68,12 @@ class ObjectLocation:
 
 @dataclass(frozen=True)
 class CharacterState:
-    """A character's durable half: room, inventory, and skills."""
+    """A character's durable half: room, inventory, skills, and base capacity."""
 
     room_id: str | None
     items: tuple[str, ...]
     skills: dict[str, int] = field(default_factory=dict)
+    capacity_base: float = DEFAULT_CARRY_CAPACITY
 
 
 @dataclass(frozen=True)
@@ -339,15 +340,44 @@ class PlayerStore:
                 (json.dumps(skills, sort_keys=True), self.name),
             )
 
-    def load(self) -> CharacterState:
-        """Read the character's durable room, inventory, and skills in one call.
+    def capacity_base(self) -> float:
+        """The character's durable base carry capacity, default when absent."""
+        row = self._conn.execute(
+            "SELECT capacity_base FROM players WHERE name = ?", (self.name,)
+        ).fetchone()
+        if row is None:
+            return DEFAULT_CARRY_CAPACITY
+        return float(row["capacity_base"])
 
-        Login restores exactly this: the room key to place the character in and
-        the object keys to find in the freshly loaded world. Both reads are
-        plain queries; nothing here writes or moves a row.
+    def set_capacity_base(self, value: float) -> None:
+        """Write one base carry capacity; the character row must already exist."""
+        row = self._conn.execute(
+            "SELECT id FROM players WHERE name = ?", (self.name,)
+        ).fetchone()
+        if row is None:
+            raise StorageWriteError(
+                f"capacity could not be saved: no character {self.name!r}")
+        with self._conn:
+            self._conn.execute(
+                "UPDATE players SET capacity_base = ? WHERE name = ?",
+                (float(value), self.name),
+            )
+
+    def load(self) -> CharacterState:
+        """Read the character's durable room, inventory, skills, and base in one
+        call.
+
+        Login restores exactly this: the room key to place the character in,
+        the object keys to find in the freshly loaded world, and the base carry
+        capacity. The reads are plain queries; nothing here writes or moves a
+        row.
         """
         return CharacterState(
-            room_id=self.room_id, items=self.contents(), skills=self.skills())
+            room_id=self.room_id,
+            items=self.contents(),
+            skills=self.skills(),
+            capacity_base=self.capacity_base(),
+        )
 
     def move(self, *, room: Any) -> None:
         """Commit that the player is now in `room`."""
