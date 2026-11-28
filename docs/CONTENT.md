@@ -191,7 +191,8 @@ rooms:
   `objects.state.slot` and restored on login (#181). `equip <item> on hand 1`
   or `hand 2` names a hand. If that hand holds an unlit item, the new item takes
   the hand and the old one goes to the pack; a lit item is refused with
-  `still_lit`.
+  `still_lit`. A lit source can only occupy a hand, belt, or head; another slot
+  is `bad_args`.
 - `dropped_on_sleep: true` makes the object fall into the room when its carrier
   disconnects and turns to stone (#72). The world marks the five keys so a
   sleeper cannot strand a door key in a pocket.

@@ -411,3 +411,105 @@ async def test_swapping_out_a_lit_item_is_refused():
     assert await _code(engine, "equip lantern on hand 1") == "still_lit"
     assert ada.equipment["hand_1"] is torch
     assert ada.equipment["hand_2"] is lantern
+
+
+async def test_a_lit_source_cannot_move_to_a_non_light_slot():
+    engine, ada, _torch, _lantern, _sword, _stick = _engine()
+    lamp = Entity(
+        "Lamp", "A lit lamp.", light_source=True, lit=True,
+        equip_slots=("hand", "back"), hands=1, item_id="lamp")
+    ada.add_content(lamp)
+    await engine.process_command("equip lamp", "Ada")
+    assert lamp.equipped_slot in ("hand_1", "hand_2")
+
+    assert await _code(engine, "equip lamp on back") == "bad_args"
+    assert lamp.equipped_slot in ("hand_1", "hand_2")
+
+
+async def test_a_two_handed_item_swaps_out_one_unlit_hand_item():
+    engine, ada, torch, _lantern, sword, _stick = _engine()
+    await engine.process_command("equip torch", "Ada")
+
+    await engine.process_command("equip sword on hand 1", "Ada")
+
+    assert ada.equipment["hand_1"] is sword
+    assert torch.equipped_slot is None
+    assert torch in ada.contents
+
+
+async def test_a_two_handed_item_swaps_out_both_unlit_hand_items():
+    engine, ada, torch, lantern, sword, _stick = _engine()
+    await engine.process_command("equip torch", "Ada")
+    await engine.process_command("equip lantern", "Ada")
+
+    await engine.process_command("equip sword on hand 1", "Ada")
+
+    assert ada.equipment["hand_1"] is sword
+    assert torch.equipped_slot is None
+    assert lantern.equipped_slot is None
+
+
+async def test_a_two_handed_swap_refuses_a_lit_hand_item():
+    engine, ada, torch, _lantern, _sword, _stick = _engine()
+    await engine.process_command("equip torch", "Ada")
+    await engine.process_command("light torch", "Ada")
+
+    assert await _code(engine, "equip sword on hand 1") == "still_lit"
+    assert ada.equipment["hand_1"] is torch
+
+
+async def test_a_swap_clears_the_stowed_slot_in_the_store(tmp_path):
+    from src.mud.storage.store import WriteThroughStore
+
+    engine, _ada, _torch, _lantern, _sword, _stick = _engine()
+    conn = open_database(tmp_path / "swap.db")
+    try:
+        engine.attach_store(WriteThroughStore(conn))
+        await engine.process_command("equip torch", "Ada")
+        await engine.process_command("equip lantern", "Ada")
+        await engine.process_command("equip lantern on hand 1", "Ada")
+
+        store = WorldStore(conn)
+        assert store.object_location("torch") is not None
+        torch_state = json.loads(conn.execute(
+            "SELECT state FROM objects WHERE id = 'torch'").fetchone()["state"])
+        lantern_state = json.loads(conn.execute(
+            "SELECT state FROM objects WHERE id = 'lantern'").fetchone()["state"])
+        assert torch_state["slot"] is None
+        assert lantern_state["slot"] == "hand_1"
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("equipment", [
+    {"equip_slots": ["tail"], "hands": 1},
+    {"equip_slots": ["hand"], "hands": 3},
+    {"equip_slots": ["belt"], "hands": 2},
+])
+async def test_json_loader_rejects_bad_equipment(tmp_path, equipment):
+    from src.mud.world.geometry import WorldDataError
+
+    data = {
+        "name": "Bad Equipment",
+        "start_room": "hall",
+        "rng_seed": 1,
+        "items": [{"id": "bad", "name": "Bad", "description": "", **equipment}],
+        "rooms": [{"name": "Hall", "description": "", "exits": {}}],
+    }
+    path = tmp_path / "bad.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    with pytest.raises(WorldDataError):
+        await load_world(Engine(), path)
+
+
+async def test_extinguish_rejects_a_non_light_and_reports_an_unlit_source():
+    engine, ada, torch, _lantern, _sword, _stick = _engine()
+    coin = Entity("Coin", "A coin.", item_id="coin")
+    ada.add_content(coin)
+
+    assert await _code(engine, "extinguish coin") == "bad_args"
+    response = await engine.process_command("extinguish torch", "Ada")
+
+    assert "already out" in response.lower()
+    assert torch.lit is False

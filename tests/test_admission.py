@@ -11,6 +11,7 @@ PlayerStore, WriteThroughStore, and StorageWriteError.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -19,7 +20,7 @@ from src.mud.auth import AuthError
 from src.mud.content import Entity, Room
 from src.mud.engine.core import Engine
 from src.mud.storage.db import open_database
-from src.mud.storage.store import PlayerStore, StorageWriteError
+from src.mud.storage.store import ChangeSet, PlayerStore, StorageWriteError
 from src.mud.world.loader import load_world
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -283,3 +284,28 @@ def test_a_no_database_register_still_validates_the_name():
     with pytest.raises(AuthError) as bad:
         CharacterAdmission(engine, None).register("!")
     assert bad.value.code == "invalid_name"
+
+
+async def test_guest_spill_clears_an_equipped_slot_in_the_store(tmp_path):
+    _engine, conn, admission, _world_path = await _admission(tmp_path)
+    try:
+        guest = admission.admit_guest("Guest").player
+        torch = Entity(
+            "Torch", "A wooden torch.", light_source=True,
+            equip_slots=("hand",), hands=1, item_id="guest_torch")
+        guest.add_content(torch)
+        admission.store.commit(ChangeSet("take").place(torch, at=guest))
+        guest.equip(torch, "hand_1")
+        admission.store.commit(
+            ChangeSet("equip").set(torch, "slot", "hand_1"))
+
+        spill = admission.spill_guest("Guest")
+
+        assert torch.equipped_slot is None
+        assert torch in spill.room.contents
+        state = json.loads(conn.execute(
+            "SELECT state FROM objects WHERE id = 'guest_torch'"
+        ).fetchone()["state"])
+        assert state["slot"] is None
+    finally:
+        conn.close()

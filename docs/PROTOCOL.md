@@ -878,7 +878,7 @@ idle close is `4004` after the character is already asleep.
 | `get <x> from <y>` | `object.got` (actor `self:true` + room `self:false`) + state-only `player.inventory`; closed container `error{container_closed}`, item not inside `error{not_here}`, fixed item `error{not_portable}`, over capacity `error{too_heavy}`, ambiguous `error{ambiguous}` with `candidates` |
 | `use <key> on <container>` | `object.unlocked` (or `error{locked}` / `error{already_open}`) |
 | `use <key> on <exit>` | `exit.unlocked` (actor `self:true` + room `self:false`; wrong or missing key `error{locked}`, already open `error{already_open}`) |
-| `equip <x> [on <slot>]` | `player.inventory` (private); `hand 1`/`hand 2` name a hand; an unlit occupant is stowed in the pack, a lit occupant is `error{still_lit}`; no free or allowed slot `error{no_slot}`, wrong slot or non-equippable `error{bad_args}`, unknown `error{not_found}` |
+| `equip <x> [on <slot>]` | `player.inventory` (private); `hand 1`/`hand 2` name a hand; an unlit occupant is stowed in the pack, a lit occupant is `error{still_lit}`; a lit source in a non-light slot is `error{bad_args}`; no free or allowed slot `error{no_slot}`, wrong slot or non-equippable `error{bad_args}`, unknown `error{not_found}` |
 | `unequip <x>` | `player.inventory` (private); item not equipped `error{not_equipped}`, lit source `error{still_lit}`, unknown `error{not_found}` |
 | `extinguish <x>` | `player.inventory` (private); not a light `error{bad_args}`, already out `notice`, unknown `error{not_found}` |
 | `light <source>` | `object.lit` (or `notice` if already lit / not a light); the source is auto-equipped into a free hand, belt, or head slot, or `error{no_slot}` |

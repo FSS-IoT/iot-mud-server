@@ -3,6 +3,7 @@ from pathlib import Path
 
 from src.mud.config import DEFAULT_WORLD
 from src.mud.content import NPC, Entity, ExitLock, Room
+from src.mud.content.models import EQUIP_SLOTS
 from src.mud.content.models import load_world as load_content_world
 from src.mud.content.validator import validate_world
 from src.mud.content.world import compile_world
@@ -166,6 +167,23 @@ async def _load_yaml_world(engine: Engine, data_path: Path) -> None:
     engine.wanderer = NpcWanderer(engine.index.rooms_by_id, compiled.rng_seed)
 
 
+def _json_equipment(data: dict, item_id: str) -> tuple[tuple[str, ...], int]:
+    """Validate the legacy JSON equipment fields like the YAML model."""
+    slots = tuple(data.get("equip_slots", ()))
+    unknown = sorted(set(slots) - EQUIP_SLOTS)
+    if unknown:
+        raise WorldDataError(
+            f"item {item_id!r}: unknown equip slot(s) {unknown}")
+    hands = data.get("hands", 1)
+    if isinstance(hands, bool) or hands not in (1, 2):
+        raise WorldDataError(
+            f"item {item_id!r}: hands must be 1 or 2")
+    if hands == 2 and "hand" not in slots:
+        raise WorldDataError(
+            f"item {item_id!r}: hands 2 requires the hand slot")
+    return slots, int(hands)
+
+
 async def _load_json_world(engine: Engine, data_path: Path) -> None:
     """Populate the engine from the v2.0 JSON file.
 
@@ -182,8 +200,9 @@ async def _load_json_world(engine: Engine, data_path: Path) -> None:
     item_map = {}
     room_map = {}
 
-    # 1. First pass: Create all entities (Items)
+    # 1. First pass: Create every object, globally.
     for i_data in data.get("items", []):
+        equip_slots, hands = _json_equipment(i_data, i_data["id"])
         item = Entity(
             name=i_data["name"],
             description=i_data["description"],
@@ -199,8 +218,8 @@ async def _load_json_world(engine: Engine, data_path: Path) -> None:
             # container, which is the same test the old loader implied.
             container=bool(i_data.get("contains") or i_data.get("locked")),
             open=bool(i_data.get("state", {}).get("open", False)),
-            equip_slots=tuple(i_data.get("equip_slots", ())),
-            hands=int(i_data.get("hands", 1)),
+            equip_slots=equip_slots,
+            hands=hands,
         )
         item.instance_id = i_data["id"]
         item_map[i_data["id"]] = item

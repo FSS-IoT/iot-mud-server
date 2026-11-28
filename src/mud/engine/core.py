@@ -288,9 +288,11 @@ class Engine:
                 try:
                     player.equip(item, item.equipped_slot)
                 except ValueError:
+                    slot = item.equipped_slot
+                    item.equipped_slot = None
                     logger.warning(
                         "could not restore %s to slot %s for %s",
-                        object_key(item), item.equipped_slot, player.name)
+                        object_key(item), slot, player.name)
 
     # --- Sleep, stone, and the who roster (#72) -----------------------------
 
@@ -1185,10 +1187,15 @@ class Engine:
             lit_slot, error = self._equip_target(
                 actor, item, light_only=True)
             if error is not None:
-                self._fail(
-                    outcome, "no_slot",
-                    f"You have no free hand, belt, or head for the lit "
-                    f"{item.name}.")
+                if error == "bad_args":
+                    self._fail(
+                        outcome, "bad_args",
+                        f"The lit {item.name} cannot be held.")
+                else:
+                    self._fail(
+                        outcome, "no_slot",
+                        f"You have no free hand, belt, or head for the lit "
+                        f"{item.name}.")
                 return
         changes = ChangeSet("take").place(item, at=actor)
         if lit_slot is not None:
@@ -1801,8 +1808,7 @@ class Engine:
                 outcome, actor, container.contents, item_arg,
                 f"You cannot carry the {item.name}; it is too heavy.", item)
             return
-        if self.store is not None:
-            self._commit(ChangeSet("get").place(item, at=actor))
+        self._commit(ChangeSet("get").place(item, at=actor))
         container.remove_content(item)
         actor.add_content(item)
         await self.emit("item_got", {
@@ -2003,12 +2009,31 @@ class Engine:
             self._fail(
                 outcome, "not_found", f"You aren't carrying any {item_arg}.")
             return
-        target, error = self._equip_target(actor, item, requested)
-        displaced = None
-        if (error == "no_slot" and requested in HAND_SLOTS
-                and requested in actor.equipment):
-            candidate = actor.equipment[requested]
-            if int(getattr(item, "hands", 1) or 1) == 1:
+        target, error = self._equip_target(
+            actor, item, requested,
+            light_only=bool(item.light_source and item.lit))
+        displaced: list[Entity] = []
+        if error == "no_slot" and requested in HAND_SLOTS:
+            hands = int(getattr(item, "hands", 1) or 1)
+            if hands == 2:
+                candidates = [
+                    actor.equipment.get(slot)
+                    for slot in HAND_SLOTS
+                    if actor.equipment.get(slot) is not None
+                    and actor.equipment.get(slot) is not item
+                ]
+                if any(getattr(candidate, "light_source", False)
+                       and getattr(candidate, "lit", False)
+                       for candidate in candidates):
+                    self._fail(
+                        outcome, "still_lit",
+                        "Put out the lit item before you swap it out.")
+                    return
+                target = "hand_1"
+                displaced = candidates
+                error = None
+            elif requested in actor.equipment:
+                candidate = actor.equipment[requested]
                 if getattr(candidate, "light_source", False) and getattr(
                         candidate, "lit", False):
                     self._fail(
@@ -2017,7 +2042,7 @@ class Engine:
                         "out.")
                     return
                 target = requested
-                displaced = candidate
+                displaced = [candidate]
                 error = None
         if error is not None:
             if error == "no_slot":
@@ -2030,17 +2055,17 @@ class Engine:
                     f"The {item.name} cannot go there.")
             return
         changes = ChangeSet("equip").set(item, "slot", target)
-        if displaced is not None:
-            changes.set(displaced, "slot", None)
+        for stowed in displaced:
+            changes.set(stowed, "slot", None)
         self._commit(changes)
-        if displaced is not None:
-            actor.unequip(displaced)
+        for stowed in displaced:
+            actor.unequip(stowed)
         actor.equip(item, target)
-        if displaced is not None:
+        if displaced:
+            names = ", ".join(stowed.name for stowed in displaced)
             outcome.reply = (
                 f"You equip the {item.name} in your "
-                f"{self._slot_label(target)} and stow the "
-                f"{displaced.name}.")
+                f"{self._slot_label(target)} and stow the {names}.")
         else:
             outcome.reply = (
                 f"You equip the {item.name} in your "

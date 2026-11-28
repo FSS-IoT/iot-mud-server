@@ -317,7 +317,7 @@ def build_engine():
 
 async def main(path):
     server = V2Server(build_engine(), port=0, db_path=path,
-                      auth_required=False)
+                      auth_required=True)
     task = asyncio.create_task(server.run())
     while not server.port:
         await asyncio.sleep(0.01)
@@ -334,7 +334,8 @@ async def _play(port: int) -> None:
     async with websockets.connect(f"ws://localhost:{port}") as ws:
         await ws.recv()  # hello
         await ws.send(json.dumps({
-            "v": 2, "type": "join", "id": "join", "data": {"name": "Ada"},
+            "v": 2, "type": "auth", "id": "join",
+            "data": {"mode": "register", "name": "Ada"},
         }))
         while json.loads(await asyncio.wait_for(ws.recv(), 5))["type"] != "room.state":
             pass
