@@ -235,6 +235,8 @@ class WorldStore:
             for flag in ("locked", "open", "lit"):
                 if flag in state:
                     setattr(entity, flag, bool(state[flag]))
+            if state.get("slot") is not None:
+                entity.equipped_slot = str(state["slot"])
 
         for row in self._conn.execute(
             "SELECT room_id, direction, locked FROM exits"
@@ -539,7 +541,7 @@ def _set_flag(
         )
         return
 
-    if flag not in ("locked", "open", "lit"):
+    if flag not in ("locked", "open", "lit", "slot"):
         raise ValueError(f"unknown object flag {flag!r}")
     _ensure_object(conn, entity)
     key = object_key(entity)

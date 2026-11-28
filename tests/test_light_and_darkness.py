@@ -4,7 +4,7 @@ Rooms and items carry *properties* that change what a player can do, not just
 metadata. The first such property is light:
 
   * A room with a light source (a fixed/portable light in the room) is lit.
-  * A player carrying a light source (e.g. a Torch) lights wherever they stand.
+  * A player equipping a lit light source (e.g. a Torch) lights the room.
   * A dark room with no light obscures vision: `look`, `examine`, and `read`
     all fail because the player cannot see anything.
 
@@ -78,12 +78,13 @@ async def test_dark_room_blocks_read():
 
 @pytest.mark.asyncio
 async def test_carrying_lit_torch_lights_the_room():
-    """Carrying a *lit* light source lets the player see in a dark room."""
+    """An equipped *lit* light source lets the player see in a dark room."""
     engine, _room = _dark_room_with_torch()
     player = engine.get_player("Ada")
     torch = Entity("Torch", "A flickering wooden torch.", light_source=True)
-    torch.lit = True  # a carried light only sheds light once it is lit
-    player.add_content(torch)  # carried items live in the player's contents
+    torch.lit = True  # an equipped light only sheds light once it is lit
+    player.add_content(torch)
+    player.equip(torch, "hand_1")
 
     response = await engine.process_command("look", "Ada")
 

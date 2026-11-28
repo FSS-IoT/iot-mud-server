@@ -175,9 +175,15 @@ rooms:
   converted. `portable: false` marks scenery a player cannot lift; `get` from
   a container refuses it with `error{not_portable}`.
 - `light_source: true` lets an object light a dark room. `lit: true` starts it
-  lit; otherwise `light <source>` is needed. A carried unlit source is dark.
-  Igniting one commits `lit` to `objects.state`, so it stays lit across a
+  lit; otherwise `light <source>` is needed. A light source must be equipped in
+  a hand, on the belt, or on the head to light the room; one in the pack is
+  dark. Igniting one commits `lit` to `objects.state`, so it stays lit across a
   restart (#131).
+- `equip_slots` lists where an item can go: `hand`, `head`, `body`, `back`,
+  `belt`, or `feet`. `hands: 1` uses one hand; `hands: 2` uses both. Empty
+  means the item cannot be equipped. A lantern can use `[hand, belt]`; a torch
+  uses `[hand]`. The runtime slot (`hand_1`, `belt`, ...) is stored in
+  `objects.state.slot` and restored on login (#181).
 - `dropped_on_sleep: true` makes the object fall into the room when its carrier
   disconnects and turns to stone (#72). The world marks the five keys so a
   sleeper cannot strand a door key in a pocket.

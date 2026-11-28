@@ -74,6 +74,8 @@ async def _load_yaml_world(engine: Engine, data_path: Path) -> None:
                 # The lid state is authored under `state.open`; a container
                 # with no key starts closed (#76).
                 open=bool(obj.state.get("open", False)),
+                equip_slots=tuple(obj.equip_slots),
+                hands=obj.hands,
             )
             entity.instance_id = obj.id
             # Authored triggers travel with the object into the running world
@@ -197,6 +199,8 @@ async def _load_json_world(engine: Engine, data_path: Path) -> None:
             # container, which is the same test the old loader implied.
             container=bool(i_data.get("contains") or i_data.get("locked")),
             open=bool(i_data.get("state", {}).get("open", False)),
+            equip_slots=tuple(i_data.get("equip_slots", ())),
+            hands=int(i_data.get("hands", 1)),
         )
         item.instance_id = i_data["id"]
         item_map[i_data["id"]] = item
