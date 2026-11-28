@@ -870,7 +870,8 @@ release; a later additive fix still adds a bullet here.
 ### Unreleased — fire making (#183)
 
 - `light` on an unlit source now needs `firemaking >= 1`, an ignition tool, and
-  fuel, unless a lit source is equipped or in the room to pass the flame.
+  fuel, unless a lit source is equipped or in the room to pass the flame. Any
+  lit source can pass flame by default, including a lantern lighting a torch.
 - New error codes `no_skill`, `no_ignition`, and `no_fuel`. A failed chance is a
   private `notice`, not an error, and leaves the source unlit.
 - `players.skills` stores the skill level; schema version 2. No new event type
