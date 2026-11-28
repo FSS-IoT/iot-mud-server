@@ -98,7 +98,7 @@ def test_unknown_event_is_ignored():
 def test_render_hello_shows_the_session_step_one_fields():
     out = render_hello({
         "protocol": [2],
-        "server_version": "2.1.6",
+        "server_version": "2.1.7",
         "feature_level": 1,
         "capabilities": ["auth.key", "locks"],
         "world": {"name": "The Commons", "epoch": "epoch-1"},
@@ -110,7 +110,7 @@ def test_render_hello_shows_the_session_step_one_fields():
     })
 
     assert "Protocol: 2" in out
-    assert "Server version: 2.1.6 (feature level 1)" in out
+    assert "Server version: 2.1.7 (feature level 1)" in out
     assert "World: The Commons (epoch epoch-1)" in out
     assert "Auth: required (key); guest join accepted" in out
     assert "Capabilities: auth.key, locks" in out

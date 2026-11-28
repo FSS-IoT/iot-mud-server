@@ -1,6 +1,6 @@
 # IoT MUD protocol 2
 
-**Version:** 2.1.6. The wire field `v` remains `2`: every v2.1 change is
+**Version:** 2.1.7. The wire field `v` remains `2`: every v2.1 change is
 additive. This is the normative contract between the common server and every
 member client. A breaking change becomes version 3.
 
@@ -93,7 +93,7 @@ Rules:
 {"v":2,"type":"hello","event_id":"h1","seq":1,"ts":"...","data":{
   "server":"iot-mud-server",
   "protocol":[2],
-  "server_version":"2.1.6",
+  "server_version":"2.1.7",
   "feature_level":1,
   "capabilities":["auth.key","inventory.capacity","locks"],
   "world":{"name":"Starting Village","epoch":"2026-11-21T18:00:00Z"},
@@ -894,6 +894,14 @@ Every change to the wire contract gets an entry here, newest version first.
 version 3. A client that pins a server commit reads this section together with
 `hello.data.server_commit` to see what it may be missing. v2.1 is the current
 release; a later additive fix still adds a bullet here.
+
+### v2.1.7 — protocol 2 admission refactor
+
+`client-impact: none`.
+
+- Server-only refactor: one character lifecycle owner in `src/mud/admission.py`.
+  No wire field, event, or error code changes. The feature level stays `1`.
+- The reference server reports `server_version: "2.1.7"`.
 
 ### v2.1.6 — protocol 2 version fields and the guest fallback
 
