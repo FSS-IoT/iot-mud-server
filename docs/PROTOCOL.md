@@ -298,6 +298,40 @@ the server runs the #72 sleep path: the character stays in its room, commits
 The v2.0 guest path (`guest_ok: true`, no durable character) is not subject to
 the idle sleep.
 
+### Player feedback (v2.1, additive)
+
+An authenticated client may submit a feedback report: a short `text` plus an
+optional `category`. The server validates the text, stores it with a bounded
+snapshot of recent context for the operator to review offline, and replies with
+the stored id only. It never sends the text or the captured context back.
+
+```json
+{"v":2,"type":"feedback","id":"c-9","data":{"text":"The torch would not light.","category":"bug"}}
+```
+
+Direct reply:
+
+```json
+{"v":2,"type":"feedback.saved","event_id":"f1","seq":9,"ts":"...","data":{"id":12}}
+```
+
+- `text` must be a string. It is trimmed, must not be empty, and must be 2000
+  characters or fewer. `\n` and `\t` are allowed; every other control character
+  (NUL, ESC, DEL, and the C1 block) is `error{code:"bad_args"}`. Over-long text
+  is `error{code:"too_long"}` and is never truncated.
+- `category` is optional and defaults to `other`; it must be one of `bug`,
+  `idea`, or `other`. Anything else is `error{code:"bad_args"}`.
+- `feedback.saved` is direct and echoes the request `id`; its `data` is `{id}`
+  only.
+- A guest, or any connection that has not authenticated, is
+  `error{code:"not_authenticated"}`.
+- Feedback is rate-limited per character: one report per 60 seconds and five per
+  hour. A limited request is `error{code:"rate_limited"}` and the socket stays
+  open.
+- A report is stored for the operator; it is not published automatically. See
+  `OPERATIONS.md`, "Player feedback", for `admin feedback` review, export,
+  delete, and prune.
+
 ## Client messages
 
 | Type | Data | Notes |
@@ -306,6 +340,7 @@ the idle sleep.
 | `input` | `text` | The whole command line. Only after joining or authenticating. **`id` is required**; it is echoed on the direct reply, and an input without one is rejected with `error{code:"bad_args"}`. |
 | `quit` | — | Graceful close; the socket closes with `1000`. No direct reply. |
 | `auth` | `mode`, `name` (register), `key` (login) | v2.1 only. Only before joining. |
+| `feedback` | `text`, `category?` | v2.1 additive. After authenticating. Direct reply `feedback.saved {id}`. |
 
 Nothing else exists in v2. Clients do not send structured actions; parsing is
 the server's job, so every client sees the same world behaviour. An `input`
@@ -329,6 +364,7 @@ vs "Ada takes the coin.").
 | `error` | `code`, `message`, `text`, `command?`, `candidates?[]` |
 | `notice` | `text`, `level` (`info`\|`warning`), `object?` |
 | `shutdown` | `reason`, `in_seconds` (v2.1) |
+| `feedback.saved` | `id` (v2.1) |
 
 ### Room and presence
 
@@ -903,6 +939,21 @@ Every change to the wire contract gets an entry here, newest version first.
 version 3. A client that pins a server commit reads this section together with
 `hello.data.server_commit` to see what it may be missing. v2.1 is the current
 release; a later additive fix still adds a bullet here.
+
+### Unreleased — player feedback (#177)
+
+`client-impact: optional`.
+
+- New client message `feedback` with `data: {text, category?}` and the direct
+  reply `feedback.saved {id}`. `category` is `bug`, `idea`, or `other`
+  (default `other`); `text` must be a string of 2000 characters or fewer, with
+  `\n` and `\t` the only control characters allowed.
+- New error uses: `bad_args` (empty, mistyped, or control-character text, and
+  an unknown category), `too_long` (over 2000 characters), `not_authenticated`
+  (a guest), and `rate_limited` (the per-character 1/60 s, 5/hour budget).
+- The report is stored server-side for operator review; the client never
+  receives the text or the captured context back. Schema version 4 adds the
+  `feedback` table.
 
 ### Unreleased — fire making (#183)
 

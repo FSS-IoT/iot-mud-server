@@ -6,7 +6,7 @@ import sqlite3
 from collections.abc import Callable
 from pathlib import Path
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 SCHEMA_FILE = Path(__file__).with_name("schema.sql")
 
 
@@ -57,10 +57,31 @@ def _add_player_capacity(conn: sqlite3.Connection) -> None:
             "REAL NOT NULL DEFAULT 30.0")
 
 
+def _add_feedback_table(conn: sqlite3.Connection) -> None:
+    """Schema 4: the player feedback report table (#177)."""
+    conn.executescript(
+        "CREATE TABLE IF NOT EXISTS feedback ("
+        "  id            INTEGER PRIMARY KEY AUTOINCREMENT,"
+        "  player_name   TEXT NOT NULL,"
+        "  text          TEXT NOT NULL,"
+        "  category      TEXT NOT NULL DEFAULT 'other',"
+        "  room_id       TEXT,"
+        "  room_name     TEXT,"
+        "  world_epoch   TEXT,"
+        "  server_commit TEXT,"
+        "  context       TEXT NOT NULL,"
+        "  created_at    TEXT NOT NULL"
+        ");"
+        "CREATE INDEX IF NOT EXISTS idx_feedback_created_at"
+        "  ON feedback(created_at);"
+    )
+
+
 MIGRATIONS: dict[int, Callable[[sqlite3.Connection], None]] = {
     0: _apply_initial_schema,
     1: _add_player_skills,
     2: _add_player_capacity,
+    3: _add_feedback_table,
 }
 
 

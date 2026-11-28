@@ -32,6 +32,15 @@ from src.mud.config import (
     load_config,
 )
 from src.mud.engine.core import Engine
+from src.mud.feedback import (
+    FeedbackLimiter,
+    FeedbackValidationError,
+    build_context,
+    record_command,
+    record_feedback,
+    validate_feedback_category,
+    validate_feedback_text,
+)
 from src.mud.protocol.adapter import (
     _object_data,
     _room_id,
@@ -50,7 +59,7 @@ from src.mud.protocol.v2 import (
     utc_now,
 )
 from src.mud.storage.db import DatabaseError, open_database
-from src.mud.storage.keys import object_key
+from src.mud.storage.keys import object_key, room_key
 from src.mud.world.wander import NpcMove
 
 logger = logging.getLogger(__name__)
@@ -217,9 +226,15 @@ class Session:
     # Set once the #72 sleep path has run for this session, so an idle close
     # followed by the disconnect path cannot sleep and broadcast leave twice.
     slept: bool = False
+    # Feedback context (#177): the bounded command ring, the command counter,
+    # and the monotonic time this session began (for the "session age" stat).
+    joined_at: float = field(init=False)
+    command_count: int = 0
+    command_history: list[dict] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.last_activity = self.clock()
+        self.joined_at = self.clock()
 
     @property
     def phase(self) -> str:
@@ -536,6 +551,9 @@ class V2Server:
         self.features = (
             features if features is not None else FeaturesConfig())
         self.clock = clock if clock is not None else time.monotonic
+        # Per-character feedback rate limit (#177), in memory and on this
+        # clock so tests advance time instead of sleeping.
+        self._feedback_limiter = FeedbackLimiter(self.clock)
         self.idle_poll_seconds = idle_poll_seconds
         # The world tick is wall-clock paced by the server, but game logic
         # never reads the clock: one tick is one step of the seeded wanderer.
@@ -813,6 +831,16 @@ class V2Server:
         player = self.engine.get_player(session.player_name)
         current_room = player.location if player is not None else None
 
+        # Capture the bounded in-memory context for a later feedback report
+        # (#177). The `tell` body is redacted and a key never enters the ring.
+        record_command(
+            session,
+            text=text,
+            room_id=room_key(current_room) if current_room is not None else None,
+            event_types=[outbound.type for outbound in result.events],
+            now=utc_now,
+        )
+
         for outbound in result.events:
             if outbound.target == "actor":
                 await session.send(
@@ -838,6 +866,81 @@ class V2Server:
                     exclude_name=session.player_name,
                 )
         return None
+
+    async def _handle_feedback(self, session: Session, msg: dict) -> None:
+        """Store one player feedback report and reply `feedback.saved {id}`.
+
+        A guest or an anonymous connection is `not_authenticated`; the
+        per-character rate limit is a typed `rate_limited`; the text and
+        category are validated on arrival. Only the new row id is returned,
+        never the text or the captured context.
+        """
+        msg_id = msg.get("id")
+        if not session.authenticated or session.player_name is None:
+            await session.send_error(
+                "not_authenticated",
+                "You must authenticate before sending feedback.", msg_id)
+            return
+        if msg_id is None:
+            await session.send_error(
+                "bad_args", "Feedback needs a request id.")
+            return
+
+        data = msg.get("data")
+        if data is None:
+            data = {}
+        if not isinstance(data, dict):
+            await session.send_error(
+                "malformed_message",
+                "The data field must be an object.", msg_id)
+            return
+
+        if not self._feedback_limiter.allowed(session.player_name):
+            await session.send_error(
+                "rate_limited",
+                "Too many feedback messages; wait and try again.", msg_id)
+            return
+
+        try:
+            text = validate_feedback_text(data.get("text"))
+            category = validate_feedback_category(data.get("category"))
+        except FeedbackValidationError as exc:
+            await session.send_error(exc.code, str(exc), msg_id)
+            return
+
+        if self.db is None:
+            await session.send_error(
+                "internal",
+                "The server cannot store feedback right now.", msg_id)
+            return
+
+        player = self.engine.get_player(session.player_name)
+        room = player.location if player is not None else None
+        try:
+            feedback_id = record_feedback(
+                self.db,
+                player_name=session.player_name,
+                text=text,
+                category=category,
+                room_id=room_key(room) if room is not None else None,
+                room_name=room.name if room is not None else None,
+                world_epoch=self.epoch,
+                server_commit=self.server_commit,
+                context=build_context(self.engine, session),
+                now=utc_now(),
+            )
+        except sqlite3.Error:
+            logger.exception("could not store feedback")
+            await session.send_error(
+                "internal",
+                "The server could not store that feedback.", msg_id)
+            return
+
+        self._feedback_limiter.record(session.player_name)
+        # The id only: the text and the captured context are never echoed.
+        await session.send(
+            "feedback.saved", {"id": feedback_id},
+            direct=True, msg_id=msg_id)
 
     async def _route(self, session: Session, msg: Any) -> int | None:
         """Route one decoded message. Returns a close code to stop, else None."""
@@ -867,6 +970,9 @@ class V2Server:
             return None
         if kind == "input":
             return await self._handle_input(session, msg)
+        if kind == "feedback":
+            await self._handle_feedback(session, msg)
+            return None
         if kind == "quit":
             return 1000
 
